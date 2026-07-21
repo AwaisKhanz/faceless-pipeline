@@ -4,6 +4,8 @@
   "pexels_key": "",
   "_pixabay": "Get a key at https://pixabay.com/api/docs/ (100 requests per minute, free forever)",
   "pixabay_key": "",
+  "_contact": "Optional. A URL or email that identifies you to the public archives. Wikimedia requires contact details in the User-Agent and blocks requests without them. The default points at the project repo, which is fine for personal use.",
+  "contact": "",
   "_gemini": "Optional. Free key at https://aistudio.google.com/apikey \u2014 only needed if you want to generate sheets from a script.",
   "gemini_key": "",
   "gemini_model": "auto",

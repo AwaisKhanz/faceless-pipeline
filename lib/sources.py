@@ -37,7 +37,32 @@ import urllib.request
 from dataclasses import dataclass, field
 
 TIMEOUT = 25
-UA = "faceless-studio/1.0 (local video pipeline; contact via project README)"
+
+# Wikimedia's User-Agent policy requires a descriptive agent WITH working
+# contact information — a URL or an email — and blocks generic or vague ones
+# without notice. "contact via project README" is not contact information, and
+# earned a connection reset.
+#
+# The required shape is:
+#     <client>/<version> (<contact>) <library>/<version>
+#
+# Every other source is happy with this too, so one compliant agent serves all
+# of them. Override `contact` in config.json to point at your own page or
+# address if you run this at any volume — that is what it is for.
+VERSION = "1.0"
+DEFAULT_CONTACT = "https://github.com/AwaisKhanz/faceless-pipeline"
+_contact = DEFAULT_CONTACT
+
+
+def configure(cfg: dict) -> None:
+    """Adopt the contact address from config, if one is set."""
+    global _contact
+    _contact = (cfg or {}).get("contact") or DEFAULT_CONTACT
+
+
+def user_agent() -> str:
+    return (f"FacelessStudio/{VERSION} ({_contact}) "
+            f"Python-urllib/{'.'.join(map(str, __import__('sys').version_info[:2]))}")
 
 # Archive scans are frequently portrait, 4:3, or a 600px thumbnail of a
 # postcard, and at 1080p those look like mistakes.
@@ -84,12 +109,22 @@ class Source:
 # ─────────────────────────────────────────────────────────────── http
 
 def _get(url: str, headers: dict | None = None) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
+    req = urllib.request.Request(
+        url, headers={"User-Agent": user_agent(),
+                      "Accept": "application/json, */*", **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             return r.read()
     except Exception as e:
-        raise SourceError(str(e))
+        msg = str(e)
+        # A reset rather than an HTTP error is the signature of an agent-based
+        # block. Say so, because "connection reset by peer" alone sends people
+        # looking at their network.
+        if "reset" in msg.lower() or "forcibly closed" in msg.lower():
+            msg += (f" — the server dropped the connection, which usually means "
+                    f"it rejected our User-Agent ({user_agent()}). "
+                    f"Set \"contact\" in config.json to a URL or email you own.")
+        raise SourceError(msg)
 
 
 def _json(url: str, headers: dict | None = None) -> dict:
@@ -578,6 +613,7 @@ def usable(cfg: dict) -> set:
 
 def search(name: str, query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     """Ask one source. Raises SourceError; the caller moves on to the next."""
+    configure(cfg)
     src = REGISTRY.get(name)
     if src is None or src.search is None:
         raise SourceError(f"no such source: {name}")
