@@ -74,6 +74,20 @@ def user_agent() -> str:
 # known and is too small is dropped here as a cheap first pass.
 MIN_WIDTH = 1100
 
+# Video gets a much lower floor, and it is not an oversight. Archival footage
+# is legitimately standard-definition — a digitised 1940s newsreel is 640×480
+# and looks exactly as it should at that size; the graininess reads as "old",
+# which is the whole point of using it. The stills floor exists to catch a
+# postcard scan masquerading as a hero image, a failure mode motion does not
+# have. Modern stock video is filtered to ≥1280 at its own adapter, so this
+# lower bound only ever bites archival sources, which is correct.
+MIN_VIDEO_WIDTH = 480
+
+
+def floor_for(media: str) -> int:
+    """The minimum acceptable width for this media type."""
+    return MIN_VIDEO_WIDTH if media == "VIDEO" else MIN_WIDTH
+
 
 class SourceError(RuntimeError):
     pass
@@ -530,6 +544,130 @@ def europeana(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     return out
 
 
+# ──────────────────────────────────────── Internet Archive (no key needed)
+# The only free source of archival MOTION — 1920s street scenes, wartime
+# newsreels, mid-century educational films — none of which exists as stock and
+# none of which any still-image archive can supply. This is what stock cannot
+# do: a modern camera cannot film 1935.
+#
+# It is also the most dangerous source in the set, and is added last for that
+# reason. Internet Archive hosts enormous quantities of material that is simply
+# under copyright — TV recordings, uploaded films, bootlegs — sitting beside the
+# public-domain holdings with nothing but a metadata field to tell them apart.
+# "It was free to stream on archive.org" is not a licence. So the gate here is
+# the strictest in the module, and errs towards dropping a usable clip rather
+# than admitting a doubtful one:
+#
+#   an item passes ONLY IF
+#       it carries an explicit CC0 / public-domain licence URL, OR
+#       it belongs to a collection that is a curated public-domain dedication
+#   AND its licence URL is not a restrictive Creative Commons variant.
+#
+# The collection allowlist is deliberately tiny and is NOT "absence of a
+# restriction" — each entry is a positive, documented dedication to the public
+# domain, which is a different thing from a missing rights note:
+#
+#   prelinger  Rick Prelinger's ephemeral-film archive, explicitly released to
+#              the public domain. The canonical free-archival-footage source.
+#   fedflix    US Government films via Public.Resource.Org — public domain by
+#              statute (17 U.S.C. §105), which no upload can override.
+
+_IA_FREE = re.compile(r"publicdomain/(zero|mark)|creativecommons\.org/publicdomain",
+                      re.I)
+_IA_BLOCK = re.compile(r"creativecommons\.org/licenses/"
+                       r"(by|by-sa|by-nc|by-nd|by-nc-sa|by-nc-nd|nc|nd|sa)", re.I)
+_IA_SAFE_COLLECTIONS = frozenset({"prelinger", "fedflix"})
+
+
+def _as_set(value) -> set:
+    """Internet Archive returns single-valued fields as a string and
+    multi-valued ones as a list, interchangeably. Normalise to a set."""
+    if isinstance(value, list):
+        return {str(v) for v in value}
+    return {str(value)} if value else set()
+
+
+def internet_archive(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media != "VIDEO":
+        # IA holds stills too, but Openverse and Wikimedia already index the
+        # freely-licensed slice of them with far better metadata. IA earns its
+        # place here for motion, which nothing else can supply.
+        raise SourceError("Internet Archive is used here for archival video only")
+
+    qs = urllib.parse.urlencode({
+        "q": f"({query}) AND mediatype:movies",
+        "fl[]": "identifier",       # urlencode repeats these for the list
+        "rows": min(max(want * 3, 8), 30),
+        "output": "json",
+    })
+    # The fl[] list needs the other fields too; add them by hand because
+    # urlencode cannot emit a repeated key from a plain dict.
+    qs += "".join(f"&fl%5B%5D={f}" for f in
+                  ("licenseurl", "collection", "title", "year"))
+    data = _json(f"https://archive.org/advancedsearch.php?{qs}")
+
+    docs = ((data.get("response") or {}).get("docs")) or []
+    out: list[Hit] = []
+
+    for doc in docs:
+        lic = str(doc.get("licenseurl") or "")
+        colls = _as_set(doc.get("collection"))
+
+        # The gate. Restrictive CC is a hard no even if a collection would
+        # otherwise vouch for it — the item's own licence wins.
+        if _IA_BLOCK.search(lic):
+            continue
+        free = bool(_IA_FREE.search(lic)) or bool(colls & _IA_SAFE_COLLECTIONS)
+        if not free:
+            continue
+
+        ident = doc.get("identifier")
+        if not ident:
+            continue
+
+        # advancedsearch does not list files, so fetch the item manifest to
+        # find a directly-playable derivative. One extra call per candidate,
+        # like NASA's asset manifest.
+        try:
+            meta = _json(f"https://archive.org/metadata/{urllib.parse.quote(ident)}")
+        except SourceError:
+            continue
+
+        mp4s = [f for f in (meta.get("files") or [])
+                if str(f.get("name", "")).lower().endswith(".mp4")]
+        if not mp4s:
+            continue                 # only webm/ogv/mpeg: skip rather than transcode
+
+        def width_of(f: dict) -> int:
+            try:
+                return int(f.get("width") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        # Widest derivative is closest to the source scan. Unmeasured ones sort
+        # last but stay eligible — archival files often omit dimensions, and a
+        # missing width is not a reason to reject motion the way it is a still.
+        mp4s.sort(key=width_of, reverse=True)
+        pick = mp4s[0]
+        w = width_of(pick)
+        if w and w < MIN_VIDEO_WIDTH:
+            continue                 # even the best derivative is a thumbnail
+
+        name = urllib.parse.quote(str(pick["name"]))
+        url = f"https://archive.org/download/{urllib.parse.quote(ident)}/{name}"
+        reason = ("public domain" if _IA_FREE.search(lic)
+                  else f"{'/'.join(sorted(colls & _IA_SAFE_COLLECTIONS))} collection")
+        out.append(Hit(
+            url=url, ext=".mp4", src="ia",
+            credit=str(doc.get("title") or "Internet Archive")[:80],
+            page=f"https://archive.org/details/{ident}",
+            width=w, height=width_of({"width": pick.get("height")}),
+            license=f"{reason} (Internet Archive)"))
+        if len(out) >= want:
+            break
+    return out
+
+
 # ─────────────────────────────────────────────── registry
 
 # ══════════════════════════════════════════════ topics, coverage, routing
@@ -759,6 +897,21 @@ REGISTRY: dict[str, Source] = {
         reliability=1.0, probe="illuminated manuscript",
         note="4,000 European museums and libraries. CC0 and PDM only."),
 
+    "ia": Source(
+        "ia", internet_archive, media=("VIDEO",),
+        # Only `history`, and only because that topic now absorbs the era words
+        # (wartime, newsreel, vintage, archival) a model actually reaches for.
+        # Keeping covers a strict subset of ARCHIVE_FIRST is what guarantees IA
+        # can never fire on a MODERN video scene, where it holds nothing —
+        # `route()` gates on overlap, and a modern subject has none here.
+        covers=frozenset({"history"}),
+        # Lowest reliability of any source: archival derivatives vary wildly,
+        # some items are broken, and the strict licence gate rejects most hits.
+        # It ranks below stock for every video scene by design — tried only
+        # when the subject is period footage stock cannot possibly hold.
+        reliability=1.1, probe="vintage newsreel city street",
+        note="archival motion — the only free source for footage of the past."),
+
     # Stock sites are generalists: shallow on everything, and the only place
     # with modern life and modern motion. They are always a valid last resort,
     # which is what `generalist` means here.
@@ -931,6 +1084,9 @@ def diagnose(name: str, cfg: dict | None = None) -> list[tuple]:
         "europeana": ("https://www.europeana.eu/",
                       "https://api.europeana.eu/record/v2/search.json"
                       "?wskey=probe&query=test&rows=1"),
+        "ia": ("https://archive.org/",
+               "https://archive.org/advancedsearch.php"
+               "?q=test&rows=1&output=json"),
     }
     if name not in PROBES:
         return [("unknown source", False, name)]
@@ -989,5 +1145,8 @@ def search(name: str, query: str, media: str, want: int, cfg: dict) -> list[Hit]
         raise
     note_success(name)
     # Second pass for sources that DO report dimensions. The ones that do not
-    # are caught after download, in stock.fetch.
-    return [h for h in hits if not h.width or h.width >= MIN_WIDTH]
+    # are caught after download, in stock.fetch. The floor is media-aware:
+    # applying the 1100px stills floor here would have discarded every archival
+    # video clip, which is exactly the material this source exists to provide.
+    floor = floor_for(media)
+    return [h for h in hits if not h.width or h.width >= floor]

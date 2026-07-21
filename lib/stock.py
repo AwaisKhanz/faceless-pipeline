@@ -178,10 +178,12 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     # postcard, which looks like a mistake at 1080p — and no search API reports
     # dimensions, so this is the first honest opportunity to check.
     w = _pixel_width(dest)
-    if w and w < _SRC.MIN_WIDTH:
+    floor = _SRC.floor_for(media)
+    if w and w < floor:
         dest.unlink(missing_ok=True)
         raise StockError(
-            f"{hit['src']} returned {w}px for '{query}' — too small for 1080p")
+            f"{hit['src']} returned {w}px for '{query}' — below the "
+            f"{floor}px floor for {media.lower()}")
     meta = {"path": str(dest), "credit": hit["credit"], "page": hit["page"],
             "src": hit["src"], "license": hit.get("license", ""),
             "query": query, "media": media, "index": index}

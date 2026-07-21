@@ -75,6 +75,44 @@ EU = {"success": True, "items": [
 ]}
 
 
+# ── Internet Archive ──────────────────────────────────────────────────────
+# The strictest gate in the module, and the one whose failure is worst: a
+# copyrighted film admitted here goes straight into a monetised video. The
+# search response carries the licence signal; the metadata response carries the
+# playable file. Two calls, so the fake has to answer both.
+
+IA_SEARCH = {"response": {"docs": [
+    # 0  explicit public-domain licence — keep
+    {"identifier": "pd_film", "title": "A Public Domain Film",
+     "licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
+     "collection": ["opensource_movies"]},
+    # 1  no licence, but a curated-PD collection vouches for it — keep
+    {"identifier": "prelinger_film", "title": "Prelinger Ephemeral",
+     "collection": ["prelinger", "ephemera"]},
+    # 2  no licence, ordinary upload collection — DROP (absence is not freedom)
+    {"identifier": "mystery_upload", "title": "Someone's Upload",
+     "collection": ["opensource_movies"]},
+    # 3  explicit share-alike — DROP even though it is a CC licence
+    {"identifier": "sa_film", "title": "Share Alike Film",
+     "licenseurl": "https://creativecommons.org/licenses/by-sa/4.0/",
+     "collection": ["prelinger"]},          # collection must NOT rescue it
+    # 4  non-commercial — DROP, excludes monetisation
+    {"identifier": "nc_film", "title": "Non-Commercial",
+     "licenseurl": "https://creativecommons.org/licenses/by-nc/4.0/"},
+]}}
+
+IA_META = {
+    "pd_film": {"files": [
+        {"name": "pd_film.ogv", "width": "640"},
+        {"name": "pd_film_512kb.mp4", "width": "640", "height": "480"},
+        {"name": "pd_film.mp4", "width": "1280", "height": "720"},
+    ]},
+    "prelinger_film": {"files": [
+        {"name": "prelinger.mp4", "width": "512", "height": "384"},
+    ]},
+}
+
+
 def main() -> int:
     bad = 0
 
@@ -107,6 +145,39 @@ def main() -> int:
         check("licence is recorded on the hit",
               hits[0].license.startswith("CC0"), True)
 
+    print("\n  Internet Archive — 5 films in, 2 usable, and the gate is strict:")
+
+    def ia_json(url, headers=None):
+        if "advancedsearch" in url:
+            return IA_SEARCH
+        ident = url.rsplit("/", 1)[-1]
+        return IA_META.get(ident, {"files": []})
+    S._json = ia_json
+
+    hits = S.internet_archive("x", "VIDEO", 5, {})
+    idents = [h.page.rsplit("/", 1)[-1] for h in hits]
+    check("kept only the PD-licensed and the Prelinger-collection films",
+          sorted(idents), ["pd_film", "prelinger_film"])
+    check("share-alike is dropped even inside a trusted collection",
+          "sa_film" not in idents, True)
+    check("non-commercial is dropped (it excludes monetisation)",
+          "nc_film" not in idents, True)
+    check("an unlicensed ordinary upload is dropped (absence is not freedom)",
+          "mystery_upload" not in idents, True)
+    if hits:
+        pd = next((h for h in hits if h.page.endswith("pd_film")), None)
+        check("chose the widest mp4 derivative, skipping the .ogv",
+              pd.url.endswith("pd_film.mp4") and pd.width == 1280, True)
+        check("licence reason names the collection when there is no licence URL",
+              "prelinger" in next(h.license for h in hits
+                                  if h.page.endswith("prelinger_film")), True)
+
+    print("\n  a standard-definition archival clip is NOT rejected as too small:")
+    check("512px archival video clears the video floor",
+          S.MIN_VIDEO_WIDTH <= 512 < S.MIN_WIDTH, True)
+    check("the same 512px would be rejected as a still",
+          S.floor_for("IMAGE") > 512 and S.floor_for("VIDEO") <= 512, True)
+
     print("\n  refusals are explicit, never silent:")
     try:
         S.europeana("x", "IMAGE", 3, {})
@@ -119,6 +190,12 @@ def main() -> int:
             check(f"{name} refuses VIDEO", False, True)
         except S.SourceError:
             check(f"{name} refuses VIDEO rather than returning stills", True, True)
+    try:
+        S.internet_archive("x", "IMAGE", 3, {})
+        check("Internet Archive refuses IMAGE", False, True)
+    except S.SourceError:
+        check("Internet Archive refuses IMAGE (stills come from elsewhere)",
+              True, True)
 
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0

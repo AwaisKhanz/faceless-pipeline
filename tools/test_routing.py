@@ -141,33 +141,55 @@ def main() -> int:
     print("\n  with every archive configured:")
     S.reset_failures()
     WIDE = {"nasa", "smithsonian", "openverse", "loc", "wikimedia",
-            "europeana", "pexels", "pixabay"}
+            "europeana", "ia", "pexels", "pixabay"}
+    # (domain, query, media, what must come first, why)
     WIDE_CASES = [
-        ("history", "roman stone aqueduct arches", "smithsonian",
+        ("history", "roman stone aqueduct arches", "IMAGE", "smithsonian",
          "the museum still leads on antiquity, not whoever sorts first"),
-        ("space", "spiral galaxy in deep space", "nasa",
+        ("space", "spiral galaxy in deep space", "IMAGE", "nasa",
          "a source that holds the subject beats one that is merely reliable"),
-        ("wartime", "farm family outside a wooden shack", "loc",
+        ("wartime", "farm family outside a wooden shack", "IMAGE", "loc",
          "history + people is exactly what LoC documentary photography is"),
-        ("medieval europe", "illuminated manuscript page", "europeana",
+        ("medieval europe", "illuminated manuscript page", "IMAGE", "europeana",
          "the European institutions lead where the American ones thin out"),
-        ("people", "older woman making tea in a bright kitchen", STOCK,
+        ("people", "older woman making tea in a bright kitchen", "IMAGE", STOCK,
          "LoC covering `people` must NOT pull modern domestic life away"),
-        ("sport", "marathon runners crossing a finish line", STOCK,
+        ("sport", "marathon runners crossing a finish line", "IMAGE", STOCK,
          "six archives configured still cannot beat stock at modern life"),
+        # Archival VIDEO is the one place IA belongs: stock leads because it is
+        # motion, but IA earns the third slot for footage stock cannot hold.
+        ("wartime", "1930s newsreel of a city street", "VIDEO", STOCK,
+         "archival video still opens with stock — nothing free beats it there"),
     ]
-    for domain, query, want, why in WIDE_CASES:
-        route = S.route(domain, "IMAGE", WIDE, query)
+    for domain, query, media, want, why in WIDE_CASES:
+        route = S.route(domain, media, WIDE, query)
         ok = first_of(route, want)
         bad += not ok
-        print(f"    {'ok' if ok else '!!'}  {domain:<16}{str(route):<46}{why}")
+        print(f"    {'ok' if ok else '!!'}  {domain+'/'+media:<22}"
+              f"{str(route):<46}{why}")
         if not ok:
             print(f"        wanted {want} first, topics: "
                   f"{sorted(S.topics_in(domain, query))}")
 
-    every_source_reachable = all(
-        any(n in S.route(d, "IMAGE", WIDE, q) for d, q, _, _ in WIDE_CASES + CASES)
-        for n in WIDE)
+    # IA belongs on archival video and nowhere else. These two pin both edges.
+    ia_archival = "ia" in S.route("wartime", "VIDEO", WIDE,
+                                  "1930s newsreel of a city street")
+    ia_not_modern = "ia" not in S.route("people", "VIDEO", WIDE,
+                                        "friends laughing in a modern cafe")
+    for label, passed in (
+        ("IA is offered for archival video", ia_archival),
+        ("IA is NOT offered for modern video (it holds nothing there)",
+         ia_not_modern)):
+        bad += not passed
+        print(f"    {'ok' if passed else '!!'}  {label}")
+
+    # Every configured source must win some scene, across BOTH media — a
+    # VIDEO-only source like IA never appears in an IMAGE route, so checking
+    # images alone would wrongly flag it as dead weight.
+    def wins_somewhere(name: str) -> bool:
+        pool = WIDE_CASES + [(d, q, "IMAGE", w, y) for d, q, w, y in CASES]
+        return any(name in S.route(d, m, WIDE, q) for d, q, m, _, _ in pool)
+    every_source_reachable = all(wins_somewhere(n) for n in WIDE)
     bad += not every_source_reachable
     print(f"    {'ok' if every_source_reachable else '!!'}  "
           f"every configured source wins some scene "

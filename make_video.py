@@ -321,14 +321,19 @@ def main() -> None:
         banner("Routing")
         print(f"  {len(SRC.TOPICS)} topics, {len(SRC._WORD2TOPIC)} words recognised.")
         print(f"  Scene tags are free text — anything sensible works.\n")
-        for dom, q in (("astrophysics", "spiral galaxy in deep space"),
-                       ("ancient rome", "stone aqueduct arches"),
-                       ("dinosaurs", "fossil skeleton in a museum"),
-                       ("modern medicine", "surgeon in an operating room"),
-                       ("daily life", "older woman making tea at home"),
-                       ("sport", "runners crossing a finish line"),
-                       ("(anything unknown)", "wibble flurb")):
-            print(f"  {dom:<20}{SRC.explain(dom, 'IMAGE', have, q)}")
+        for dom, q, media in (
+                ("astrophysics", "spiral galaxy in deep space", "IMAGE"),
+                ("ancient rome", "stone aqueduct arches", "IMAGE"),
+                ("dinosaurs", "fossil skeleton in a museum", "IMAGE"),
+                ("modern medicine", "surgeon in an operating room", "IMAGE"),
+                ("daily life", "older woman making tea at home", "IMAGE"),
+                ("sport", "runners crossing a finish line", "IMAGE"),
+                # The two that show motion routing: modern goes to stock, the
+                # archival one earns Internet Archive the third slot.
+                ("modern life", "friends laughing in a cafe", "VIDEO"),
+                ("wartime", "1930s newsreel of a city street", "VIDEO"),
+                ("(anything unknown)", "wibble flurb", "IMAGE")):
+            print(f"  {dom:<18}{media:<6} {SRC.explain(dom, media, have, q)}")
         print(f"\n  Routing is frozen by tools/test_routing.py — run that after")
         print(f"  changing the vocabulary. It is offline and free.")
         print(f"\n  Sheets carry a 'Domain:' line per scene; blank routes to stock.")
