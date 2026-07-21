@@ -260,6 +260,12 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         tail = f"  ({notes[-1]})" if notes else ""
         log(f"  S{s.n:>3} {s.media:<5} {got['src']:<11} {got['query'][:40]}{tail}")
 
+    down = _SRC.down_sources()
+    if down:
+        log(f"\nUnreachable this run, skipped after {_SRC.FAIL_LIMIT} failures: "
+            f"{', '.join(down)}")
+        log("Run 'faceless sources' to see whether that is your network or theirs.")
+
     if failed:
         log(f"\n{len(failed)} scene(s) had no usable match: "
             f"{[n for n, _ in failed]}")

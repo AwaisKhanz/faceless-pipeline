@@ -118,13 +118,13 @@ def _get(url: str, headers: dict | None = None) -> bytes:
             return r.read()
     except Exception as e:
         msg = str(e)
-        # A reset rather than an HTTP error is the signature of an agent-based
-        # block. Say so, because "connection reset by peer" alone sends people
-        # looking at their network.
+        # A reset can be an agent-based block OR the network refusing the host
+        # outright, and the two look identical here. Do not assert either:
+        # point at the command that can actually tell them apart.
         if "reset" in msg.lower() or "forcibly closed" in msg.lower():
-            msg += (f" — the server dropped the connection, which usually means "
-                    f"it rejected our User-Agent ({user_agent()}). "
-                    f"Set \"contact\" in config.json to a URL or email you own.")
+            msg += (" — the connection was dropped. That is either this network "
+                    "refusing the host, or the API refusing this client. Run "
+                    "'faceless sources' to find out which.")
         raise SourceError(msg)
 
 
@@ -562,6 +562,8 @@ def route(domain: str, media: str, available: set, query: str = "") -> list[str]
         src = REGISTRY.get(name)
         if src is None or not src.can(media):
             continue                       # declared incapable: never asked
+        if is_down(name):
+            continue                       # unreachable this run; stop asking
 
         overlap = len(found & src.covers)
         score = overlap * 10.0
@@ -592,6 +594,41 @@ def explain(domain: str, media: str, available: set, query: str = "") -> str:
     r = route(domain, media, available, query)
     topic_s = ", ".join(sorted(found)) or "no recognised topic"
     return f"{topic_s} -> {r}"
+
+
+# ─────────────────────────────────────────────────────── circuit breaker
+#
+# A source the network cannot reach fails identically for every scene. Across
+# 115 scenes that is 115 connection attempts, each waiting out its own timeout,
+# for a source that was never going to answer. Once one has failed repeatedly
+# it is marked down for the rest of the run and skipped, so the ladder moves
+# straight to the next source instead of stalling.
+#
+# Deliberately per-process, not persisted: a network comes back, an outage
+# ends, and nothing should need clearing by hand to notice that.
+
+_FAILS: dict[str, int] = {}
+FAIL_LIMIT = 3
+
+
+def note_failure(name: str) -> None:
+    _FAILS[name] = _FAILS.get(name, 0) + 1
+
+
+def note_success(name: str) -> None:
+    _FAILS.pop(name, None)
+
+
+def is_down(name: str) -> bool:
+    return _FAILS.get(name, 0) >= FAIL_LIMIT
+
+
+def down_sources() -> list[str]:
+    return sorted(n for n in _FAILS if is_down(n))
+
+
+def reset_failures() -> None:
+    _FAILS.clear()
 
 
 def diagnose(name: str, cfg: dict | None = None) -> list[tuple]:
@@ -674,7 +711,12 @@ def search(name: str, query: str, media: str, want: int, cfg: dict) -> list[Hit]
     src = REGISTRY.get(name)
     if src is None or src.search is None:
         raise SourceError(f"no such source: {name}")
-    hits = src.search(query, media, want, cfg) or []
+    try:
+        hits = src.search(query, media, want, cfg) or []
+    except SourceError:
+        note_failure(name)
+        raise
+    note_success(name)
     # Second pass for sources that DO report dimensions. The ones that do not
     # are caught after download, in stock.fetch.
     return [h for h in hits if not h.width or h.width >= MIN_WIDTH]

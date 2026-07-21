@@ -128,6 +128,27 @@ def main() -> int:
         detail = "; ".join(problems) or f"{len(src.covers)} topics, {'/'.join(src.media)}"
         print(f"    {'ok' if not problems else '!!'}  {name:<14}{detail}")
 
+    print("\n  circuit breaker (a source the network cannot reach):")
+    S.reset_failures()
+    full = {"nasa", "smithsonian", "openverse", "wikimedia", "pexels", "pixabay"}
+    before = S.route("ancient rome", "IMAGE", full, "aqueduct")
+    for _ in range(S.FAIL_LIMIT):
+        S.note_failure("wikimedia")
+    after = S.route("ancient rome", "IMAGE", full, "aqueduct")
+    dropped = "wikimedia" in before and "wikimedia" not in after
+    bad += not dropped
+    print(f"    {'ok' if dropped else '!!'}  dropped after {S.FAIL_LIMIT} failures")
+    print(f"        {before}  ->  {after}")
+    S.note_success("wikimedia")
+    back = "wikimedia" in S.route("ancient rome", "IMAGE", full, "aqueduct")
+    bad += not back
+    print(f"    {'ok' if back else '!!'}  restored by a single success "
+          f"(a network coming back needs no intervention)")
+    still = bool(S.route("ancient rome", "IMAGE", full, "aqueduct"))
+    bad += not still
+    print(f"    {'ok' if still else '!!'}  routing survives losing a source")
+    S.reset_failures()
+
     print("\n  no-key install still finds pictures:")
     bare = S.usable({})
     bad += not bare
