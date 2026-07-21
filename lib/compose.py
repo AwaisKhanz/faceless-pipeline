@@ -42,6 +42,13 @@ class Scene:
     query: str
     note: str = ""
     hero: bool = False
+    # The routing signal. `generate()` builds Scenes with these two, and
+    # render_master writes them into the sheet as `Domain:` and `Fallbacks:`
+    # lines. They were added to the constructor and the renderer but not here,
+    # so every sheet build crashed with "unexpected keyword argument 'domain'".
+    # Defaulted, so an old caller that omits them still works.
+    domain: str = ""
+    fallbacks: list[str] = field(default_factory=list)
 
 
 @dataclass
