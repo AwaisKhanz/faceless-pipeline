@@ -423,7 +423,7 @@ async function viewProject(id) {
           el('div', { class: 'row', style: 'justify-content:flex-end;gap:6px' },
             l.render ? el('button', {
               class: 'btn sm',
-              onclick: () => window.open('/media/out/' + l.mp4, '_blank')
+              onclick: () => playVideo(l.mp4, p.id + ' · ' + (l.name || code))
             }, 'Play') : null,
             el('button', { class: 'btn sm', onclick: () => run([code], ['voice'], false) },
               l.voice ? 'Re-check' : l.voice_n ? 'Resume' : 'Voice'),
@@ -524,7 +524,7 @@ function paintRun() {
     (j.outputs || []).length ? el('div', { style: 'margin-top:16px' },
       el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Finished files'),
       el('div', { class: 'row' }, j.outputs.map(o => el('button', {
-        class: 'btn sm', onclick: () => window.open('/media/out/' + o.name, '_blank')
+        class: 'btn sm', onclick: () => playVideo(o.name)
       }, `${o.name} · ${o.size_mb} MB`)))) : null);
 
   const t = $('#term'); if (!t) return;
@@ -744,7 +744,7 @@ async function viewSettings() {
       el('td', { class: 'sub', style: 'text-align:right;width:110px' }, ago(o.built)),
       el('td', { style: 'text-align:right;width:76px' },
         el('button', {
-          class: 'btn sm', onclick: () => window.open('/media/out/' + o.name, '_blank')
+          class: 'btn sm', onclick: () => playVideo(o.name)
         }, 'Play'))))))
     : el('div', { class: 'sub' }, 'Nothing rendered yet.')));
 }
@@ -800,6 +800,36 @@ async function viewReview(id) {
       : el('img', { src: s.url, loading: 'lazy', alt: s.query || '' }));
     return t;
   })));
+}
+
+// ═══ player ═══════════════════════════════════════════════════════════════
+function playVideo(name, title) {
+  const v = el('video', {
+    src: '/out/' + encodeURIComponent(name),
+    controls: true, autoplay: true, playsinline: true,
+    style: 'width:100%;border-radius:8px;background:#000;max-height:70vh'
+  });
+  const modal = el('div', {
+    class: 'modal',
+    onclick: e => { if (e.target === modal) { v.pause(); modal.remove(); } }
+  },
+    el('div', { class: 'box', style: 'max-width:900px' },
+      el('div', { class: 'row', style: 'margin-bottom:10px' },
+        el('h3', { style: 'flex:1' }, title || name),
+        el('button', {
+          class: 'btn sm',
+          onclick: () => window.open('/out/' + encodeURIComponent(name), '_blank')
+        }, 'Open in tab'),
+        el('button', {
+          class: 'btn sm',
+          onclick: () => api('/api/reveal', { path: name })
+        }, 'Show in folder'),
+        el('button', {
+          class: 'btn sm', onclick: () => { v.pause(); modal.remove(); }
+        }, 'Close')),
+      v,
+      el('div', { class: 'sub mono', style: 'margin-top:8px' }, name)));
+  document.body.append(modal);
 }
 
 // ═══ delete ═══════════════════════════════════════════════════════════════

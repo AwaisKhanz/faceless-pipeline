@@ -433,12 +433,84 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # keep the terminal clean
         pass
 
+    def do_HEAD(self):
+        """Some players and download managers probe with HEAD before GET.
+
+        Answered by running the normal GET path with the body suppressed, so
+        the headers can never drift out of step with what GET would send.
+        """
+        self._head_only = True
+        try:
+            self.do_GET()
+        finally:
+            self._head_only = False
+
+    def _serve_file(self, f: Path, root: Path) -> None:
+        """Send a file from `root`, streamed, honouring HTTP Range requests.
+
+        Range matters for video. Without it a browser cannot seek, and some
+        will refuse to start playback at all — they ask for the first few bytes
+        to read the container header, get the whole file instead, and give up.
+        Streaming in chunks also means a 268 MB render is not loaded into
+        memory in one go just to be handed to <video>.
+        """
+        f = f.resolve()
+        if not str(f).startswith(str(root.resolve()) + os.sep) or not f.is_file():
+            return self._send(404, b"not found", "text/plain")
+
+        size = f.stat().st_size
+        ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
+        start, end = 0, size - 1
+        partial = False
+
+        rng = self.headers.get("Range", "")
+        m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip()) if rng else None
+        if m:
+            a, b = m.group(1), m.group(2)
+            if a:                       # bytes=500-  or  bytes=500-999
+                start = int(a)
+                end = int(b) if b else size - 1
+            elif b:                     # bytes=-500  (the last 500 bytes)
+                start = max(0, size - int(b))
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            end = min(end, size - 1)
+            partial = True
+
+        length = end - start + 1
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if getattr(self, "_head_only", False):
+            return
+        try:
+            with f.open("rb") as fh:
+                fh.seek(start)
+                left = length
+                while left > 0:
+                    chunk = fh.read(min(262144, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass        # the browser seeked away or closed the tab; normal
+
     def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        if getattr(self, "_head_only", False):
+            return
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
@@ -578,14 +650,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "project not found"}, 404)
 
         if path.startswith("/media/"):
+            # Stock footage and photos, straight from the cache.
             name = unquote(path[len("/media/"):])
-            f = (ROOT / "cache" / "stock" / name).resolve()
-            # never serve outside the cache folder
-            if not str(f).startswith(str((ROOT / "cache" / "stock").resolve())) \
-                    or not f.exists():
-                return self._send(404, b"not found", "text/plain")
-            ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
-            return self._send(200, f.read_bytes(), ctype)
+            return self._serve_file(ROOT / "cache" / "stock" / name,
+                                    ROOT / "cache" / "stock")
+
+        if path.startswith("/out/"):
+            # Finished videos and subtitles. Separate from /media/ because they
+            # live in a different folder — routing them through /media/out/ was
+            # a bug that resolved to cache/stock/out/ and always 404'd.
+            name = unquote(path[len("/out/"):])
+            return self._serve_file(ROOT / "out" / name, ROOT / "out")
 
         return self._send(404, b"not found", "text/plain")
 
