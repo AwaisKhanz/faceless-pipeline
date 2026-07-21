@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy this to config.json and paste your two free keys in. Both take about two minutes to get and neither ever expires or charges.",
+  "_pexels": "Get a key at https://www.pexels.com/api/ (200 requests per hour, free forever)",
+  "pexels_key": "",
+  "_pixabay": "Get a key at https://pixabay.com/api/docs/ (100 requests per minute, free forever)",
+  "pixabay_key": "",
+  "_gemini": "Optional. Free key at https://aistudio.google.com/apikey \u2014 only needed if you want to generate sheets from a script.",
+  "gemini_key": "",
+  "gemini_model": "auto",
+  "_gemini_model": "\"auto\" asks your key which models it can call and picks the best Flash one. Only pin a name here if you want a specific model."
+}

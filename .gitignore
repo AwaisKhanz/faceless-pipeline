@@ -1,0 +1,32 @@
+# ── Secrets ─────────────────────────────────────────────────────────────────
+# config.json holds live Pexels / Pixabay / Gemini keys. Never commit it.
+# config.example.json is the safe template — that one IS tracked.
+config.json
+
+# ── Generated and downloadable ──────────────────────────────────────────────
+# All of this rebuilds itself from the sheets. Committing it would push the
+# repo into the gigabytes and GitHub rejects any single file over 100 MB.
+.venv/
+cache/
+work/
+out/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Reference audio ─────────────────────────────────────────────────────────
+# Voice clips are copied between machines by hand rather than published, since
+# redistributing someone else's recording is a separate question from using it
+# locally. The README inside the folder is tracked so the folder survives.
+voices_refs/*
+!voices_refs/README.txt
+
+# ── Music ───────────────────────────────────────────────────────────────────
+# Background tracks are licensed to you, not necessarily redistributable.
+music/*
+!music/README.txt
+
+# ── OS clutter ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

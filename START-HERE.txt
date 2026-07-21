@@ -1,0 +1,151 @@
+FACELESS STUDIO
+===============
+
+Full instructions are in README.md. This is the short version.
+Windows first, macOS below it.
+
+
+===============================================================
+WINDOWS  -  FIRST TIME ONLY  (about 20 minutes)
+===============================================================
+
+1. Install Python 3.12
+   https://www.python.org/downloads/
+
+   On the FIRST screen of the installer, tick "Add python.exe to PATH".
+   This is easy to miss and nothing works without it.
+
+2. Install ffmpeg. Open PowerShell and run:
+
+       winget install Gyan.FFmpeg
+
+   Close PowerShell, open it again, then check:
+
+       ffmpeg -version
+
+3. Double-click  setup.bat
+
+   Large download (several GB) - leave it running.
+
+   If you have an NVIDIA card it installs the CUDA build of PyTorch and
+   then tests that your GPU really works before finishing. If that test
+   fails it prints the exact command to fix it.
+
+   You need the NVIDIA driver installed. You do NOT need the CUDA Toolkit.
+
+4. Add your free API keys. Open config.json in Notepad and paste them
+   between the quote marks:
+
+       Pexels    https://www.pexels.com/api/         (required)
+       Pixabay   https://pixabay.com/api/docs/       (required)
+       Gemini    https://aistudio.google.com/apikey  (optional - script to sheets)
+
+5. Check everything:
+
+       python make_video.py doctor
+
+   Anything "ok" is fine. Anything "!!" is explained in README.md
+   section 6. Look for the chatterbox line - it should name your
+   graphics card and its VRAM.
+
+
+EVERY TIME AFTER THAT
+---------------------
+
+    Double-click  Start.bat
+
+Leave that window open while you work. Press Ctrl+C in it when done.
+
+
+===============================================================
+macOS  -  FIRST TIME ONLY  (about 15 minutes)
+===============================================================
+
+Open Terminal (Cmd+Space, type "Terminal"), then run these one at a time:
+
+    cd ~/Documents/faceless-pipeline
+    brew install ffmpeg
+    bash setup.sh          (large - pulls in PyTorch, be patient)
+    open -e config.json
+
+Paste your keys into that file as described in step 4 above, save it, then:
+
+    python3 make_video.py doctor
+
+Every time after that:  double-click  Start.command
+
+
+===============================================================
+THE VOICE  (both platforms)
+===============================================================
+
+Narration is cloned from a reference clip. Put one in voices_refs/ - it
+must be audio you hold rights to:
+
+    your own voice (30s on a phone is plenty)
+    Mozilla Common Voice   https://commonvoice.mozilla.org/   (CC0)
+    LibriVox               https://librivox.org/              (public domain)
+
+Then pick it in the studio's Voices panel.
+
+Check how fast your machine is before committing to a full video:
+
+    python make_video.py benchtts --lang en        (Windows)
+    python3 make_video.py benchtts --lang en       (macOS)
+
+
+===============================================================
+USING IT
+===============================================================
+
+    0. Paste a script and generate the sheets     (optional)
+    1. Find visuals
+    2. Click any picture that doesn't fit, get new ones
+    3. Build the videos
+
+Finished files appear in the out/ folder.
+
+
+===============================================================
+IF SOMETHING BREAKS
+===============================================================
+
+Run this first - it usually tells you exactly what is wrong:
+
+    python make_video.py doctor
+
+Things that commonly trip people up:
+
+  "'python' is not recognized"                        (Windows)
+      Python is not on your PATH. Re-run the Python installer,
+      choose Modify, and tick "Add python.exe to PATH".
+
+  doctor says chatterbox is on CPU but you have an NVIDIA card
+      PyTorch was installed without CUDA. README.md section 6 has
+      the one-line fix.
+
+  "externally-managed-environment" when using pip       (macOS)
+      Expected. Use  bash setup.sh  instead of pip. Never use
+      --break-system-packages; it can break Homebrew itself.
+
+  The whole computer freezes while voicing               (macOS)
+      The GPU shares system memory and ran out. This is why a PC
+      with an NVIDIA card is the better machine for this job.
+
+  Captions are not burned into the video
+      Your ffmpeg was built without text support. On Windows, use the
+      "full" build, not "essentials". Or just upload the .srt file that
+      sits next to the MP4 - YouTube handles that well and it is better
+      for search anyway.
+
+
+===============================================================
+WHERE THINGS LIVE
+===============================================================
+
+    sheets/       your scripts as production sheets
+    out/          finished videos and subtitles
+    music/        background tracks - drop them here
+    voices_refs/  reference clips, only for voice cloning
+    config.json   your API keys
+    README.md     the full manual
