@@ -628,7 +628,10 @@ function viewNew() {
       el('button', {
         class: 'btn primary', onclick: async e => {
           if (!id.value.trim()) return toast('Give it a name first.', true);
-          if (script.value.trim().length < 200) return toast('That script looks too short.', true);
+          // No minimum length. A short script is a legitimate thing to want —
+          // a test, a 60-second clip — and guessing at what is 'too short'
+          // just blocks work. Empty is the only thing that cannot proceed.
+          if (!script.value.trim()) return toast('Paste a script first.', true);
           e.target.disabled = true;
           const r = await api('/api/generate', {
             id: id.value.trim(), script: script.value,

@@ -797,9 +797,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/generate":
             script = (b.get("script") or "").strip()
-            if len(script.split()) < 120:
-                return self._json(
-                    {"error": "That script looks too short — paste the whole thing."}, 400)
+            # Only reject nothing at all. There is no sensible lower bound on a
+            # script — a 12-scene test is as valid as a 115-scene one — and a
+            # guessed threshold only gets in the way.
+            if not script:
+                return self._json({"error": "Paste a script first."}, 400)
             ok = start_thread(run_generate, script, b.get("id") or "video",
                               b.get("langs") or ["en"], bool(b.get("overwrite")))
             return self._json({"started": ok})
