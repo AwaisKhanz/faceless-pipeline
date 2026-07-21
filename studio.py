@@ -667,6 +667,24 @@ class Handler(BaseHTTPRequestHandler):
                               "names": [f.name for f in files[:6]]}
             return self._json({"id": pid, "groups": summary})
 
+        if path == "/api/voice_options":
+            # Every clip that could read each language, in one request. The
+            # project page shows a picker per language, and three round trips
+            # to build one table would be silly.
+            vx.ensure_folders()
+            langs = [c for c in (q.get("langs") or [""])[0].split(",") if c] \
+                or ["en", "de", "es"]
+            return self._json({
+                "options": {
+                    c: [{"rel": r["rel"], "label": r["label"],
+                         "seconds": r["seconds"], "short": r["short"],
+                         "loose": not r["lang"]}
+                        for r in vx.references(c)]
+                    for c in langs
+                },
+                "chosen": {c: vx.pref_for(c).get("reference", "") for c in langs},
+            })
+
         if path == "/api/doctor":
             # The same checks the `faceless check` command runs, for Settings.
             from lib import chatterbox_engine as CB

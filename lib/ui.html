@@ -380,6 +380,10 @@ async function viewProject(id) {
   if (!p) { v.append(el('div', { class: 'empty card' }, el('b', {}, 'No such project'), id)); return; }
   const st = p.status || { languages: {}, scenes: 0, assets: 0 };
   const o = overall(st);
+  const codes = Object.keys(st.languages || {});
+  // Which clips can read each language, so the voice can be seen and changed
+  // here rather than on another screen.
+  const vo = await api('/api/voice_options?langs=' + codes.join(','));
 
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' },
@@ -421,16 +425,58 @@ async function viewProject(id) {
     if (r.started) go('/activity');
   };
 
-  v.append(el('div', { class: 'sec' }, el('h2', {}, 'Languages')));
+  // One picker per language. Choosing here saves that language's voice — the
+  // same setting the Voices panel writes — so there is one concept, not a
+  // per-run override that quietly disagrees with the saved default.
+  const voicePicker = (code, l) => {
+    const opts = (vo.options || {})[code] || [];
+    if (!opts.length) {
+      return el('div', {},
+        el('span', { class: 'pill bad' }, 'no clips'),
+        el('div', { class: 'sub', style: 'margin-top:4px' },
+          el('a', {
+            style: 'color:var(--accent);cursor:pointer',
+            onclick: () => go('/voices/' + code)
+          }, `add one to voices_refs/${code}/`)));
+    }
+    const sel = el('select', {
+      style: 'width:auto;min-width:150px;max-width:190px',
+      onchange: async e => {
+        const rel = e.target.value;
+        if (!rel) return;
+        await api('/api/choose_voice', { lang: code, reference: rel });
+        toast(`${l.name || code} will be read by `
+          + `${opts.find(o => o.rel === rel).label}.`);
+        route();     // voiced counts are keyed to the voice; they change too
+      }
+    },
+      el('option', { value: '' }, l.voice_ref ? '' : 'Choose a voice…'),
+      opts.map(o => el('option', {
+        value: o.rel,
+        selected: o.rel === l.voice_ref || o.rel.endsWith('/' + String(l.voice_ref))
+      }, o.label + (o.short ? ' (short)' : ''))));
+    return el('div', {}, sel,
+      el('div', { class: 'sub', style: 'margin-top:4px' },
+        el('span', {
+          style: 'color:var(--accent);cursor:pointer',
+          onclick: () => go('/voices/' + code)
+        }, 'preview & tune')));
+  };
+
+  v.append(el('div', { class: 'sec' }, el('h2', {}, 'Languages'),
+    el('span', { class: 'sub' }, 'each language has its own voice')));
   v.append(el('div', { class: 'card' },
     el('table', {},
-      el('thead', {}, el('tr', {}, ['Language', 'Progress', 'Narration', 'Video', ''].map(h => el('th', {}, h)))),
+      el('thead', {}, el('tr', {},
+        ['Language', 'Voice', 'Progress', 'Narration', 'Video', ''].map(h => el('th', {}, h)))),
       el('tbody', {}, Object.entries(st.languages || {}).map(([code, l]) => el('tr', {},
         el('td', {}, el('b', {}, l.name || code), el('div', { class: 'sub mono' }, code)),
-        el('td', { style: 'width:210px' }, stepBar(st, l)),
+        el('td', {}, voicePicker(code, l)),
+        el('td', { style: 'width:180px' }, stepBar(st, l)),
         el('td', {}, l.voice ? el('span', { class: 'pill ok' }, 'complete')
           : l.voice_n ? el('span', { class: 'pill part' }, `${l.voice_n} / ${st.scenes}`)
-            : el('span', { class: 'pill none' }, 'none')),
+            : el('span', { class: 'pill none' },
+              l.voice_ref ? 'none yet' : 'no voice set')),
         el('td', {}, l.render
           ? el('div', {}, el('div', { class: 'mono', style: 'font-size:12px' }, l.mp4),
             el('div', { class: 'sub' }, `${l.size_mb} MB · ${ago(l.built)}`))
@@ -441,8 +487,11 @@ async function viewProject(id) {
               class: 'btn sm',
               onclick: () => playVideo(l.mp4, p.id + ' · ' + (l.name || code))
             }, 'Play') : null,
-            el('button', { class: 'btn sm', onclick: () => run([code], ['voice'], false) },
-              l.voice ? 'Re-check' : l.voice_n ? 'Resume' : 'Voice'),
+            el('button', {
+              class: 'btn sm', disabled: !l.voice_ref,
+              title: l.voice_ref ? '' : 'Choose a voice for this language first',
+              onclick: () => run([code], ['voice'], false)
+            }, l.voice ? 'Re-check' : l.voice_n ? 'Resume' : 'Voice'),
             l.voice_n ? el('button', {
               class: 'btn sm danger',
               onclick: () => confirm(`Delete ${l.voice_n} cached narration file(s) for `
@@ -451,6 +500,8 @@ async function viewProject(id) {
             }, 'Redo') : null,
             el('button', {
               class: 'btn sm' + (l.voice && !l.render ? ' primary' : ''),
+              disabled: !l.voice_ref,
+              title: l.voice_ref ? '' : 'Choose a voice for this language first',
               onclick: () => run([code], ['render'], false)
             }, l.render ? 'Re-render' : 'Render')))))) ),
     el('div', { class: 'hr' }),
@@ -467,7 +518,10 @@ async function viewProject(id) {
         el('option', { value: '' }, 'None'), S.music.map(m => el('option', { value: m }, m))),
       el('button', {
         class: 'btn primary',
-        onclick: () => run(Object.keys(st.languages || {}), ['voice', 'render'], false)
+        disabled: !codes.every(c => st.languages[c].voice_ref),
+        title: codes.every(c => st.languages[c].voice_ref) ? ''
+          : 'Every language needs a voice first',
+        onclick: () => run(codes, ['voice', 'render'], false)
       }, 'Build every language'))));
 }
 

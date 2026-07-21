@@ -350,10 +350,20 @@ are flagged in the panel.
 
 ## Choosing one
 
-Open the **Voices** panel and pick a language from the tabs — each shows how many clips
-it has. Press **Preview** on a clip to hear it read **a real line from your own script**,
-then **Use this** to save it for that language. Choices live in `voices.json` and apply
-to every render from then on.
+Two places, one setting:
+
+- **On the project page** — each language row has a **Voice** dropdown. Change it and it
+  saves immediately. This is the quick way once you know your clips.
+- **In the Voices panel** — tabs per language, with **Preview** to hear a clip read *a
+  real line from your own script* before committing, plus the Expression and Guidance
+  sliders.
+
+Both write the same `voices.json`, so they can't disagree. Voice and Render are disabled
+for a language until it has one, rather than failing after you click.
+
+> Changing a language's voice changes what counts as "voiced". Narration is cached per
+> voice, so switching from one clip to another resets that language's progress to 0 —
+> the old audio is still on disk and comes back if you switch back.
 
 Two sliders:
 

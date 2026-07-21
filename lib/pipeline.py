@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import render, sheet as sheetlib, stock, tts
+from . import voices as V
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -136,8 +137,24 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
         except Exception:
             scenes = []
 
+        # Which clip reads this language. The project page needs it to show and
+        # change the voice in place, rather than sending you to another screen
+        # to answer a question it just asked you.
+        pref = V.pref_for(code)
+        ref = pref.get("reference", "")
+        ref_ok = False
+        if ref:
+            try:
+                V.resolve(ref)
+                ref_ok = True
+            except FileNotFoundError:
+                ref_ok = False
+
         out["languages"][code] = {
             "name": lg.get("name", code),
+            "voice_ref": ref,
+            "voice_label": V.label_for(ref) if ref else "",
+            "voice_ok": ref_ok,
             "sheets": bool(lg.get("file")) or code == "en",
             "visuals": assets_n > 0 and assets_n >= n_scenes,
             "visuals_n": assets_n,
