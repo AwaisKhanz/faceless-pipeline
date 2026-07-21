@@ -46,7 +46,7 @@ FALLBACK_LINE = {
 def _read() -> dict:
     if PREFS.exists():
         try:
-            return json.loads(PREFS.read_text())
+            return json.loads(PREFS.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
     return {}

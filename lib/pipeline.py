@@ -123,7 +123,7 @@ def load_config() -> dict:
     f = ROOT / "config.json"
     if f.exists():
         try:
-            cfg.update({k: v for k, v in json.loads(f.read_text()).items()
+            cfg.update({k: v for k, v in json.loads(f.read_text(encoding="utf-8")).items()
                         if v and not k.startswith("_")})
         except json.JSONDecodeError as e:
             raise SystemExit(
@@ -150,14 +150,14 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
 
     picks: dict[int, int] = {}
     if p["picks"].exists():
-        picks = {int(k): v for k, v in json.loads(p["picks"].read_text()).items()}
+        picks = {int(k): v for k, v in json.loads(p["picks"].read_text(encoding="utf-8")).items()}
     for n in (redo or []):
         picks[n] = picks.get(n, 0) + 1
-    p["picks"].write_text(json.dumps(picks, indent=2))
+    p["picks"].write_text(json.dumps(picks, indent=2), encoding="utf-8")
 
     assets: dict[int, dict] = {}
     if p["assets"].exists():
-        assets = {int(k): v for k, v in json.loads(p["assets"].read_text()).items()}
+        assets = {int(k): v for k, v in json.loads(p["assets"].read_text(encoding="utf-8")).items()}
 
     todo = [s for s in scenes if redo is None or s.n in redo or s.n not in assets]
     for i, s in enumerate(todo):
@@ -169,7 +169,9 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
         except stock.StockError as e:
             on_progress(i + 1, len(todo), f"S{s.n} no match — {e}")
 
-    p["assets"].write_text(json.dumps({str(k): v for k, v in assets.items()}, indent=2))
+    p["assets"].write_text(
+        json.dumps({str(k): v for k, v in assets.items()}, indent=2),
+        encoding="utf-8")
     return assets
 
 

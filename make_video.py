@@ -70,6 +70,11 @@ def _use_project_venv() -> None:
 _use_project_venv()
 
 from lib import approve, pipeline as pl, tts  # noqa: E402
+from lib import console  # noqa: E402
+
+# Windows consoles default to a legacy codepage and die on box-drawing
+# characters. Do this before anything is printed.
+console.setup()
 
 
 def banner(t: str) -> None:
@@ -124,7 +129,7 @@ def step_stock(a) -> None:
     assets = pl.source_stock(scenes, sheet, cfg, redo=redo, on_progress=bar)
 
     p = pl.paths_for(sheet, "en")
-    picks = json.loads(p["picks"].read_text()) if p["picks"].exists() else {}
+    picks = json.loads(p["picks"].read_text(encoding="utf-8")) if p["picks"].exists() else {}
     approve.build(scenes, assets, p["approval"], a.sheet, "en",
                   {int(k): v for k, v in picks.items()})
     banner("Approval sheet ready")
@@ -149,7 +154,7 @@ def step_render(a) -> None:
     af = pl.paths_for(sheet, "en")["assets"]
     if not af.exists():
         raise SystemExit("Run the 'stock' step first.")
-    assets = {int(k): v for k, v in json.loads(af.read_text()).items()}
+    assets = {int(k): v for k, v in json.loads(af.read_text(encoding="utf-8")).items()}
 
     voices = pl.generate_voice(scenes, a.lang, sheet, voice=a.voice)
     banner(f"Building {len(scenes)} scenes")

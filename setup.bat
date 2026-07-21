@@ -8,6 +8,11 @@ REM again to start over; nothing else on your PC is touched.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+REM Windows consoles default to a legacy codepage that cannot draw box
+REM characters. 65001 is UTF-8. Harmless if it fails.
+chcp 65001 >nul 2>&1
+
+
 echo.
 echo   Faceless Studio - Windows setup
 echo   ------------------------------

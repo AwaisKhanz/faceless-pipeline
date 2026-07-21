@@ -113,7 +113,7 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     slug = _slug(query, media, index)
     meta_p = cache / f"{slug}.json"
     if meta_p.exists():
-        meta = json.loads(meta_p.read_text())
+        meta = json.loads(meta_p.read_text(encoding="utf-8"))
         if Path(meta["path"]).exists():
             return meta
 
@@ -141,7 +141,7 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     dest.write_bytes(_get(hit["url"]))
     meta = {"path": str(dest), "credit": hit["credit"], "page": hit["page"],
             "src": hit["src"], "query": query, "media": media, "index": index}
-    meta_p.write_text(json.dumps(meta, indent=2))
+    meta_p.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
 
 

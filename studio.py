@@ -69,6 +69,11 @@ def _use_project_venv() -> None:
 _use_project_venv()
 
 from lib import compose, pipeline as pl  # noqa: E402
+from lib import console  # noqa: E402
+
+# Windows consoles default to a legacy codepage and die on box-drawing
+# characters. Do this before anything is printed.
+console.setup()
 from lib import gemini as gem  # noqa: E402
 from lib import tts, voices as vx  # noqa: E402
 
@@ -191,7 +196,7 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
         proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
         sheet = sheets / proj["sheet"]
         assets_f = pl.paths_for(sheet, "en")["assets"]
-        assets = {int(k): v for k, v in json.loads(assets_f.read_text()).items()}
+        assets = {int(k): v for k, v in json.loads(assets_f.read_text(encoding="utf-8")).items()}
         outputs = []
         set_job(stage="voice", error="", outputs=[], project=pid, langs=langs)
 
@@ -258,10 +263,10 @@ def approval_data(pid: str) -> dict:
     scenes = pl.load_scenes(sheet, "en", None)
     assets = {}
     if p["assets"].exists():
-        assets = {int(k): v for k, v in json.loads(p["assets"].read_text()).items()}
+        assets = {int(k): v for k, v in json.loads(p["assets"].read_text(encoding="utf-8")).items()}
     picks = {}
     if p["picks"].exists():
-        picks = {int(k): v for k, v in json.loads(p["picks"].read_text()).items()}
+        picks = {int(k): v for k, v in json.loads(p["picks"].read_text(encoding="utf-8")).items()}
 
     items = []
     for s in scenes:
