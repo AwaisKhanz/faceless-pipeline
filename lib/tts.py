@@ -28,12 +28,16 @@ def reference_for(lang: str, override: str | None = None) -> Path:
     name = override or V.pref_for(lang)["reference"]
     if not name:
         raise SystemExit(
-            f"No reference clip set for '{lang}'.\n"
-            f"Pick one in the studio's Voices panel, or put a clip in "
-            f"voices_refs/ and choose it there.")
-    ref = CB.REFS / name
-    if not ref.exists():
-        raise SystemExit(f"Reference clip missing: {ref}")
+            f"No reference clip chosen for '{lang}'.\n"
+            f"Pick one in the studio's Voices panel, or drop a clip into "
+            f"voices_refs/{lang}/ and choose it there.")
+    try:
+        ref = V.resolve(name)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"The clip chosen for '{lang}' is missing: {name}\n"
+            f"It may have been moved or renamed. Choose another in the "
+            f"Voices panel.")
     return CB.prepare_reference(ref)
 
 
@@ -65,6 +69,10 @@ def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> lis
     """
     name = voice or V.pref_for(lang)["reference"]
     if not name or not V.supported(lang):
+        return []
+    try:
+        name = V.resolve(name).relative_to(V.REFS).as_posix()
+    except (FileNotFoundError, ValueError):
         return []
     p = V.pref_for(lang)
     return CB.expected_paths(scenes, lang, name, cache,

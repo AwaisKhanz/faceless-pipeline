@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REFS = ROOT / "voices_refs"          # drop reference clips here
 CACHE = ROOT / "cache" / "voice"
+PREPARED = ROOT / "cache" / "refs"   # normalised reference copies
 
 # Calm documentary narration: low exaggeration keeps it from performing at the
 # listener, which is wrong for this audience.
@@ -197,7 +198,14 @@ def prepare_reference(src: Path, out: Path | None = None) -> Path:
     src = Path(src)
     if not src.exists():
         raise ChatterboxError(f"Reference clip not found: {src}")
-    out = out or (REFS / f"{src.stem}_prepared.wav")
+    if out is None:
+        # Keep normalised copies out of voices_refs/ — that folder is yours,
+        # and a tidy folder is what makes "drop a file here" obvious.
+        try:
+            rel = src.resolve().relative_to(REFS.resolve()).as_posix()
+        except ValueError:
+            rel = src.name
+        out = PREPARED / prepared_name(rel)
     out.parent.mkdir(parents=True, exist_ok=True)
     # Already prepared and still newer than the source? Nothing to redo.
     if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
@@ -216,23 +224,10 @@ def prepare_reference(src: Path, out: Path | None = None) -> Path:
 
 
 def list_references() -> list[dict]:
-    REFS.mkdir(parents=True, exist_ok=True)
-    out = []
-    for f in sorted(REFS.glob("*")):
-        if f.suffix.lower() not in (".wav", ".mp3", ".m4a", ".flac"):
-            continue
-        if f.stem.endswith("_prepared"):     # our own normalised copies
-            continue
-        try:
-            d = float(subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "csv=p=0", str(f)],
-                capture_output=True, text=True).stdout.strip())
-        except Exception:
-            d = 0.0
-        out.append({"name": f.name, "path": str(f), "seconds": round(d, 1),
-                    "short": d < 8})
-    return out
+    """Kept for older callers. The catalogue lives in lib/voices.py now."""
+    from . import voices as V
+    return V.references()
+
 
 
 # ---------------------------------------------------------------------- tts
@@ -357,8 +352,14 @@ def synth_one(text: str, ref_wav: Path, lang: str, out: Path,
 
 
 def prepared_name(reference: str) -> str:
-    """What prepare_reference() will call its output, without running ffmpeg."""
-    return f"{Path(reference).stem}_prepared.wav"
+    """What prepare_reference() calls its output, without running ffmpeg.
+
+    Derived from the path relative to voices_refs/, so "en/narrator.mp3" and
+    "de/narrator.mp3" cannot collide. A bare filename keeps its old name, which
+    means existing voice caches stay valid — the name is part of the cache key.
+    """
+    rel = str(reference).replace("\\", "/").strip("/")
+    return rel.rsplit(".", 1)[0].replace("/", "_") + "_prepared.wav"
 
 
 def expected_paths(scenes, lang: str, reference: str, cache: Path = CACHE,

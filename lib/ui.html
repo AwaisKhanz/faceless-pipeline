@@ -610,41 +610,50 @@ async function viewVoices(lang) {
   lang = lang || 'en';
   const d = await api('/api/voices?lang=' + lang);
   const v = $('#view'); v.innerHTML = '';
-  const chosen = (d.chosen || {}).reference || '';
+  const chosenRel = (d.chosen || {}).reference || '';
+  // A saved choice may be a bare filename from an older version; match on the
+  // filename so the right card still shows as in use.
+  const isChosen = r => r.rel === chosenRel
+    || r.name === String(chosenRel).split('/').pop();
 
   v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
     el('h1', {}, 'Voices'),
-    el('p', {}, 'Narration is cloned from a reference clip. Choose one per language — '
-      + 'nothing can be voiced until you do.'))));
+    el('p', {}, 'Narration is cloned from a reference clip. Each language has its '
+      + 'own folder and its own choice.'))));
 
   if (d.status && !d.status.installed) v.append(el('div', {
     class: 'card', style: 'border-color:var(--bad);margin-bottom:14px'
   }, el('b', {}, 'The voice engine is not installed. '), 'Run setup, then reload.'));
 
-  v.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, el('div', { class: 'row' },
-    el('span', { class: 'sub' }, 'Language'),
+  // ── language tabs, with a count each ────────────────────────────────────
+  const tabs = el('div', { class: 'row', style: 'gap:6px' },
+    Object.entries(d.counts || {}).map(([code, n]) =>
+      el('button', {
+        class: 'btn sm' + (code === lang ? ' primary' : ''),
+        onclick: () => go('/voices/' + code)
+      }, `${d.languages[code] || code}`,
+        el('span', { class: 'sub', style: 'margin-left:6px;opacity:.75' }, `${n}`))),
     el('select', {
-      style: 'width:auto;min-width:180px',
-      onchange: e => go('/voices/') + e.target.value
-    }, Object.entries(d.languages || {}).map(([c, n]) =>
-      el('option', { value: c, selected: c === lang }, `${n} (${c})`))),
-    el('div', { style: 'flex:1' }),
-    chosen ? el('span', { class: 'pill ok' }, chosen) : el('span', { class: 'pill none' }, 'no clip chosen'))));
+      style: 'width:auto;min-width:150px;margin-left:6px',
+      onchange: e => e.target.value && go('/voices/' + e.target.value)
+    }, el('option', { value: '' }, 'Other language…'),
+      Object.entries(d.languages || {})
+        .filter(([c]) => !(c in (d.counts || {})))
+        .map(([c, n]) => el('option', { value: c, selected: c === lang }, n))));
 
-  if (!(d.references || []).length) {
-    v.append(el('div', { class: 'empty card' }, el('b', {}, 'No reference clips'),
-      'Put a .mp3 or .wav in voices_refs/. Thirty seconds of clean, continuous speech '
-      + 'clones far better than ten — and it must be audio you hold rights to.'));
-    return;
-  }
+  v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
+    el('div', { class: 'row' }, tabs,
+      el('div', { style: 'flex:1' }),
+      chosenRel
+        ? el('span', { class: 'pill ok' }, 'Using: ' + (d.status.reference_label || chosenRel))
+        : el('span', { class: 'pill none' }, 'no clip chosen'))));
 
   const tune = {
     exag: (d.chosen || {}).exaggeration ?? 0.4,
     cfg: (d.chosen || {}).cfg_weight ?? 0.5
   };
 
-  // Built as named pieces rather than one deep expression — the nesting got
-  // deep enough that a miscounted bracket was easy to write and hard to see.
+  // ── one card per clip ───────────────────────────────────────────────────
   const voiceCard = r => {
     const preview = el('button', {
       class: 'btn sm',
@@ -652,7 +661,7 @@ async function viewVoices(lang) {
         const b = e.target;
         b.textContent = 'Generating…'; b.disabled = true;
         const j = await api('/api/preview', {
-          lang, reference: r.name, text: d.sample,
+          lang, reference: r.rel, text: d.sample,
           exaggeration: tune.exag, cfg_weight: tune.cfg
         });
         b.textContent = 'Preview'; b.disabled = false;
@@ -661,29 +670,66 @@ async function viewVoices(lang) {
     }, 'Preview');
 
     const choose = el('button', {
-      class: 'btn sm' + (r.name === chosen ? '' : ' primary'),
+      class: 'btn sm' + (isChosen(r) ? '' : ' primary'),
       onclick: async () => {
         await api('/api/choose_voice', {
-          lang, reference: r.name,
+          lang, reference: r.rel,
           exaggeration: tune.exag, cfg_weight: tune.cfg
         });
-        toast(`${r.name} will now read ${lang.toUpperCase()}.`);
-        viewVoices();
+        toast(`${r.label} will now read ${d.lang_name}.`);
+        viewVoices(lang);
       }
-    }, r.name === chosen ? 'Save these settings' : 'Use this');
-
-    const title = el('div', {}, el('h3', {}, r.name),
-      el('div', { class: 'sub' },
-        `${r.seconds}s` + (r.short ? ' · under 8s, clones poorly' : '')));
+    }, isChosen(r) ? 'Save these settings' : 'Use this');
 
     return el('div', { class: 'card' },
       el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
-        title,
-        r.name === chosen ? el('span', { class: 'pill ok' }, 'in use') : null),
+        el('div', { style: 'min-width:0' },
+          el('h3', {}, r.label),
+          el('div', { class: 'sub mono' }, r.rel),
+          el('div', { class: 'sub' }, `${r.seconds}s`
+            + (r.short ? ' · under 8s, clones poorly' : '')
+            + (r.lang ? '' : ' · not in a language folder'))),
+        isChosen(r) ? el('span', { class: 'pill ok' }, 'in use') : null),
       el('div', { class: 'row', style: 'margin-top:12px' }, preview, choose));
   };
-  v.append(el('div', { class: 'cards' }, d.references.map(voiceCard)));
 
+  const mine = d.references || [];
+  const loose = d.loose || [];
+
+  if (!mine.length && !loose.length) {
+    v.append(el('div', { class: 'empty card' },
+      el('b', {}, `No clips for ${d.lang_name} yet`),
+      el('div', {}, 'Put one or more audio files in this folder, then reload:'),
+      el('div', { class: 'mono', style: 'margin:10px 0;font-size:13px;color:var(--accent)' },
+        d.folder + '/'),
+      el('div', { class: 'sub' },
+        'Thirty seconds of clean, continuous speech clones far better than ten. '
+        + 'One speaker, no music. It must be audio you hold rights to.')));
+  } else {
+    v.append(el('div', { class: 'sec' },
+      el('h2', {}, `${d.lang_name} clips`),
+      el('span', { class: 'sub mono' }, d.folder + '/')));
+    v.append(el('div', { class: 'cards' }, mine.map(voiceCard)));
+  }
+
+  if (loose.length) {
+    v.append(el('div', { class: 'sec', style: 'margin-top:22px' },
+      el('h2', {}, 'Not sorted yet'),
+      el('span', { class: 'sub' },
+        'loose in voices_refs/ — offered for every language'),
+      el('div', { style: 'flex:1' }),
+      el('button', {
+        class: 'btn sm', onclick: async () => {
+          const r = await api('/api/organise_voices', {});
+          toast(r.count ? `Moved ${r.count} file(s) into language folders.`
+            : 'Nothing could be placed automatically — move those by hand.');
+          viewVoices(lang);
+        }
+      }, 'Sort into language folders')));
+    v.append(el('div', { class: 'cards' }, loose.map(voiceCard)));
+  }
+
+  // ── tuning ──────────────────────────────────────────────────────────────
   const slider = (label, key, note) => {
     const out = el('b', { class: 'mono' }, tune[key].toFixed(2));
     return el('div', {},
@@ -695,12 +741,33 @@ async function viewVoices(lang) {
       }),
       el('div', { class: 'sub' }, note));
   };
-  v.append(el('div', { class: 'card', style: 'margin-top:14px' },
-    el('div', { class: 'grid2' },
-      slider('Expression', 'exag', 'Low is calm and even. 0.40 suits documentary narration.'),
-      slider('Guidance', 'cfg', 'How closely it copies the reference. 0.50 is a good start.')),
-    el('div', { class: 'sub', style: 'margin-top:12px' },
-      'Preview first, then Use this — the settings are saved together with the clip.')));
+  if (mine.length || loose.length) {
+    v.append(el('div', { class: 'card', style: 'margin-top:22px' },
+      el('div', { class: 'grid2' },
+        slider('Expression', 'exag', 'Low is calm and even. 0.40 suits documentary narration.'),
+        slider('Guidance', 'cfg', 'How closely it copies the reference. 0.50 is a good start.')),
+      el('div', { class: 'sub', style: 'margin-top:12px' },
+        'Preview first, then Use this — the settings are saved with the clip.')));
+  }
+
+  // ── how to add more ─────────────────────────────────────────────────────
+  // Built from named pieces. Nesting el() four deep in one expression is how
+  // I miscounted brackets twice; this reads better and cannot go wrong.
+  const step1 = el('li', {}, 'Put the audio file in ',
+    el('code', { style: 'color:var(--accent)' }, d.folder + '/'));
+  const step2 = el('li', {}, 'Name it for how it sounds — ',
+    el('code', {}, 'warm-documentary-male.mp3'),
+    ' shows as "Warm documentary male"');
+  const step3 = el('li', {}, 'Reload this page, Preview it, then Use this');
+  const step4 = el('li', {}, 'Re-voice any language whose clip you changed — '
+    + 'narration already generated stays cached under the previous voice');
+  const steps = el('ol', {
+    class: 'sub',
+    style: 'margin:8px 0 0;padding-left:18px;line-height:1.9'
+  }, step1, step2, step3, step4);
+
+  v.append(el('div', { class: 'card', style: 'margin-top:22px' },
+    el('h3', {}, 'Adding a voice'), steps));
 }
 
 // ═══ settings ═════════════════════════════════════════════════════════════

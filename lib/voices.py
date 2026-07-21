@@ -82,23 +82,194 @@ def supported(lang: str) -> bool:
 
 
 # ----------------------------------------------------------------- catalogue
+#
+# Reference clips live in per-language folders:
+#
+#     voices_refs/
+#       en/  warm-documentary-male.mp3
+#       de/  ruhige-erzaehlerin.mp3
+#       es/  narrador-calido.mp3
+#
+# Files left loose in voices_refs/ still work — they show up as "unsorted" and
+# are offered for every language, so nothing breaks if you just drop a file in.
+# organise() tidies them away when you ask it to.
 
-def references() -> list[dict]:
-    from . import chatterbox_engine as CB
-    return CB.list_references()
+REFS = ROOT / "voices_refs"
+PREPARED = ROOT / "cache" / "refs"        # normalised copies, not user files
+AUDIO = (".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac")
+
+# Words that betray a language when a file is sitting loose in voices_refs/.
+# Only used to suggest a home during organise() — never to guess silently.
+_LANG_HINTS = {
+    "en": ("english", "eng", "_en", "-en"),
+    "de": ("german", "deutsch", "ger", "_de", "-de"),
+    "es": ("spanish", "espanol", "español", "spa", "_es", "-es"),
+    "fr": ("french", "francais", "français", "_fr", "-fr"),
+    "it": ("italian", "italiano", "_it", "-it"),
+    "pt": ("portuguese", "portugues", "português", "_pt", "-pt"),
+    "nl": ("dutch", "nederlands", "_nl", "-nl"),
+    "pl": ("polish", "polski", "_pl", "-pl"),
+    "ru": ("russian", "_ru", "-ru"),
+    "tr": ("turkish", "turkce", "türkçe", "_tr", "-tr"),
+    "ja": ("japanese", "_ja", "-ja"),
+    "zh": ("chinese", "mandarin", "_zh", "-zh"),
+}
+
+
+def label_for(name: str) -> str:
+    """A readable name for a file. 'warm-documentary-male.mp3' -> 'Warm documentary male'.
+
+    The filename stays the identity — this is only what you read in the panel.
+    Renaming a file to something descriptive is the whole point of the folder
+    layout, and this makes that effort visible.
+    """
+    stem = Path(name).stem
+    words = stem.replace("_", " ").replace("-", " ").split()
+    if not words:
+        return stem
+    out = " ".join(words)
+    return out[0].upper() + out[1:]
+
+
+def guess_lang(name: str) -> str:
+    """Which language a loose file probably belongs to, or '' if unclear."""
+    low = Path(name).stem.lower()
+    for code, hints in _LANG_HINTS.items():
+        if any(h in low for h in hints):
+            return code
+    return ""
+
+
+def ensure_folders(langs=("en", "de", "es")) -> None:
+    """Make the language folders exist so there is somewhere obvious to drop files."""
+    for code in langs:
+        (REFS / code).mkdir(parents=True, exist_ok=True)
+
+
+def _duration(f: Path) -> float:
+    import subprocess
+    try:
+        return float(subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(f)],
+            capture_output=True, text=True, timeout=20).stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def _describe(f: Path, lang: str) -> dict:
+    rel = f.relative_to(REFS).as_posix()
+    d = _duration(f)
+    return {
+        "rel": rel,                    # the identity: "en/warm-male.mp3"
+        "name": f.name,
+        "label": label_for(f.name),
+        "lang": lang,                  # "" means loose in voices_refs/
+        "lang_name": LANGS.get(lang, "") if lang else "",
+        "seconds": round(d, 1),
+        "short": 0 < d < 8,            # under 8s clones poorly
+        "suggest": guess_lang(f.name) if not lang else "",
+    }
+
+
+def references(lang: str | None = None) -> list[dict]:
+    """Reference clips, optionally narrowed to one language.
+
+    With a language: that folder's clips first, then any loose files (which
+    could belong to anything, so they stay on offer).
+    Without: everything, so Settings can show the whole library.
+    """
+    REFS.mkdir(parents=True, exist_ok=True)
+    out: list[dict] = []
+
+    def scan(folder: Path, code: str) -> list[dict]:
+        if not folder.is_dir():
+            return []
+        return sorted(
+            (_describe(f, code) for f in folder.iterdir()
+             if f.is_file() and f.suffix.lower() in AUDIO
+             and not f.name.startswith(".")
+             # Normalised copies are generated, not chosen. Older versions
+             # wrote them alongside the originals; they live in cache/ now,
+             # but any left over must not appear as pickable voices.
+             and not f.stem.endswith("_prepared")),
+            key=lambda d: d["label"].lower())
+
+    if lang:
+        out += scan(REFS / lang, lang)
+    else:
+        for d in sorted(REFS.iterdir()):
+            if d.is_dir() and d.name in LANGS:
+                out += scan(d, d.name)
+
+    out += scan(REFS, "")              # loose files, always included
+    return out
+
+
+def resolve(ref: str) -> Path:
+    """The file a saved preference points at.
+
+    Accepts "en/warm-male.mp3" and a bare "warm-male.mp3". The bare form is
+    what older versions saved, and is still what you get if you drop a file
+    straight into voices_refs/ — so both have to keep working.
+    """
+    if not ref:
+        raise FileNotFoundError("No reference clip chosen.")
+    direct = REFS / ref
+    if direct.is_file():
+        return direct
+    name = Path(ref).name
+    for cand in [REFS / name] + [REFS / c / name for c in LANGS]:
+        if cand.is_file():
+            return cand
+    raise FileNotFoundError(f"Reference clip not found: {ref}")
+
+
+def organise() -> list[str]:
+    """Move loose clips into language folders where the name makes it obvious.
+
+    Only moves files it can place confidently, and never overwrites. Anything
+    ambiguous is left exactly where it is rather than guessed at — a clip in
+    the wrong folder is worse than one that is merely untidy.
+    """
+    ensure_folders()
+    moved = []
+    for f in sorted(REFS.iterdir()):
+        if not (f.is_file() and f.suffix.lower() in AUDIO):
+            continue
+        if f.stem.endswith("_prepared"):
+            continue
+        code = guess_lang(f.name)
+        if not code:
+            continue
+        dest = REFS / code / f.name
+        if dest.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        f.rename(dest)
+        moved.append(f"{f.name} -> {code}/")
+    return moved
 
 
 def status(lang: str) -> dict:
     """Everything the panel needs to know about a language's readiness."""
     from . import chatterbox_engine as CB
     p = pref_for(lang)
-    ref = CB.REFS / p["reference"] if p["reference"] else None
+    ok = False
+    if p["reference"]:
+        try:
+            resolve(p["reference"])
+            ok = True
+        except FileNotFoundError:
+            ok = False
     return {
         "installed": CB.installed(),
         "supported": supported(lang),
         "reference": p["reference"],
-        "reference_ok": bool(ref and ref.exists()),
+        "reference_label": label_for(p["reference"]) if p["reference"] else "",
+        "reference_ok": ok,
         "device": CB.best_device(),
+        "count": len(references(lang)),
     }
 
 
@@ -122,9 +293,10 @@ def preview(text: str, lang: str, reference: str,
     from . import chatterbox_engine as CB
     if not reference:
         raise RuntimeError("Pick a reference clip first.")
-    ref = CB.REFS / reference
-    if not ref.exists():
-        raise RuntimeError(f"Reference clip not found: {reference}")
+    try:
+        ref = resolve(reference)
+    except FileNotFoundError as e:
+        raise RuntimeError(str(e))
 
     PREVIEWS.mkdir(parents=True, exist_ok=True)
     sig = f"{reference}|{lang}|{exaggeration}|{cfg_weight}|{text}"

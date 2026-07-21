@@ -720,11 +720,19 @@ class Handler(BaseHTTPRequestHandler):
                     scenes = pl.load_scenes(sheets / proj["sheet"], lang, tr)
                 except Exception:
                     scenes = None
+            vx.ensure_folders()
+            refs = vx.references(lang)
             return self._json({
                 "lang": lang,
+                "lang_name": vx.LANGS.get(lang, lang),
                 "languages": vx.LANGS,
                 "status": vx.status(lang),
-                "references": vx.references(),
+                # Only this language's clips, plus any left loose — a German
+                # list full of English voices is noise, not choice.
+                "references": [r for r in refs if r["lang"] == lang],
+                "loose": [r for r in refs if not r["lang"]],
+                "counts": {c: len(vx.references(c)) for c in ("en", "de", "es")},
+                "folder": f"voices_refs/{lang}",
                 "chosen": vx.pref_for(lang),
                 "sample": vx.sample_line(lang, scenes),
             })
@@ -857,6 +865,10 @@ class Handler(BaseHTTPRequestHandler):
                 f"({res['freed_mb']} MB freed)")
             return self._json(res)
 
+        if path == "/api/organise_voices":
+            moved = vx.organise()
+            return self._json({"moved": moved, "count": len(moved)})
+
         if path == "/api/cancel":
             if not busy():
                 return self._json({"ok": True, "note": "nothing was running"})
@@ -882,7 +894,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(open_browser: bool = True) -> None:
-    for d in ("sheets", "cache/stock", "cache/voice", "work", "out", "music"):
+    vx.ensure_folders()
+    for d in ("sheets", "cache/stock", "cache/voice", "cache/refs",
+              "work", "out", "music"):
         (ROOT / d).mkdir(parents=True, exist_ok=True)
     if not UI.exists():
         sys.exit(f"Missing {UI} — the app files are incomplete.")

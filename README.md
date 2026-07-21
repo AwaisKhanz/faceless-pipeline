@@ -269,10 +269,71 @@ Narration is cloned from a reference clip by **Chatterbox** — MIT licensed, ru
 locally on your own machine, free and unlimited. There is no per-character cost and nothing is
 sent to a third party.
 
-## Reference clips
+## Where clips live
 
-Put audio in `voices_refs/`. **It must be something you hold rights to** — whatever you
-put there becomes your channel's voice.
+One folder per language, named by language code:
+
+```
+voices_refs/
+  en/    warm-documentary-male.mp3
+  de/    ruhige-erzaehlerin.mp3
+  es/    narrador-calido.mp3
+```
+
+Each language has its own choice, so English can be read by one voice and German by
+another. A clip in `en/` is only offered when you're choosing an English voice — a German
+list full of English voices is noise, not choice.
+
+Files left loose in `voices_refs/` still work. They appear under **Not sorted yet** and
+are offered for every language, and the panel has a button that files them away when the
+name makes the language obvious. Nothing breaks if you just drop a file in.
+
+## Adding a voice
+
+1. **Put the file in the language folder** — `voices_refs/en/your-clip.mp3`. Create the
+   folder if it isn't there; use the two-letter code from the list at the end of this
+   section.
+
+2. **Name it for how it sounds.** The filename becomes the label, tidied up:
+
+   | file | shows as |
+   |---|---|
+   | `warm-documentary-male.mp3` | Warm documentary male |
+   | `calm-older-female.mp3` | Calm older female |
+   | `german-narrator-1.mp3` | German narrator 1 |
+
+   Dashes and underscores both work. The filename stays the identity; the label is only
+   what you read.
+
+3. **Reload the Voices panel.** The clip appears under that language, with its length.
+
+4. **Preview it.** It reads a real line from your own script, not "hello world" — how a
+   voice handles your actual writing is the only thing worth judging.
+
+5. **Use this** saves it, together with the current Expression and Guidance settings.
+
+6. **If that language already had narration, re-voice it.** Audio already generated stays
+   cached under the *previous* voice and would otherwise be silently reused. Project page
+   → that language → **Redo**.
+
+Formats: `.wav .mp3 .m4a .flac .ogg .aac`. The pipeline writes its own normalised copy
+into `cache/refs/` — mono, 24 kHz, silence trimmed, levels evened — so you never need to
+edit anything by hand. That cache is disposable and rebuilds itself.
+
+## What makes a good clip
+
+| | |
+|---|---|
+| **30+ seconds** | clones far better than 10; under 8s is flagged in the panel |
+| **one speaker** | no interviews, no overlapping voices |
+| **clean** | no music, no background noise, no heavy reverb |
+| **the right pace** | it copies delivery, so use the speed you want your videos read |
+| **plain speech** | ordinary sentences, not shouting or whispering |
+
+## Rights
+
+**Whatever you put there becomes your channel's voice**, on every video, publicly. It has
+to be audio you may use that way.
 
 - **Your own voice** — 30 seconds on a phone. No licensing question at all, and nobody
   else on YouTube has it.
@@ -281,7 +342,7 @@ put there becomes your channel's voice.
 - **LibriVox** (https://librivox.org/) — public-domain audiobook readings.
 
 Audio from a paid AI voice service, or lifted from someone else's video, is not usable —
-the first breaks those services' terms, the second is a person's likeness.
+the first breaks those services' terms, the second is a person's voice and likeness.
 
 **30+ seconds of clean, continuous speech clones far better than 10.** One speaker, no
 music, no background noise, at the pace you want your videos read. Clips under 8 seconds
@@ -289,9 +350,10 @@ are flagged in the panel.
 
 ## Choosing one
 
-Open the **Voices** panel. Pick a language, press ▶ on a clip to hear it read **a real
-line from your own script**, then **Use this** to save it for that language. Choices live
-in `voices.json` and apply to every render from then on.
+Open the **Voices** panel and pick a language from the tabs — each shows how many clips
+it has. Press **Preview** on a clip to hear it read **a real line from your own script**,
+then **Use this** to save it for that language. Choices live in `voices.json` and apply
+to every render from then on.
 
 Two sliders:
 

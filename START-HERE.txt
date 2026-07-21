@@ -99,15 +99,34 @@ thing that catches this.
 THE VOICE  (do this once)
 ===============================================================
 
-Narration is cloned from a reference clip. Three are included. To add
-your own, drop it in voices_refs/ - it must be audio you hold rights to:
+Narration is cloned from a reference clip. Each language has its own
+folder and its own choice:
+
+    voices_refs/en/     English clips
+    voices_refs/de/     German clips
+    voices_refs/es/     Spanish clips
+
+TO ADD A VOICE
+
+  1. Put the audio file in the folder for its language.
+  2. Name it for how it sounds - warm-documentary-male.mp3 shows in the
+     panel as "Warm documentary male".
+  3. Reload the Voices panel, press Preview, then "Use this".
+  4. If that language already had narration, re-voice it: the old audio
+     is cached under the previous voice and would be reused otherwise.
+     Project page -> that language -> Redo.
+
+A clip needs to be audio you hold rights to - it becomes your channel's
+voice on every video:
 
     your own voice (30 seconds on a phone is plenty)
     Mozilla Common Voice   https://commonvoice.mozilla.org/   (CC0)
     LibriVox               https://librivox.org/              (public domain)
 
-Open the control panel, go to the Voices panel, preview each one, and
-choose one per language. Nothing will voice until you do.
+30+ seconds of clean, single-speaker speech clones far better than 10.
+Nothing will voice until a clip is chosen for that language.
+
+Full details: voices_refs/README.txt
 
 Check your machine's speed before committing to a full video:
 
