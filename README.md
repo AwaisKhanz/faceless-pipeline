@@ -350,16 +350,18 @@ are flagged in the panel.
 
 ## Choosing one
 
-Two places, one setting:
+**One place to choose: the Voices panel.** Pick a language from the tabs, press
+**Preview** to hear a clip read *a real line from your own script*, adjust Expression and
+Guidance if you want, then **Use this**. Choosing a voice needs listening, so it belongs
+where you can listen.
 
-- **On the project page** — each language row has a **Voice** dropdown. Change it and it
-  saves immediately. This is the quick way once you know your clips.
-- **In the Voices panel** — tabs per language, with **Preview** to hear a clip read *a
-  real line from your own script* before committing, plus the Expression and Guidance
-  sliders.
+The project page **reports** the choice — each language row shows which voice reads it,
+with a **change** link straight to that language's tab. It deliberately doesn't offer a
+second way to set it: a dropdown there would invite choosing blind, and two controls
+writing the same setting is one more thing to keep in step.
 
-Both write the same `voices.json`, so they can't disagree. Voice and Render are disabled
-for a language until it has one, rather than failing after you click.
+Voice and Render are disabled for a language until it has one, rather than failing after
+you click.
 
 > Changing a language's voice changes what counts as "voiced". Narration is cached per
 > voice, so switching from one clip to another resets that language's progress to 0 —

@@ -381,9 +381,6 @@ async function viewProject(id) {
   const st = p.status || { languages: {}, scenes: 0, assets: 0 };
   const o = overall(st);
   const codes = Object.keys(st.languages || {});
-  // Which clips can read each language, so the voice can be seen and changed
-  // here rather than on another screen.
-  const vo = await api('/api/voice_options?langs=' + codes.join(','));
 
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' },
@@ -425,42 +422,26 @@ async function viewProject(id) {
     if (r.started) go('/activity');
   };
 
-  // One picker per language. Choosing here saves that language's voice — the
-  // same setting the Voices panel writes — so there is one concept, not a
-  // per-run override that quietly disagrees with the saved default.
-  const voicePicker = (code, l) => {
-    const opts = (vo.options || {})[code] || [];
-    if (!opts.length) {
+  // Report the voice; don't offer a second way to set it. Choosing happens in
+  // the Voices panel, where you can hear a clip before committing to it — the
+  // decision needs listening, and a dropdown here invited choosing blind.
+  const voiceCell = (code, l) => {
+    if (!l.voice_ref) {
       return el('div', {},
-        el('span', { class: 'pill bad' }, 'no clips'),
+        el('span', { class: 'pill bad' }, 'not set'),
         el('div', { class: 'sub', style: 'margin-top:4px' },
-          el('a', {
+          el('span', {
             style: 'color:var(--accent);cursor:pointer',
             onclick: () => go('/voices/' + code)
-          }, `add one to voices_refs/${code}/`)));
+          }, 'choose a voice')));
     }
-    const sel = el('select', {
-      style: 'width:auto;min-width:150px;max-width:190px',
-      onchange: async e => {
-        const rel = e.target.value;
-        if (!rel) return;
-        await api('/api/choose_voice', { lang: code, reference: rel });
-        toast(`${l.name || code} will be read by `
-          + `${opts.find(o => o.rel === rel).label}.`);
-        route();     // voiced counts are keyed to the voice; they change too
-      }
-    },
-      el('option', { value: '' }, l.voice_ref ? '' : 'Choose a voice…'),
-      opts.map(o => el('option', {
-        value: o.rel,
-        selected: o.rel === l.voice_ref || o.rel.endsWith('/' + String(l.voice_ref))
-      }, o.label + (o.short ? ' (short)' : ''))));
-    return el('div', {}, sel,
-      el('div', { class: 'sub', style: 'margin-top:4px' },
+    return el('div', {},
+      el('b', { style: 'font-size:12.5px' }, l.voice_label),
+      el('div', { class: 'sub', style: 'margin-top:2px' },
         el('span', {
           style: 'color:var(--accent);cursor:pointer',
           onclick: () => go('/voices/' + code)
-        }, 'preview & tune')));
+        }, 'change')));
   };
 
   v.append(el('div', { class: 'sec' }, el('h2', {}, 'Languages'),
@@ -471,7 +452,7 @@ async function viewProject(id) {
         ['Language', 'Voice', 'Progress', 'Narration', 'Video', ''].map(h => el('th', {}, h)))),
       el('tbody', {}, Object.entries(st.languages || {}).map(([code, l]) => el('tr', {},
         el('td', {}, el('b', {}, l.name || code), el('div', { class: 'sub mono' }, code)),
-        el('td', {}, voicePicker(code, l)),
+        el('td', {}, voiceCell(code, l)),
         el('td', { style: 'width:180px' }, stepBar(st, l)),
         el('td', {}, l.voice ? el('span', { class: 'pill ok' }, 'complete')
           : l.voice_n ? el('span', { class: 'pill part' }, `${l.voice_n} / ${st.scenes}`)
