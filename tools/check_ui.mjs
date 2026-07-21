@@ -194,6 +194,31 @@ for (const bad of ['/nope', '/project', '/project/a/b']) {
   fail += !!hit;
 }
 
+// Every address the app navigates to must be an address it can render.
+// Two real bugs shipped without this: a regex left the project id outside the
+// call — go('/project/') + p.id — so every card went to a bare /project/, and
+// four buttons still pointed at the old /run instead of /activity. The routing
+// table was correct in both cases; the call sites were not.
+console.log('\n  navigation targets');
+const uiSrc = readFileSync(path.join(ROOT, 'lib', 'ui.html'), 'utf8');
+
+const stranded = [...uiSrc.matchAll(/go\('[^']*'\)\s*\+/g)];
+console.log(`  ${stranded.length ? '!!' : 'ok'}  no argument stranded outside go(...)`
+  + (stranded.length ? `  -> ${stranded.map(m => m[0]).join(', ')}` : ''));
+fail += stranded.length ? 1 : 0;
+
+// Literal prefixes only — go('/project/' + id) is checked as '/project/x'.
+const targets = new Set(
+  [...uiSrc.matchAll(/go\('([^']+)'/g)].map(m => m[1]));
+for (const t of [...targets].sort()) {
+  // A trailing slash means a parameter follows — go('/project/' + id).
+  // '/' itself is the dashboard, not a prefix, so leave it alone.
+  const probe = (t.endsWith('/') && t.length > 1) ? t + 'x' : t;
+  const hit = V.ROUTES.some(([re]) => re.test(probe));
+  console.log(`  ${hit ? 'ok' : '!!'}  ${probe.padEnd(16)} ${hit ? '' : 'NO ROUTE RENDERS THIS'}`);
+  fail += !hit;
+}
+
 console.log('');
 await run('dashboard', V.viewDashboard);
 if (firstId) await run('project', V.viewProject, firstId);

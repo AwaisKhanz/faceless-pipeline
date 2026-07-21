@@ -351,7 +351,7 @@ async function viewDashboard() {
   v.append(el('div', { class: 'cards' }, S.projects.map(p => {
     const st = p.status || { languages: {}, scenes: 0, assets: 0 };
     const o = overall(st);
-    return el('div', { class: 'card click', onclick: () => go('/project/') + p.id },
+    return el('div', { class: 'card click', onclick: () => go('/project/' + p.id) },
       el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
         el('div', { style: 'min-width:0' }, el('h3', {}, p.id),
           el('div', { class: 'sub', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
@@ -402,10 +402,10 @@ async function viewProject(id) {
         onclick: async e => {
           e.target.disabled = true;
           const r = await api('/api/source', { id: p.id });
-          if (r.started) go('/run'); else e.target.disabled = false;
+          if (r.started) go('/activity'); else e.target.disabled = false;
         }
       }, st.assets ? 'Re-source all' : 'Find visuals'),
-      st.assets ? el('button', { class: 'btn', onclick: () => go('/review/') + p.id },
+      st.assets ? el('button', { class: 'btn', onclick: () => go('/review/' + p.id) },
         'Review & swap pictures') : null,
       el('div', { style: 'flex:1' }),
       el('span', { class: 'pill ' + (sourced ? 'ok' : st.assets ? 'part' : 'none') },
@@ -418,7 +418,7 @@ async function viewProject(id) {
       id: p.id, langs, steps, force,
       captions: opts.captions, zoom: opts.zoom, music: opts.music || null
     });
-    if (r.started) go('/run');
+    if (r.started) go('/activity');
   };
 
   v.append(el('div', { class: 'sec' }, el('h2', {}, 'Languages')));
@@ -599,7 +599,7 @@ function viewNew() {
             id: id.value.trim(), script: script.value,
             langs: Object.keys(langs).filter(k => langs[k]), overwrite: false
           });
-          if (r.started) go('/run'); else e.target.disabled = false;
+          if (r.started) go('/activity'); else e.target.disabled = false;
         }
       }, 'Generate the sheets'),
       el('span', { class: 'sub' }, 'Roughly 15–25 Gemini requests; the free allowance is about 250/day.'))));
@@ -841,7 +841,7 @@ async function viewReview(id) {
   const d = await api('/api/approval?id=' + encodeURIComponent(id));
   const v = $('#view'); v.innerHTML = '';
   v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
-    el('div', { class: 'back', onclick: () => go('/project/') + id }, '← ' + id),
+    el('div', { class: 'back', onclick: () => go('/project/' + id) }, '← ' + id),
     el('h1', { style: 'margin-top:4px' }, 'Review visuals'),
     el('p', {}, 'Click any picture that does not suit its line. Anything you leave alone '
       + 'is approved — there is no approve button. Gold border marks a scene that carries the story.'))));
@@ -863,7 +863,7 @@ async function viewReview(id) {
         if (!rejected.size) return toast('Nothing marked yet.');
         e.target.disabled = true;
         const r = await api('/api/source', { id, redo: [...rejected] });
-        if (r.started) go('/run'); else e.target.disabled = false;
+        if (r.started) go('/activity'); else e.target.disabled = false;
       }
     }, 'Get new pictures for these'))));
 
