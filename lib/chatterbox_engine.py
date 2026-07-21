@@ -411,20 +411,30 @@ def benchmark(lines: list[str], ref_wav: Path, lang: str = "en",
     # Report seconds-per-character, not seconds-per-line. Line lengths vary by
     # 2x in a real script, so a per-line mean tells you very little.
     rates = [t / max(1, c) for t, c in zip(times, chars)]
-    ordered = sorted(rates)
+
+    # The FIRST line is always slower — the GPU compiles kernels and warms its
+    # caches on the first real call. That cost is paid once per session, not per
+    # line, so including it would understate a fast machine badly. Measure the
+    # steady state and report the warm-up separately.
+    warmup_s = times[0] if len(times) > 1 else 0.0
+    steady = rates[1:] if len(rates) > 2 else rates
+
+    ordered = sorted(steady)
     mid = len(ordered) // 2
     median_rate = (ordered[mid] if len(ordered) % 2
                    else (ordered[mid - 1] + ordered[mid]) / 2)
 
-    # If later lines are much slower than earlier ones, the machine is under
-    # memory pressure and every number here is an underestimate of best case
-    # and an overestimate of steady state. Say so rather than extrapolating
-    # from a collapsing trend and calling it a forecast.
-    drift = max(rates) / min(rates) if min(rates) > 0 else 1.0
+    # Degradation means later lines are slower than earlier ones — the signature
+    # of the machine running out of memory as it goes. A plain max/min spread
+    # cannot tell that apart from a single slow warm-up line, which is the
+    # opposite situation and perfectly healthy. So compare halves, in order.
+    half = max(1, len(steady) // 2)
+    first_half = sum(steady[:half]) / half
+    second_half = sum(steady[half:]) / max(1, len(steady) - half)
+    drift = second_half / first_half if first_half > 0 else 1.0
 
-    per_char = median_rate
-    avg_chars = sum(chars) / len(chars)
+    avg_chars = sum(chars[1:]) / len(chars[1:]) if len(chars) > 1 else chars[0]
     return {"device": device_in_use(), "load_s": load_s,
-            "per_line_s": median_rate * avg_chars, "per_char_s": per_char,
+            "per_line_s": median_rate * avg_chars, "per_char_s": median_rate,
             "times": times, "chars": chars, "rates": rates,
-            "drift": drift, "degrading": drift >= 3.0}
+            "warmup_s": warmup_s, "drift": drift, "degrading": drift >= 2.0}

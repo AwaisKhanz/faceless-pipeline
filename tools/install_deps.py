@@ -119,35 +119,44 @@ def main() -> int:
     say("\n  [1/4] pinning setuptools (perth still needs pkg_resources)")
     pip("setuptools<81", quiet=True)
 
-    want_cuda = not a.cpu_only and platform.system() in ("Windows", "Linux")
-    if want_cuda:
-        say("\n  [2/4] looking for an NVIDIA GPU")
-        if have_nvidia_gpu():
-            say(f"     installing the CUDA 12.8 build of PyTorch")
-            say(f"     (several GB — leave it running)")
-            if pip("torch", "torchaudio", "--index-url", CUDA_INDEX) != 0:
-                say("\n  !! The CUDA build failed to install.")
-                say("     Check your internet connection and run setup again.")
-                return 1
-        else:
-            say("     no NVIDIA driver found — installing the CPU build.")
-            say("     If you do have an NVIDIA card, install its driver first,")
-            say("     then delete .venv and run setup again.")
-            want_cuda = False
-            pip("torch", "torchaudio")
-    else:
-        say("\n  [2/4] installing PyTorch")
-        pip("torch", "torchaudio")
-
-    say("\n  [3/4] installing Chatterbox (the voice engine)")
-    # Chatterbox depends on torch. It is already satisfied above, so pip should
-    # leave our CUDA build alone — but it is allowed to replace it if its pin
-    # disagrees, which is exactly the silent failure we verify for below.
+    # ORDER MATTERS, and it is the opposite of what you would expect.
+    #
+    # chatterbox-tts 0.1.7 hard-pins torch==2.6.0. If we install the CUDA build
+    # first, pip dutifully rips it out and replaces it with the CPU build from
+    # PyPI, and everything then runs about twenty times slower with no error
+    # message anywhere. So: let Chatterbox install whatever it wants FIRST, then
+    # put the CUDA build on top.
+    #
+    # Overriding the pin is not optional on a recent card. torch 2.6 predates
+    # Blackwell (RTX 50-series) support, so no build of it can drive one at all.
+    # Chatterbox runs fine on newer torch in practice — the pin is over-strict.
+    say("\n  [2/4] installing Chatterbox (the voice engine)")
+    say("     this pulls in PyTorch — several GB, leave it running")
     if pip("--upgrade", "chatterbox-tts") != 0:
         say("\n  !! Chatterbox failed to install. Nothing can be voiced until it does.")
         return 1
 
-    pip("setuptools<81", quiet=True)      # put it back if Chatterbox moved it
+    want_cuda = not a.cpu_only and platform.system() in ("Windows", "Linux")
+    if want_cuda:
+        say("\n  [3/4] looking for an NVIDIA GPU")
+        if have_nvidia_gpu():
+            say("     replacing Chatterbox's CPU-only PyTorch with the CUDA 12.8 build")
+            say("     (pip will warn about a version conflict — that is expected")
+            say("      and is explained in README section 6)")
+            if pip("--force-reinstall", "torch", "torchaudio",
+                   "--index-url", CUDA_INDEX) != 0:
+                say("\n  !! The CUDA build failed to install.")
+                say("     Check your internet connection and run setup again.")
+                return 1
+        else:
+            say("     no NVIDIA driver found — staying on the CPU build.")
+            say("     If you do have an NVIDIA card, install its driver from")
+            say("     https://www.nvidia.com/drivers , then run setup again.")
+            want_cuda = False
+    else:
+        say("\n  [3/4] skipping CUDA (no NVIDIA GPU expected on this machine)")
+
+    pip("setuptools<81", quiet=True)      # put it back if anything moved it
 
     say("\n  [4/4] checking the install actually works")
     t = torch_report()
@@ -165,7 +174,8 @@ def main() -> int:
         say()
         say("  !! PyTorch cannot use your GPU.")
         if not t.get("cuda_build"):
-            say("     Chatterbox replaced the CUDA build with a CPU-only one.")
+            say("     Something replaced the CUDA build with a CPU-only one —")
+            say("     usually chatterbox-tts, which pins torch==2.6.0.")
             say("     Fix it by re-running just the torch install:")
             say(f"       pip install --force-reinstall torch torchaudio "
                 f"--index-url {CUDA_INDEX}")

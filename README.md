@@ -439,15 +439,32 @@ Python isn't on your PATH. Re-run the Python installer, choose **Modify**, and m
 
 ### doctor says `!! chatterbox installed · CPU` on a machine with an NVIDIA card
 
-PyTorch was installed without CUDA — usually because Chatterbox's dependency resolution
-replaced the CUDA build with the CPU one. Fix it:
+**This is the most likely thing to go wrong, and it is silent.** Nothing errors — voicing
+just runs roughly twenty times slower than it should.
+
+The cause is that `chatterbox-tts` hard-pins `torch==2.6.0`. When pip honours that pin it
+replaces the CUDA build with the CPU-only build from PyPI. `setup.bat` installs Chatterbox
+*first* and the CUDA build *second* to work around this, but any later `pip install` that
+re-resolves dependencies can undo it again.
+
+Overriding the pin is not optional on an RTX 50-series card: torch 2.6 predates Blackwell
+support, so no build of it can drive one at all. Chatterbox runs fine on newer torch — the
+pin is simply over-strict.
+
+Fix it:
 
 ```powershell
 cd $HOME\Documents\faceless-pipeline
 .venv\Scripts\python.exe -m pip install --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
+pip will print a dependency-conflict warning about `chatterbox-tts requires torch==2.6.0`.
+**Ignore it** — that is the pin being overridden on purpose.
+
 Then `python make_video.py doctor` again — it should name your card and its VRAM.
+
+> **Habit worth having:** run `doctor` after any `pip install` in this project. It is the
+> only thing that catches this, because nothing else complains.
 
 ### `no kernel image is available for execution on the device`
 

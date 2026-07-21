@@ -333,19 +333,25 @@ def main() -> None:
         banner("What that means")
         print(f"  device                {r['device']}")
         print(f"  model load (once)     {r['load_s']:.0f}s")
+        if r.get("warmup_s"):
+            print(f"  first line (once)     {r['warmup_s']:.0f}s  "
+                  f"— GPU warm-up, not counted below")
         print(f"  per line (median)     {r['per_line_s']:.1f}s")
         print(f"  115-scene video       {one:.0f} min  (one language)")
         print(f"  all three languages   {three:.0f} min")
         print()
         if r.get("degrading"):
-            print(f"  ⚠ Speed fell {r['drift']:.0f}x from the fastest line to the "
-                  f"slowest.")
-            print("    Line length does not explain it, so this is memory "
-                  "pressure, not")
-            print("    raw speed — the estimate above is unreliable. Close other "
-                  "apps and")
-            print("    re-run. If it still degrades, voice in smaller batches:")
-            print("      python3 make_video.py voice --project ID --lang en")
+            py = "python" if os.name == "nt" else "python3"
+            print(f"  ⚠ The later lines ran {r['drift']:.1f}x slower than the "
+                  f"earlier ones.")
+            print("    Line length does not explain it, so the machine is running "
+                  "out of")
+            print("    memory as it goes — the estimate above is optimistic. Close "
+                  "other")
+            print("    apps and re-run. If it still degrades, voice one language "
+                  "at a time:")
+            print(f"      {py} make_video.py voice --sheet sheets\\YOUR_SHEET.md "
+                  f"--lang en")
             print()
         if three <= 25:
             print("  → Comfortably practical. Build all three languages in one go.")
