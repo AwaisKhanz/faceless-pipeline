@@ -480,6 +480,27 @@ class Handler(BaseHTTPRequestHandler):
                 "has_gemini": bool(cfg.get("gemini_key")),
             })
 
+        if path == "/api/deletable":
+            pid = (q.get("id") or [""])[0]
+            try:
+                sheets = ROOT / "sheets"
+                proj = next(x for x in pl.find_projects(sheets) if x["id"] == pid)
+            except StopIteration:
+                return self._json({"error": f"no project called {pid!r}"}, 404)
+            g = pl.deletable(sheets / proj["sheet"], proj["languages"])
+            summary = {}
+            for k, files in g.items():
+                size = 0
+                for f in files:
+                    try:
+                        size += (sum(x.stat().st_size for x in f.rglob("*") if x.is_file())
+                                 if f.is_dir() else f.stat().st_size)
+                    except OSError:
+                        pass
+                summary[k] = {"count": len(files), "mb": round(size / 1e6, 1),
+                              "names": [f.name for f in files[:6]]}
+            return self._json({"id": pid, "groups": summary})
+
         if path == "/api/doctor":
             # The same checks the `faceless check` command runs, for Settings.
             from lib import chatterbox_engine as CB
@@ -635,6 +656,38 @@ class Handler(BaseHTTPRequestHandler):
             if not ok:
                 return self._json({"error": "something is already running"}, 409)
             return self._json({"started": ok, "steps": steps})
+
+        if path == "/api/delete":
+            pid = b.get("id") or ""
+            what = [x for x in (b.get("what") or [])
+                    if x in ("outputs", "voice", "visuals", "work", "sheets")]
+            if not what:
+                return self._json({"error": "nothing selected to delete"}, 400)
+
+            # The id is never used to build a path directly — it must match a
+            # project we already found on disk. That, plus the per-file check
+            # inside delete_project, is what keeps a crafted id harmless.
+            sheets = ROOT / "sheets"
+            try:
+                proj = next(x for x in pl.find_projects(sheets) if x["id"] == pid)
+            except StopIteration:
+                return self._json({"error": f"no project called {pid!r}"}, 404)
+
+            # Removing the sheets removes the project itself, so make the caller
+            # type its name. A misplaced click should not be able to do this.
+            if "sheets" in what and b.get("confirm") != pid:
+                return self._json(
+                    {"error": "type the project name to confirm deleting it"}, 400)
+
+            with LOCK:
+                if JOB["stage"] in ("generate", "stock", "voice", "render"):
+                    return self._json(
+                        {"error": "something is running — wait for it to finish"}, 409)
+
+            res = pl.delete_project(sheets / proj["sheet"], proj["languages"], what)
+            log(f"Deleted {res['count']} file(s) from {pid} "
+                f"({res['freed_mb']} MB freed)")
+            return self._json(res)
 
         if path == "/api/reveal":
             target = ROOT / "out"

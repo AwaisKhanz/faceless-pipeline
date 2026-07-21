@@ -152,6 +152,100 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
     return out
 
 
+def deletable(sheet: Path, langs: list[dict]) -> dict:
+    """Everything on disk belonging to one project, grouped by what it is.
+
+    Nothing here touches cache/stock. Downloaded footage is content-addressed
+    and shared between projects — deleting a clip because you finished with one
+    video would silently break another that reuses it.
+    """
+    # Absolute from here on. A relative sheet path would make the safety check
+    # below resolve against the current working directory instead of the
+    # project, which is exactly the kind of subtlety that turns a delete button
+    # into a bad afternoon.
+    sheet = Path(sheet).resolve()
+    pid = project_id(sheet)
+    out: dict[str, list[Path]] = {"outputs": [], "voice": [], "visuals": [],
+                                  "work": [], "sheets": []}
+
+    for f in (ROOT / "out").glob(f"{pid}_*"):
+        out["outputs"].append(f)
+
+    shared = paths_for(sheet, "en")
+    for key in ("picks", "assets"):
+        if shared[key].exists():
+            out["visuals"].append(shared[key])
+    ap = shared["approval"]
+    if ap.exists():
+        out["visuals"].append(ap)
+
+    for lg in langs:
+        code = lg["code"]
+        base = paths_for(sheet, code)["base"]
+        if base.exists():
+            out["work"].append(base)
+        try:
+            scenes = load_scenes(sheet, code, translation_for(sheet.parent, pid, code))
+            for f in tts.voice_paths(scenes, code, shared["voicecache"]):
+                if f.exists():
+                    out["voice"].append(f)
+        except Exception:
+            pass
+
+    out["sheets"].append(sheet)
+    for f in sheet.parent.glob(f"{pid}_*.md"):
+        if f != sheet:
+            out["sheets"].append(f)
+
+    return out
+
+
+def _inside(p: Path, root: Path) -> bool:
+    """True only if p really sits under root, symlinks resolved.
+
+    The guard that matters: a project id is user-supplied, and this function is
+    the last thing standing between a stray '..' and someone's home directory.
+    """
+    try:
+        p.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def delete_project(sheet: Path, langs: list[dict], what: list[str]) -> dict:
+    """Delete the chosen groups. Returns what actually went, and what didn't.
+
+    Every path is re-checked against the project root immediately before
+    unlinking. Belt and braces: the caller has already validated the project id
+    against the known list, but this is destructive and irreversible, so it
+    verifies rather than trusts.
+    """
+    import shutil
+
+    groups = deletable(sheet, langs)
+    removed, freed, refused = [], 0, []
+    for key in what:
+        for f in groups.get(key, []):
+            if not _inside(f, ROOT):
+                refused.append(str(f))       # never possible via the UI; still checked
+                continue
+            try:
+                if f.is_dir():
+                    freed += sum(x.stat().st_size for x in f.rglob("*") if x.is_file())
+                    shutil.rmtree(f)
+                elif f.exists():
+                    freed += f.stat().st_size
+                    f.unlink()
+                else:
+                    continue
+                removed.append(f.name)
+            except OSError as e:
+                refused.append(f"{f.name}: {e}")
+    return {"removed": removed, "count": len(removed),
+            "freed_mb": round(freed / 1e6, 1), "refused": refused}
+
+
 def translation_for(sheets_dir: Path, pid: str, lang: str) -> Path | None:
     if lang == "en":
         return None

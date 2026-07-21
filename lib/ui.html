@@ -164,6 +164,15 @@ td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
 .toast{position:fixed;right:18px;bottom:18px;background:var(--panel);border:1px solid var(--line);
   border-left:3px solid var(--accent);padding:11px 15px;border-radius:9px;
   box-shadow:var(--shadow);z-index:50;max-width:340px;font-size:13px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;
+  z-index:60;padding:20px}
+.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:20px;max-width:520px;width:100%;box-shadow:var(--shadow)}
+.modal h3{font-size:16px;margin-bottom:6px}
+.dgroup{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.dgroup:first-of-type{border-top:0}
+.dgroup .what{flex:1}
+.dgroup .what b{font-size:13px}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--ink3);
   border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -361,7 +370,10 @@ async function viewProject(id) {
       el('div', { class: 'back', onclick: () => location.hash = '#/dashboard' }, '← Dashboard'),
       el('h1', { style: 'margin-top:4px' }, p.id),
       el('p', {}, p.label || '')),
-    el('span', { class: 'pill ' + o.cls }, o.text)));
+    el('div', { class: 'row' },
+      el('span', { class: 'pill ' + o.cls }, o.text),
+      el('button', { class: 'btn sm danger', onclick: () => askDelete(p.id) },
+        'Delete…'))));
 
   // visuals ---------------------------------------------------------------
   const sourced = st.assets >= st.scenes && st.scenes > 0;
@@ -788,6 +800,81 @@ async function viewReview(id) {
       : el('img', { src: s.url, loading: 'lazy', alt: s.query || '' }));
     return t;
   })));
+}
+
+// ═══ delete ═══════════════════════════════════════════════════════════════
+// Deliberately granular. "Clear narration" and "delete the whole project" are
+// very different acts, and one button for both is how people lose work.
+// Removing the sheets means removing the project, so that one needs its name
+// typed — a stray click must not be able to do it.
+const GROUPS = [
+  ['outputs', 'Rendered videos', 'the .mp4 and .srt files in out/'],
+  ['voice', 'Narration cache', 'generated audio — regenerating costs GPU time'],
+  ['visuals', 'Visual choices', 'which clip belongs to which scene, and your picks'],
+  ['work', 'Working files', 'intermediate clips; always safe to remove'],
+  ['sheets', 'The sheets themselves', 'DELETES THE PROJECT — scripts and translations'],
+];
+
+async function askDelete(id) {
+  const d = await api('/api/deletable?id=' + encodeURIComponent(id));
+  if (d.error) return toast(d.error, true);
+  const picked = new Set();
+  const confirmBox = el('input', { type: 'text', placeholder: `type ${id} to confirm` });
+  const confirmWrap = el('div', { style: 'display:none;margin-top:12px' },
+    el('div', { class: 'sub', style: 'margin-bottom:5px;color:var(--bad)' },
+      'This removes the scripts and translations. It cannot be undone.'),
+    confirmBox);
+
+  const go = el('button', { class: 'btn danger', disabled: true }, 'Delete');
+  const sync = () => {
+    const needsName = picked.has('sheets');
+    confirmWrap.style.display = needsName ? '' : 'none';
+    const total = [...picked].reduce((a, k) => a + (d.groups[k]?.mb || 0), 0);
+    go.textContent = picked.size
+      ? `Delete ${picked.size} group(s) · ${total.toFixed(1)} MB` : 'Delete';
+    go.disabled = !picked.size || (needsName && confirmBox.value.trim() !== id);
+  };
+  confirmBox.addEventListener('input', sync);
+
+  const rows = GROUPS.map(([key, title, note]) => {
+    const g = d.groups[key] || { count: 0, mb: 0 };
+    const box = el('input', {
+      type: 'checkbox', disabled: !g.count,
+      onchange: e => { e.target.checked ? picked.add(key) : picked.delete(key); sync(); }
+    });
+    return el('label', { class: 'dgroup', style: g.count ? '' : 'opacity:.45' },
+      box,
+      el('div', { class: 'what' },
+        el('b', { style: key === 'sheets' ? 'color:var(--bad)' : '' }, title),
+        el('div', { class: 'sub' }, note)),
+      el('span', { class: 'sub mono' }, g.count ? `${g.count} · ${g.mb} MB` : 'none'));
+  });
+
+  const modal = el('div', { class: 'modal' },
+    el('div', { class: 'box' },
+      el('h3', {}, 'Delete from ' + id),
+      el('div', { class: 'sub', style: 'margin-bottom:12px' },
+        'Downloaded stock footage is never removed — it is shared between '
+        + 'projects, so deleting it here would break others.'),
+      el('div', {}, rows),
+      confirmWrap,
+      el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end' },
+        el('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+        go)));
+
+  go.onclick = async () => {
+    go.disabled = true; go.textContent = 'Deleting…';
+    const r = await api('/api/delete', {
+      id, what: [...picked], confirm: confirmBox.value.trim()
+    });
+    modal.remove();
+    if (r.error) return toast(r.error, true);
+    toast(`Deleted ${r.count} file(s), freed ${r.freed_mb} MB.`);
+    location.hash = picked.has('sheets') ? '#/dashboard' : '#/project/' + id;
+    route();
+  };
+  document.body.append(modal);
+  sync();
 }
 
 // ═══ router ═══════════════════════════════════════════════════════════════
