@@ -163,11 +163,15 @@ def main() -> int:
     # dependencies precisely so pip cannot re-resolve the environment here and
     # undo the CUDA build we just installed.
     say("\n  [4/5] installing the 'faceless' command")
+    # This console entry point only appears on PATH once the .venv is activated,
+    # which most people never do. The ./faceless launcher in the repo root needs
+    # no activation and is the path we point people at, so a failure here is not
+    # a problem — it is a shortcut on top of a shortcut.
+    launch = "faceless start" if platform.system() == "Windows" else "./faceless start"
     if pip("-e", ".", "--no-deps", quiet=True) == 0:
-        say("     you can now type:  faceless start")
+        say(f"     installed. Run:  {launch}")
     else:
-        say("     could not install it — no harm done, use:")
-        say("       python make_video.py studio")
+        say(f"     skipped — no harm done, the launcher still works:  {launch}")
 
     say("\n  [5/5] checking the install actually works")
     t = torch_report()
@@ -212,8 +216,9 @@ def main() -> int:
 
     say()
     say("  " + "-" * 38)
+    launch = "faceless start" if platform.system() == "Windows" else "./faceless start"
     if ok:
-        say("  Done. Start it with:   faceless start")
+        say(f"  Done. Start it with:   {launch}")
     else:
         say("  Finished with warnings — see the !! lines above before voicing.")
     say()

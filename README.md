@@ -205,16 +205,30 @@ Status is **derived from what's on disk**, never stored. Delete an MP4 or clear 
 hand and the dashboard tells the truth on the next refresh — it can't claim something
 exists when it doesn't.
 
-`faceless` is installed by the setup script as a normal console command — the same
-mechanism behind `npm start` or `git`. It works from any folder inside the project, as
-long as the `.venv` is active.
+### Making `faceless` work
+
+`faceless` is a short verb for the things you do every day, like `npm start`. There are two
+copies of it and it does not matter which one runs:
+
+- **`./faceless start`** — a launcher script in this folder. No setup, no activation; it
+  finds the project's own Python and runs. Works the moment you clone the repo.
+- **`faceless start`** (no `./`) — the version the setup script installs as a real console
+  command. It only appears on your PATH when the `.venv` is *activated*, which most people
+  never do — so if you get `command not found`, that is why, and it is not a real problem.
+
+To type a bare `faceless` from anywhere, add the one-line alias `setup.sh` prints at the
+end (it points at the launcher, so activation never matters):
+
+```bash
+echo "alias faceless='$PWD/faceless'" >> ~/.zshrc && source ~/.zshrc      # macOS
+```
 
 Three ways to do the identical thing, in case one isn't available:
 
 | | |
 |---|---|
-| `faceless start` | the short form, once setup has run |
-| `python3 make_video.py studio` | always works, no install needed |
+| `./faceless start` | the launcher — always works, no activation |
+| `python3 make_video.py studio` | the long form, also always works |
 | double-click `Start.bat` / `Start.command` | no terminal at all |
 
 **A note on `python` vs `python3`:** on Windows type `python`, on macOS type `python3`.

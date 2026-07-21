@@ -57,3 +57,31 @@ echo "  ✓ .venv ready"
 # install logic isn't written twice in two shell dialects that disagree about
 # quoting, exit codes and everything else.
 .venv/bin/python3 tools/install_deps.py "$@"
+
+# The pip-installed `faceless` command only lands on your PATH when the .venv is
+# activated, and almost nobody activates it — they open a terminal here and type
+# a command. The ./faceless launcher in this folder needs no activation, and a
+# one-line alias makes the bare word work from anywhere. Offer it rather than
+# editing a shell file silently.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+case "${SHELL##*/}" in
+  zsh)  RC="$HOME/.zshrc" ;;
+  bash) RC="$HOME/.bashrc" ;;
+  *)    RC="$HOME/.profile" ;;
+esac
+LINE="alias faceless='$DIR/faceless'"
+echo ""
+echo "  ────────────────────────────────────────────────────────────"
+echo "  Run it with:   ./faceless start        (from this folder)"
+echo ""
+if [ -f "$RC" ] && grep -qxF "$LINE" "$RC" 2>/dev/null; then
+  echo "  Or just:       faceless start          (alias already set)"
+else
+  echo "  To type a bare 'faceless' from anywhere, add this alias once:"
+  echo ""
+  echo "      echo \"$LINE\" >> $RC && source $RC"
+  echo ""
+  echo "  Then:          faceless start"
+fi
+echo "  ────────────────────────────────────────────────────────────"
+echo ""

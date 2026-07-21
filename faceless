@@ -1,0 +1,41 @@
+#!/bin/bash
+# The `faceless` command, as a plain launcher — no install step, no activating
+# anything. `faceless start`, `faceless check`, and so on, exactly as the
+# README describes.
+#
+# Why this exists alongside the pip-installed console command:
+#   The pip entry point (setup step 4) only lands on your PATH when the .venv is
+#   activated. Most people never activate it — they just open a terminal in this
+#   folder and type a command. This script needs none of that: it finds the
+#   project's own Python and runs the same code, so it works the moment you
+#   clone the repo.
+#
+# Run it as ./faceless start from this folder, or add the one-line alias that
+# setup.sh prints so a bare `faceless` works from anywhere.
+set -e
+cd "$(dirname "$0")"
+
+# The project keeps its packages in .venv (Homebrew's Python blocks system-wide
+# installs, PEP 668). Prefer that interpreter; fall back to system python3 only
+# so the error message below comes from our code rather than "command not found".
+if [ -x ".venv/bin/python3" ]; then
+  PY=".venv/bin/python3"
+elif [ -x ".venv/bin/python" ]; then
+  PY=".venv/bin/python"
+else
+  PY="$(command -v python3 || true)"
+fi
+
+if [ -z "$PY" ]; then
+  echo ""
+  echo "  Python isn't set up for this project yet. Run once:"
+  echo ""
+  echo "    bash setup.sh"
+  echo ""
+  exit 1
+fi
+
+# cli.py maps the friendly verbs (start -> studio, check -> doctor, …) and then
+# hands off to make_video.py. Running it through the venv interpreter means the
+# re-exec shim inside make_video.py sees it is already home and does nothing.
+exec "$PY" cli.py "$@"
