@@ -7,16 +7,17 @@
   The whole interface, in one file. No build step, no bundler, no node_modules —
   `faceless start` serves this directly.
 
-  Views are switched by the URL hash, so Back/Forward work and any view can be
-  bookmarked or reloaded:
+  Views are real URLs via the History API — the server hands this page back
+  for any non-asset path, so each of these can be typed, bookmarked, reloaded
+  and shared, and Back/Forward behave normally:
 
-     #/dashboard        every project, with per-language status
-     #/project/<id>     one project: visuals, per-language steps, actions
-     #/review/<id>      click the pictures that don't fit
-     #/run              live terminal, exact counts, elapsed and remaining
-     #/new              paste a script, generate sheets
-     #/voices[/<lang>]  audition and choose reference clips
-     #/settings         machine check, keys, finished files
+     /                  every project, with per-language status
+     /project/<id>      one project: visuals, per-language steps, actions
+     /review/<id>       click the pictures that don't fit
+     /activity          live terminal, exact counts, elapsed and remaining
+     /new               paste a script, generate sheets
+     /voices[/<lang>]   audition and choose reference clips
+     /settings          machine check, keys, finished files
 
   One poll loop drives the whole app (900ms). It repaints the run view only when
   that view is open, but always keeps the sidebar badge current so you can walk
@@ -161,6 +162,13 @@ td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
 .thumb.hero{border-color:var(--accent)}
 .thumb .n{position:absolute;left:0;top:0;background:rgba(0,0,0,.72);color:#fff;
   font-size:10px;padding:1px 5px;border-radius:0 0 5px 0;font-weight:700}
+#banner{position:sticky;top:0;z-index:30;margin:-26px -30px 20px;padding:11px 30px;
+  background:color-mix(in srgb,var(--accent) 14%,var(--panel));
+  border-bottom:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));
+  display:flex;align-items:center;gap:12px;font-size:13px}
+#banner.err{background:color-mix(in srgb,var(--bad) 14%,var(--panel));
+  border-bottom-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
+#banner .bar{flex:1;max-width:220px}
 .toast{position:fixed;right:18px;bottom:18px;background:var(--panel);border:1px solid var(--line);
   border-left:3px solid var(--accent);padding:11px 15px;border-radius:9px;
   box-shadow:var(--shadow);z-index:50;max-width:340px;font-size:13px}
@@ -189,16 +197,19 @@ td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
 <div class="app">
   <aside class="side">
     <div class="brand"><span class="dot">F</span><b>Faceless</b></div>
-    <a class="nav" data-r="#/dashboard"><span class="ico">▦</span>Dashboard</a>
-    <a class="nav" data-r="#/run"><span class="ico">▶</span>Activity<span class="badge" id="navBadge" style="display:none"></span></a>
-    <a class="nav" data-r="#/voices"><span class="ico">◍</span>Voices</a>
-    <a class="nav" data-r="#/settings"><span class="ico">⚙</span>Settings</a>
+    <a class="nav" data-r="/"><span class="ico">▦</span>Dashboard</a>
+    <a class="nav" data-r="/activity"><span class="ico">▶</span>Activity<span class="badge" id="navBadge" style="display:none"></span></a>
+    <a class="nav" data-r="/voices"><span class="ico">◍</span>Voices</a>
+    <a class="nav" data-r="/settings"><span class="ico">⚙</span>Settings</a>
     <div class="foot">
       <button class="btn sm" id="themeBtn">Light mode</button>
       <div class="sub mono">127.0.0.1:8765</div>
     </div>
   </aside>
-  <main class="main" id="view"></main>
+  <main class="main">
+    <div id="banner" style="display:none"></div>
+    <div id="view"></div>
+  </main>
 </div>
 <div id="toast"></div>
 
@@ -226,7 +237,12 @@ async function api(ep, body) {
     body: JSON.stringify(body)
   } : {});
   const j = await r.json().catch(() => ({ error: 'the server sent something unreadable' }));
-  if (j.error && body) toast(j.error, true);
+  if (j.error && body) {
+    toast(j.error, true);
+    // "Something is already running" is not much use on its own — show the
+    // person the thing that is running.
+    if (r.status === 409) go('/activity');
+  }
   return j;
 }
 let toastT;
@@ -318,7 +334,7 @@ async function viewDashboard() {
     el('div', { class: 'grow' }, el('h1', {}, 'Dashboard'),
       el('p', {}, `${S.projects.length} project${S.projects.length === 1 ? '' : 's'} · `
         + `${scenes} scenes · ${built} video${built === 1 ? '' : 's'} rendered`)),
-    el('button', { class: 'btn', onclick: () => location.hash = '#/new' }, '+ New from script')));
+    el('button', { class: 'btn', onclick: () => go('/new') }, '+ New from script')));
 
   if (!d.has_keys) v.append(el('div', { class: 'card', style: 'border-color:var(--warn);margin-bottom:14px' },
     el('b', {}, 'No stock API keys yet. '), 'Sourcing visuals will not work — add them in Settings.'));
@@ -327,7 +343,7 @@ async function viewDashboard() {
     v.append(el('div', { class: 'empty card' }, el('b', {}, 'No projects yet'),
       'Put a master sheet in sheets/, or paste a script and let Gemini split it.',
       el('div', { style: 'margin-top:14px' },
-        el('button', { class: 'btn primary', onclick: () => location.hash = '#/new' },
+        el('button', { class: 'btn primary', onclick: () => go('/new') },
           'Start from a script'))));
     return;
   }
@@ -335,7 +351,7 @@ async function viewDashboard() {
   v.append(el('div', { class: 'cards' }, S.projects.map(p => {
     const st = p.status || { languages: {}, scenes: 0, assets: 0 };
     const o = overall(st);
-    return el('div', { class: 'card click', onclick: () => location.hash = '#/project/' + p.id },
+    return el('div', { class: 'card click', onclick: () => go('/project/') + p.id },
       el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
         el('div', { style: 'min-width:0' }, el('h3', {}, p.id),
           el('div', { class: 'sub', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
@@ -367,7 +383,7 @@ async function viewProject(id) {
 
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' },
-      el('div', { class: 'back', onclick: () => location.hash = '#/dashboard' }, '← Dashboard'),
+      el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
       el('h1', { style: 'margin-top:4px' }, p.id),
       el('p', {}, p.label || '')),
     el('div', { class: 'row' },
@@ -386,10 +402,10 @@ async function viewProject(id) {
         onclick: async e => {
           e.target.disabled = true;
           const r = await api('/api/source', { id: p.id });
-          if (r.started) location.hash = '#/run'; else e.target.disabled = false;
+          if (r.started) go('/run'); else e.target.disabled = false;
         }
       }, st.assets ? 'Re-source all' : 'Find visuals'),
-      st.assets ? el('button', { class: 'btn', onclick: () => location.hash = '#/review/' + p.id },
+      st.assets ? el('button', { class: 'btn', onclick: () => go('/review/') + p.id },
         'Review & swap pictures') : null,
       el('div', { style: 'flex:1' }),
       el('span', { class: 'pill ' + (sourced ? 'ok' : st.assets ? 'part' : 'none') },
@@ -402,7 +418,7 @@ async function viewProject(id) {
       id: p.id, langs, steps, force,
       captions: opts.captions, zoom: opts.zoom, music: opts.music || null
     });
-    if (r.started) location.hash = '#/run';
+    if (r.started) go('/run');
   };
 
   v.append(el('div', { class: 'sec' }, el('h2', {}, 'Languages')));
@@ -474,7 +490,11 @@ function viewRun() {
           navigator.clipboard?.writeText(t);
           toast('Log copied to the clipboard.');
         }
-      }, 'Copy')),
+      }, 'Copy'),
+      el('button', {
+        class: 'btn sm danger', id: 'stopBtn',
+        onclick: async e => { e.target.disabled = true; await api('/api/cancel', {}); }
+      }, 'Stop')),
     el('div', { class: 'term', id: 'term' })));
   paintRun();
 }
@@ -550,7 +570,7 @@ function paintRun() {
 function viewNew() {
   const v = $('#view'); v.innerHTML = '';
   v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
-    el('div', { class: 'back', onclick: () => location.hash = '#/dashboard' }, '← Dashboard'),
+    el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
     el('h1', { style: 'margin-top:4px' }, 'New video from a script'),
     el('p', {}, 'Gemini decides only where to cut. Your words are checked back against '
       + 'what you paste, word by word — nothing is rewritten silently.'))));
@@ -579,15 +599,15 @@ function viewNew() {
             id: id.value.trim(), script: script.value,
             langs: Object.keys(langs).filter(k => langs[k]), overwrite: false
           });
-          if (r.started) location.hash = '#/run'; else e.target.disabled = false;
+          if (r.started) go('/run'); else e.target.disabled = false;
         }
       }, 'Generate the sheets'),
       el('span', { class: 'sub' }, 'Roughly 15–25 Gemini requests; the free allowance is about 250/day.'))));
 }
 
 // ═══ voices ═══════════════════════════════════════════════════════════════
-async function viewVoices() {
-  const lang = location.hash.split('/')[2] || 'en';
+async function viewVoices(lang) {
+  lang = lang || 'en';
   const d = await api('/api/voices?lang=' + lang);
   const v = $('#view'); v.innerHTML = '';
   const chosen = (d.chosen || {}).reference || '';
@@ -605,7 +625,7 @@ async function viewVoices() {
     el('span', { class: 'sub' }, 'Language'),
     el('select', {
       style: 'width:auto;min-width:180px',
-      onchange: e => location.hash = '#/voices/' + e.target.value
+      onchange: e => go('/voices/') + e.target.value
     }, Object.entries(d.languages || {}).map(([c, n]) =>
       el('option', { value: c, selected: c === lang }, `${n} (${c})`))),
     el('div', { style: 'flex:1' }),
@@ -733,7 +753,7 @@ async function viewSettings() {
       line(!!s.reference_ok, lg.toUpperCase(), s.reference || 'none chosen',
         'pick one in the Voices panel')))),
     el('div', { class: 'row', style: 'margin-top:12px' },
-      el('button', { class: 'btn sm', onclick: () => location.hash = '#/voices' }, 'Open Voices'))));
+      el('button', { class: 'btn sm', onclick: () => go('/voices') }, 'Open Voices'))));
 
   v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'Finished files'),
     el('span', { class: 'sub' }, `${(d.outputs || []).length} in out/`)));
@@ -754,7 +774,7 @@ async function viewReview(id) {
   const d = await api('/api/approval?id=' + encodeURIComponent(id));
   const v = $('#view'); v.innerHTML = '';
   v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
-    el('div', { class: 'back', onclick: () => location.hash = '#/project/' + id }, '← ' + id),
+    el('div', { class: 'back', onclick: () => go('/project/') + id }, '← ' + id),
     el('h1', { style: 'margin-top:4px' }, 'Review visuals'),
     el('p', {}, 'Click any picture that does not suit its line. Anything you leave alone '
       + 'is approved — there is no approve button. Gold border marks a scene that carries the story.'))));
@@ -776,7 +796,7 @@ async function viewReview(id) {
         if (!rejected.size) return toast('Nothing marked yet.');
         e.target.disabled = true;
         const r = await api('/api/source', { id, redo: [...rejected] });
-        if (r.started) location.hash = '#/run'; else e.target.disabled = false;
+        if (r.started) go('/run'); else e.target.disabled = false;
       }
     }, 'Get new pictures for these'))));
 
@@ -900,43 +920,111 @@ async function askDelete(id) {
     modal.remove();
     if (r.error) return toast(r.error, true);
     toast(`Deleted ${r.count} file(s), freed ${r.freed_mb} MB.`);
-    location.hash = picked.has('sheets') ? '#/dashboard' : '#/project/' + id;
-    route();
+    go(picked.has('sheets') ? '/' : '/project/' + id);
   };
   document.body.append(modal);
   sync();
 }
 
+// ═══ banner ═══════════════════════════════════════════════════════════════
+// A job used to be invisible unless you happened to be on the Activity page,
+// and a failure only showed as a toast that vanished. This sits above every
+// view until you have actually seen the outcome.
+function paintBanner() {
+  const b = $('#banner'); if (!b) return;
+  const j = S.status || {};
+  const running = BUSY.includes(j.stage);
+  const failed = j.stage === 'error' && j.error;
+
+  if (!running && !failed) { b.style.display = 'none'; return; }
+  b.style.display = ''; b.className = failed ? 'err' : '';
+  b.innerHTML = '';
+
+  if (failed) {
+    b.append(
+      el('b', { style: 'color:var(--bad)' }, 'Stopped'),
+      el('span', { style: 'flex:1' }, j.error),
+      el('button', { class: 'btn sm', onclick: () => go('/activity') }, 'Details'),
+      el('button', {
+        class: 'btn sm',
+        onclick: () => { S.status = { ...j, stage: 'idle', error: '' }; paintBanner(); }
+      }, 'Dismiss'));
+    return;
+  }
+
+  const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+  b.append(
+    el('span', { class: 'spin' }),
+    el('b', {}, j.project || ''),
+    el('span', { style: 'color:var(--ink2)' }, j.label || j.stage),
+    el('div', { class: 'bar' }, el('i', { style: `width:${pct}%` })),
+    el('span', { class: 'mono sub' },
+      (j.total ? `${j.done}/${j.total}` : '') + (j.eta != null ? ` · ${fmtT(j.eta)} left` : '')),
+    el('div', { style: 'flex:1' }),
+    el('button', { class: 'btn sm', onclick: () => go('/activity') }, 'Watch'),
+    el('button', {
+      class: 'btn sm danger',
+      onclick: async e => { e.target.disabled = true; await api('/api/cancel', {}); }
+    }, 'Stop'));
+}
+
 // ═══ router ═══════════════════════════════════════════════════════════════
+// Real URLs via the History API — /project/video05, not #/project/video05.
+// The server hands back this page for any non-asset path, so every route can
+// be typed, bookmarked, reloaded and shared, and Back/Forward behave normally.
 const ROUTES = [
-  [/^#\/dashboard$/, viewDashboard],
-  [/^#\/project\/(.+)$/, viewProject],
-  [/^#\/review\/(.+)$/, viewReview],
-  [/^#\/run$/, viewRun],
-  [/^#\/new$/, viewNew],
-  [/^#\/voices/, viewVoices],
-  [/^#\/settings$/, viewSettings],
+  [/^\/$/, viewDashboard],
+  [/^\/dashboard\/?$/, viewDashboard],
+  [/^\/project\/([^/]+)\/?$/, viewProject],
+  [/^\/review\/([^/]+)\/?$/, viewReview],
+  [/^\/activity\/?$/, viewRun],
+  [/^\/new\/?$/, viewNew],
+  [/^\/voices(?:\/([a-z-]+))?\/?$/, viewVoices],
+  [/^\/settings\/?$/, viewSettings],
 ];
+
+/** Navigate without reloading. Use this everywhere instead of location.href. */
+function go(path, replace) {
+  if (path === location.pathname) return route();
+  history[replace ? 'replaceState' : 'pushState']({}, '', path);
+  route();
+}
+
 async function route() {
-  const h = location.hash || '#/dashboard';
+  const path = location.pathname;
   for (const [re, fn] of ROUTES) {
-    const m = h.match(re);
+    const m = path.match(re);
     if (!m) continue;
-    document.querySelectorAll('.nav').forEach(n => n.classList.toggle('on', h.startsWith(n.dataset.r)));
-    try { await fn(m[1]); }
+    document.querySelectorAll('.nav').forEach(n => {
+      const r = n.dataset.r;
+      n.classList.toggle('on', r === '/' ? (path === '/' || path === '/dashboard')
+        : path.startsWith(r));
+    });
+    try { await fn(m[1] ? decodeURIComponent(m[1]) : undefined); }
     catch (e) {
       $('#view').innerHTML = '';
       $('#view').append(el('div', { class: 'empty card' },
         el('b', {}, 'That view failed to load'),
-        el('div', { class: 'mono sub' }, String(e && e.message || e))));
+        el('div', { class: 'mono sub' }, String((e && e.message) || e))));
     }
+    paintBanner();
     window.scrollTo(0, 0);
     return;
   }
-  location.hash = '#/dashboard';
+  // Unknown address — say so rather than silently bouncing to the dashboard.
+  $('#view').innerHTML = '';
+  $('#view').append(el('div', { class: 'empty card' },
+    el('b', {}, 'Nothing at this address'),
+    el('div', { class: 'mono sub' }, path),
+    el('div', { style: 'margin-top:14px' },
+      el('button', { class: 'btn', onclick: () => go('/') }, 'Go to the dashboard'))));
 }
-addEventListener('hashchange', route);
-document.querySelectorAll('.nav').forEach(n => n.onclick = () => location.hash = n.dataset.r);
+
+addEventListener('popstate', route);
+document.querySelectorAll('.nav').forEach(n => {
+  n.setAttribute('href', n.dataset.r);
+  n.onclick = e => { e.preventDefault(); go(n.dataset.r); };
+});
 
 // ═══ polling ══════════════════════════════════════════════════════════════
 let lastStage = null;
@@ -949,14 +1037,16 @@ async function poll() {
     badge.style.display = busy ? '' : 'none';
     if (busy) badge.textContent = j.total ? Math.round(100 * j.done / j.total) + '%' : '···';
 
-    if (location.hash === '#/run') paintRun();
+    paintBanner();
+    if (location.pathname === '/activity') paintRun();
 
     // A run just ended — refresh whatever is on screen so the status is honest.
     if (lastStage && lastStage !== j.stage && ['done', 'approve', 'error'].includes(j.stage)) {
       if (j.stage === 'done') toast('Finished.');
       if (j.stage === 'error') toast(j.error || 'Something failed — see Activity.', true);
       if (j.stage === 'approve') toast('Visuals ready to review.');
-      if (location.hash === '#/dashboard' || location.hash.startsWith('#/project/')) route();
+      if (location.pathname === '/' || location.pathname === '/dashboard'
+          || location.pathname.startsWith('/project/')) route();
     }
     lastStage = j.stage;
   } catch (e) { /* server restarting — try again on the next tick */ }

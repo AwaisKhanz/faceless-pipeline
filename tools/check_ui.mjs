@@ -67,6 +67,7 @@ const doc = {
   createElement: t => { const n = new Node(t); n.nodeType = 1; return n; },
   createTextNode: t => new TextNode(t),
   documentElement: Object.assign(new Node('html'), { dataset: {} }),
+  body: new Node('body'),
   querySelector: sel => REG[sel] ||= new Node('div'),
   querySelectorAll: () => [],
   addEventListener() { },
@@ -76,7 +77,8 @@ const doc = {
 const calls = [];
 globalThis.document = doc;
 globalThis.window = { scrollTo() { }, open() { } };
-globalThis.location = { hash: '#/dashboard' };
+globalThis.location = { pathname: '/', hash: '', href: 'http://x/' };
+globalThis.history = { pushState() { }, replaceState() { } };
 globalThis.localStorage = { getItem: () => null, setItem() { } };
 // node 22 defines navigator as a getter-only global; redefine it.
 Object.defineProperty(globalThis, 'navigator',
@@ -106,8 +108,8 @@ const js = html.match(/<script>([\s\S]*)<\/script>/)[1];
 // Expose the view functions so we can call them one at a time.
 const mod = js + `
 ;globalThis.__views = { viewDashboard, viewProject, viewRun, viewNew,
-                        viewVoices, viewSettings, viewReview, route,
-                        fractions, overall, fmtT, ago };`;
+                        viewVoices, viewSettings, viewReview, route, go,
+                        paintBanner, ROUTES, fractions, overall, fmtT, ago };`;
 
 let fail = 0;
 try {
@@ -165,12 +167,41 @@ const run = async (name, fn, arg) => {
   }
 };
 
+// Routing table: every address must reach exactly one view.
+console.log('\n  routes');
+const ROUTE_CASES = [
+  ['/', 'viewDashboard', undefined],
+  ['/dashboard', 'viewDashboard', undefined],
+  ['/project/video05', 'viewProject', 'video05'],
+  ['/review/video05', 'viewReview', 'video05'],
+  ['/activity', 'viewRun', undefined],
+  ['/new', 'viewNew', undefined],
+  ['/voices', 'viewVoices', undefined],
+  ['/voices/de', 'viewVoices', 'de'],
+  ['/settings', 'viewSettings', undefined],
+];
+for (const [path, wantFn, wantArg] of ROUTE_CASES) {
+  const hit = V.ROUTES.find(([re]) => re.test(path));
+  const m = hit && path.match(hit[0]);
+  const ok = hit && hit[1].name === wantFn && (m[1] || undefined) === wantArg;
+  console.log(`  ${ok ? 'ok' : '!!'}  ${path.padEnd(18)} -> ${hit ? hit[1].name : 'NO MATCH'}`
+    + (m && m[1] ? ` (${m[1]})` : ''));
+  fail += !ok;
+}
+for (const bad of ['/nope', '/project', '/project/a/b']) {
+  const hit = V.ROUTES.find(([re]) => re.test(bad));
+  console.log(`  ${hit ? '!!' : 'ok'}  ${bad.padEnd(18)} -> ${hit ? 'MATCHED (should not)' : 'no match, as intended'}`);
+  fail += !!hit;
+}
+
+console.log('');
 await run('dashboard', V.viewDashboard);
 if (firstId) await run('project', V.viewProject, firstId);
 if (firstId) await run('review', V.viewReview, firstId);
 await run('run/activity', V.viewRun);
 await run('new', V.viewNew);
 await run('voices', V.viewVoices);
+await run('voices/de', V.viewVoices, 'de');
 await run('settings', V.viewSettings);
 
 console.log(`\n  ${fail === 0 ? 'ALL PASS' : fail + ' FAILURE(S)'} — ${calls.length} API calls made`);

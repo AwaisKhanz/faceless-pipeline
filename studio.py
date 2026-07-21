@@ -100,6 +100,7 @@ JOB = {
     "eta": None,           # seconds remaining in this step, or None
     "rate": None,          # items per second in this step
     "lang": None,          # language currently being worked on
+    "cancel": False,       # set by /api/cancel, checked between items
 }
 LOCK = threading.Lock()
 
@@ -115,7 +116,7 @@ def begin_job(project: str, langs: list[str], stage: str) -> None:
         JOB.update(stage=stage, project=project, langs=langs, label="",
                    done=0, total=0, log=[], error="", outputs=[], warnings=[],
                    started=time.time(), step_started=time.time(),
-                   steps=[], eta=None, rate=None, lang=None)
+                   steps=[], eta=None, rate=None, lang=None, cancel=False)
 
 
 def begin_step(stage: str, lang: str | None = None) -> None:
@@ -158,6 +159,79 @@ def progress(done: int, total: int, label: str = "") -> None:
             JOB["rate"] = round(rate, 3) if rate else None
             remaining = max(0, (total or 0) - done)
             JOB["eta"] = round(remaining / rate) if rate > 0 and remaining else 0
+
+
+RUNNING = ("generate", "stock", "voice", "render")
+WORKER: list = [None]        # the one live worker thread, if any
+
+
+def busy() -> bool:
+    """Is a job genuinely running right now?
+
+    Checks the thread as well as the recorded stage. If a worker died without
+    tidying up, the stage alone would say 'running' forever and every later
+    action would be refused with 'something is already running' — which is
+    exactly what happened when a SystemExit escaped the old handler. Trusting
+    the stage alone made a single crash permanent; this makes it self-healing.
+    """
+    with LOCK:
+        stage = JOB["stage"]
+    if stage not in RUNNING:
+        return False
+    t = WORKER[0]
+    if t is not None and t.is_alive():
+        return True
+    # Stage says running, nothing is. Recover rather than stay wedged.
+    set_job(stage="error",
+            error=JOB.get("error") or
+            "The last job stopped unexpectedly and left no message. "
+            "It is safe to try again.")
+    log("The previous job ended without reporting why — state reset.")
+    return False
+
+
+def _guarded(fn, *a) -> None:
+    """Run a job and make sure the stage is never left mid-flight.
+
+    Catches BaseException deliberately, not Exception. Library code raises
+    SystemExit for user-facing problems (no reference clip chosen, malformed
+    sheet), and SystemExit does NOT inherit from Exception — so 'except
+    Exception' let the thread die silently with the job stuck at 'voice'.
+    A background worker should never disappear without saying why.
+    """
+    try:
+        fn(*a)
+    except BaseException as e:                      # noqa: BLE001 - deliberate
+        msg = str(e) or type(e).__name__
+        set_job(stage="error", error=msg)
+        log(f"ERROR: {msg}")
+        traceback.print_exc()
+    finally:
+        with LOCK:
+            if JOB["stage"] in RUNNING:
+                JOB["stage"] = "done"               # never leave it hanging
+
+
+def start_thread(fn, *a) -> bool:
+    if busy():
+        return False
+    with LOCK:
+        JOB["log"] = []
+        JOB["error"] = ""
+        JOB["cancel"] = False
+    t = threading.Thread(target=_guarded, args=(fn, *a), daemon=True)
+    WORKER[0] = t
+    t.start()
+    return True
+
+
+def cancelled() -> bool:
+    with LOCK:
+        return bool(JOB.get("cancel"))
+
+
+class Cancelled(Exception):
+    """Raised inside a job when the user asks it to stop."""
 
 
 # ------------------------------------------------------------------ the work
@@ -323,8 +397,23 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
             assets = {int(k): v for k, v in
                       json.loads(assets_f.read_text(encoding="utf-8")).items()}
 
+        # Fail before starting, not three minutes in. Voicing with no reference
+        # clip chosen used to raise SystemExit from deep inside the worker.
+        # Rendering needs narration, so it needs a chosen clip just as much as
+        # voicing does — it simply generates it on the way through.
+        if "voice" in steps or "render" in steps:
+            missing = [l for l in langs
+                       if not (voices.get(l) or vx.pref_for(l).get("reference"))]
+            if missing:
+                names = ", ".join(pl.LANG_NAMES.get(m, m) for m in missing)
+                raise RuntimeError(
+                    f"No reference clip chosen for {names}. Pick one in the "
+                    f"Voices panel, then try again.")
+
         outputs = []
         for li, lang in enumerate(langs):
+            if cancelled():
+                raise Cancelled()
             tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
             tr = pl.translation_for(sheets, pid, lang)
             scenes = pl.load_scenes(sheet, lang, tr)
@@ -344,11 +433,15 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
                 set_job(label=f"{tag} — narration")
                 log(f"{tag}: generating narration ({len(scenes)} lines)")
                 t0 = time.time()
+                def on_voice(d, t, m, tag=tag):
+                    progress(d, t, f"{tag} — voicing line {d} of {t}")
+                    log(f"  {m}")
+                    if cancelled():
+                        raise Cancelled()
+
                 vs = pl.generate_voice(
                     scenes, lang, sheet, voice=voices.get(lang) or None,
-                    on_progress=lambda d, t, m: (
-                        progress(d, t, f"{tag} — voicing line {d} of {t}"),
-                        log(f"  {m}")))
+                    on_progress=on_voice)
                 log(f"{tag}: narration done in {time.time() - t0:.0f}s")
                 end_step(len(scenes))
 
@@ -381,20 +474,13 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
 
         set_job(stage="done", label="finished")
         log("Done.")
+    except Cancelled:
+        set_job(stage="done", label="stopped")
+        log("Stopped. Whatever was already generated is kept and reused.")
     except Exception as e:
         set_job(stage="error", error=str(e))
         log(f"ERROR: {e}")
         traceback.print_exc()
-
-
-def start_thread(fn, *a) -> bool:
-    with LOCK:
-        if JOB["stage"] in ("generate", "stock", "voice", "render"):
-            return False      # something is already running
-        JOB["log"] = []
-        JOB["error"] = ""
-    threading.Thread(target=fn, args=a, daemon=True).start()
-    return True
 
 
 # ---------------------------------------------------------------- approval data
@@ -529,7 +615,15 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         path = u.path
 
-        if path in ("/", "/index.html"):
+        # Real URLs. The app uses the History API rather than hash fragments,
+        # so /project/video05 is a genuine address you can type, bookmark,
+        # reload or send to yourself — but it has to reach the server first,
+        # and the server has to hand back the app rather than a 404.
+        #
+        # Anything that is NOT an asset or an API call is a navigation route.
+        # Listing the asset prefixes rather than the app routes means adding a
+        # new view needs no server change at all.
+        if not path.startswith(("/api/", "/media/", "/out/", "/preview/")):
             return self._send(200, UI.read_bytes(), "text/html; charset=utf-8")
 
         if path == "/api/projects":
@@ -754,15 +848,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(
                     {"error": "type the project name to confirm deleting it"}, 400)
 
-            with LOCK:
-                if JOB["stage"] in ("generate", "stock", "voice", "render"):
-                    return self._json(
-                        {"error": "something is running — wait for it to finish"}, 409)
+            if busy():
+                return self._json(
+                    {"error": "something is running — wait for it to finish"}, 409)
 
             res = pl.delete_project(sheets / proj["sheet"], proj["languages"], what)
             log(f"Deleted {res['count']} file(s) from {pid} "
                 f"({res['freed_mb']} MB freed)")
             return self._json(res)
+
+        if path == "/api/cancel":
+            if not busy():
+                return self._json({"ok": True, "note": "nothing was running"})
+            set_job(cancel=True)
+            log("Stop requested — finishing the current item, then stopping.")
+            return self._json({"ok": True})
 
         if path == "/api/reveal":
             target = ROOT / "out"
