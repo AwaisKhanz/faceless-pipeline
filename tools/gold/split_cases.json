@@ -1,0 +1,127 @@
+{
+  "_comment": [
+    "Gold set for the scene splitter. Each case is a narration and the scene",
+    "count a human decided it should have, with the intended cut points.",
+    "",
+    "Scoring is deliberately lenient on count (±1 is fine) and strict on text:",
+    "a splitter that drops or reworks a single word is broken regardless of how",
+    "elegantly it cut. Judgement about where a scene ends is genuinely arguable;",
+    "reproducing the script exactly is not.",
+    "",
+    "Cases 1-13 are short expository scripts across many topics, to check the",
+    "splitter is not tuned to one genre. Add long narrative cases from sheets/",
+    "as well — tuning on short samples and regressing 115-scene videos would be",
+    "the obvious way to get this wrong."
+  ],
+
+  "cases": [
+    {
+      "id": "space",
+      "register": "subject-led",
+      "expect_scenes": 4,
+      "cuts_after": ["expanding.", "apart,", "stars."],
+      "narration": "For billions of years, the universe has been expanding. Galaxies are moving farther apart, while enormous clouds of gas and dust continue to form new stars. At the center of many galaxies, supermassive black holes quietly consume matter and shape the space around them."
+    },
+    {
+      "id": "earth",
+      "register": "subject-led",
+      "expect_scenes": 4,
+      "cuts_after": ["feet,", "moving.", "volcanoes."],
+      "narration": "Earth may look like a solid world beneath our feet, but deep below the surface, the planet is constantly moving. Massive tectonic plates slowly shift across the mantle, creating mountains, earthquakes, and volcanoes. Over millions of years, these forces have completely transformed the face of our planet."
+    },
+    {
+      "id": "water",
+      "register": "subject-led",
+      "expect_scenes": 5,
+      "cuts_after": ["journey.", "vapor,", "clouds.", "snow,"],
+      "narration": "Every drop of water on Earth is part of a continuous journey. Heat from the Sun turns ocean water into vapor, which rises into the atmosphere and forms clouds. Eventually, that water returns to Earth as rain or snow, flowing through rivers and back into the oceans."
+    },
+    {
+      "id": "history_rome",
+      "register": "historical",
+      "expect_scenes": 5,
+      "cuts_after": ["overnight.", "East.", "cities,", "distances."],
+      "narration": "The Roman Empire did not become powerful overnight. Its armies conquered vast territories across Europe, Africa, and the Middle East. Roads connected distant cities, while engineers built aqueducts that carried fresh water across enormous distances. At its height, Rome controlled one of the largest empires the ancient world had ever seen."
+    },
+    {
+      "id": "health_sleep",
+      "register": "people-led",
+      "expect_scenes": 4,
+      "cuts_after": ["asleep.", "hormones.", "active,"],
+      "narration": "Your body begins repairing itself almost immediately after you fall asleep. During deep sleep, your muscles recover and your body releases important hormones. Later in the night, your brain becomes more active, processing memories and organizing information from the day."
+    },
+    {
+      "id": "nasa",
+      "register": "technical",
+      "expect_scenes": 4,
+      "cuts_after": ["mission.", "launch.", "aboard"],
+      "narration": "Before a spacecraft ever leaves Earth, engineers spend years testing every part of the mission. The rocket must survive extreme vibration, intense heat, and the violent forces of launch. Only after thousands of tests can astronauts finally climb aboard and begin their journey into space."
+    },
+    {
+      "id": "biography_einstein",
+      "register": "historical",
+      "expect_scenes": 4,
+      "cuts_after": ["years.", "disappeared.", "gravity."],
+      "narration": "Albert Einstein was not considered a remarkable student during his early years. But his curiosity about the natural world never disappeared. As an adult, he developed ideas that completely changed our understanding of space, time, and gravity. His work would eventually make him one of the most famous scientists in history."
+    },
+    {
+      "id": "megaproject",
+      "register": "technical",
+      "expect_scenes": 4,
+      "cuts_after": ["material.", "currents.", "deposited"],
+      "narration": "Building a massive artificial island in the middle of the ocean requires moving millions of tons of material. Engineers first create protective barriers to control the waves and currents. Then, layer by layer, sand and rock are deposited until an entirely new piece of land begins to emerge from the sea."
+    },
+    {
+      "id": "science_light",
+      "register": "subject-led",
+      "expect_scenes": 4,
+      "cuts_after": ["speed.", "Earth.", "space,"],
+      "narration": "Light may appear to travel instantly, but it actually moves at a specific speed. It takes about eight minutes for light from the Sun to reach Earth. And when astronomers look deep into space, they are actually seeing objects as they existed millions or even billions of years ago."
+    },
+    {
+      "id": "learning",
+      "register": "abstract",
+      "expect_scenes": 3,
+      "cuts_after": ["information.", "pathways."],
+      "narration": "When you learn something new, your brain does more than simply store information. Neurons begin forming new connections, and repeated practice strengthens those pathways. Over time, information that once required intense concentration can become almost automatic."
+    },
+    {
+      "id": "technology_ai",
+      "register": "technical",
+      "expect_scenes": 3,
+      "cuts_after": ["second.", "enough."],
+      "narration": "Modern computers can perform billions of calculations every second. But raw processing power alone is not enough. The real challenge is teaching machines how to recognize patterns, learn from information, and make useful predictions."
+    },
+    {
+      "id": "animals_migration",
+      "register": "subject-led",
+      "expect_scenes": 4,
+      "cuts_after": ["Earth.", "mountains.", "field,"],
+      "narration": "Every morning, millions of birds begin one of the most dangerous journeys on Earth. They travel thousands of kilometers across oceans, deserts, and mountains. Somehow, using the Sun, stars, and Earth's magnetic field, many of them find their way back to the same destination year after year."
+    },
+    {
+      "id": "ocean_deep",
+      "register": "subject-led",
+      "expect_scenes": 4,
+      "cuts_after": ["unexplored.", "equipment,", "completely."],
+      "narration": "The deepest parts of the ocean remain almost completely unexplored. At these depths, pressure becomes powerful enough to crush ordinary equipment, and sunlight disappears completely. Yet specialized submarines continue to reveal strange creatures and ecosystems that exist in total darkness."
+    },
+
+    {
+      "id": "grouping_fruit",
+      "register": "subject-led",
+      "expect_scenes": 3,
+      "max_scenes": 4,
+      "_why": "Rule 6. Eight nouns must NOT become eight scenes — they group into shots a camera could take.",
+      "narration": "Apples, bananas, oranges, strawberries, blueberries, grapes, mangoes, and watermelons all arrive at the market before sunrise. The traders stack them into bright pyramids. By midday almost everything has been sold."
+    },
+    {
+      "id": "long_single_idea",
+      "register": "people-led",
+      "expect_scenes": 2,
+      "max_scenes": 3,
+      "_why": "One long sentence, one visual idea. Must not be shredded at every comma.",
+      "narration": "She sat by the window for a long time that afternoon, watching the light move slowly across the floor, not thinking about anything in particular. Eventually she got up and put the kettle on."
+    }
+  ]
+}

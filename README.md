@@ -225,6 +225,14 @@ narration files, and the YouTube packages. They appear in the dropdown below.
 - **Your words are never rewritten.** Gemini only decides *where to cut*. Every section
   is checked word-by-word against what you pasted; mismatches are retried twice with the
   error fed back, then shown to you as a diff. Nothing changes silently.
+- **Scenes are cut on visual ideas, not punctuation.** One scene = one clear picture. A
+  new scene starts when the subject, action, location, time period or step in the
+  argument changes — not at every full stop, and not at every noun in a list.
+- **Three searches per scene.** Free stock doesn't have every shot a script asks for, so
+  each scene carries a specific query, a looser fallback, and a plain safety query that
+  will always return something on-topic. Sourcing walks down until one hits.
+- **No repeated footage.** Two scenes may not search for the same thing, and a clip
+  already used in the video is skipped in favour of the next match.
 - **The file format can't come out wrong.** Gemini returns structured data, never
   markdown — Python writes every character of the file.
 - Uses roughly 15–25 requests per video, against a free allowance of ~250/day.

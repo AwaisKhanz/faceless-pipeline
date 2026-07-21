@@ -147,21 +147,66 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
 
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
               picks: dict[int, int] | None = None, log=print) -> dict[int, dict]:
-    """Fetch a visual for every scene. Failures are reported, not fatal."""
+    """Fetch a visual for every scene. Failures are reported, not fatal.
+
+    Two things happen here beyond a plain search.
+
+    THE LADDER. Free stock does not have every shot a script asks for. Each
+    scene carries progressively looser queries, and we walk down until one
+    returns. A slightly generic but on-topic clip beats an empty scene, and it
+    beats the junk a single over-specific query returns.
+
+    NO REPEATS. The same clip appearing twice is the clearest sign of a cheap
+    video, and it happens easily: two scenes about the ocean will happily
+    return the identical stock file. Assets already used in this video are
+    skipped, taking the next match down instead.
+    """
     picks = picks or {}
     out, failed = {}, []
+    used: set[str] = set()          # asset paths already spent in this video
+
     for s in scenes:
-        idx = picks.get(s.n, 0)
-        try:
-            out[s.n] = fetch(s.query, s.media, cache, pexels_key, pixabay_key, idx)
-            log(f"  S{s.n:>3} {s.media:<5} {out[s.n]['src']:<8} {s.query[:48]}")
-        except StockError as e:
-            failed.append((s.n, str(e)))
-            log(f"  S{s.n:>3} FAILED  {e}")
+        base = picks.get(s.n, 0)
+        ladder = [q for q in [s.query, *getattr(s, "fallbacks", [])] if q]
+        got = None
+        notes: list[str] = []
+
+        for rung, query in enumerate(ladder):
+            # Walk a few matches deep so a duplicate can be stepped over
+            # without giving up on this query.
+            for bump in range(4):
+                try:
+                    hit = fetch(query, s.media, cache, pexels_key, pixabay_key,
+                                base + bump)
+                except StockError as e:
+                    if bump == 0:
+                        notes.append(f"{query[:34]!r}: {e}")
+                    break                       # this query is exhausted
+                if hit["path"] in used:
+                    continue                    # already on screen elsewhere
+                got = hit
+                if rung:
+                    notes.append(f"fell back to {query[:38]!r}")
+                break
+            if got:
+                break
+
+        if got is None:
+            failed.append((s.n, "; ".join(notes) or "no match"))
+            log(f"  S{s.n:>3} FAILED  {notes[0] if notes else 'no match'}")
+            continue
+
+        used.add(got["path"])
+        out[s.n] = got
+        # The last note is the useful one ("fell back to ..."); earlier
+        # entries are just the queries that missed on the way down.
+        tail = f"  ({notes[-1]})" if notes else ""
+        log(f"  S{s.n:>3} {s.media:<5} {got['src']:<8} {got['query'][:44]}{tail}")
+
     if failed:
         log(f"\n{len(failed)} scene(s) had no usable match: "
             f"{[n for n, _ in failed]}")
-        log("Edit those ALT / search lines in the master sheet and re-run 'stock'.")
+        log("Edit those 'ALT / search' lines in the master sheet and re-run 'stock'.")
     return out
 
 

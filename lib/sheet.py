@@ -10,6 +10,10 @@ class Scene:
     media: str            # "IMAGE" or "VIDEO"
     narration: str        # narration in the target language
     query: str            # stock search query (always English - stock sites index in English)
+    # Looser searches to fall back on when `query` returns nothing. Free stock
+    # simply does not have every shot you would want, and one query either hits
+    # or ships junk; walking down a ladder keeps the scene on-topic instead.
+    fallbacks: list[str] = field(default_factory=list)
     en_narration: str = ""
     note: str = ""        # e.g. "title card", "Arthur intro"
     hero: bool = False    # flagged recurring-character / title-card scene
@@ -23,6 +27,9 @@ NARR_RE = re.compile(r'^-\s*Narration:\s*"(.*)"\s*$')
 # search term - so this deliberately does not anchor to end of line.
 ALT_RE = re.compile(r"^-\s*ALT\s*/\s*search:\s*`([^`]*)`")
 ALT_LOOSE_RE = re.compile(r"^-\s*ALT\s*/\s*search:\s*(.+?)\s*$")
+# Optional. Sheets written before the ladder existed have no such line, and
+# must keep parsing exactly as they did.
+FALLBACK_RE = re.compile(r"^-\s*Fallbacks?:\s*(.+?)\s*$")
 
 # **S31** · EN: "..."   then next line   DE: "..."  / ES: "..."
 TR_KEY_RE = re.compile(r'^\*\*S(\d+)\*\*\s*·\s*EN:\s*"(.*)"\s*$')
@@ -46,7 +53,7 @@ def parse_master(path: Path) -> list[Scene]:
             tail = m.group(3) or ""
             cur = {"n": int(m.group(1)), "media": m.group(2),
                    "note": tail.replace("⚑", "").replace("*", "").strip(),
-                   "narration": "", "query": ""}
+                   "narration": "", "query": "", "fallbacks": []}
             continue
         if cur is None:
             continue
@@ -57,6 +64,13 @@ def parse_master(path: Path) -> list[Scene]:
         m = ALT_RE.match(line)
         if m:
             cur["query"] = m.group(1).strip()
+            continue
+        m = FALLBACK_RE.match(line)
+        if m:
+            # `a` · `b`  or  a | b  — accept either, ignore empties
+            raw = m.group(1)
+            parts = re.findall(r"`([^`]+)`", raw) or re.split(r"\s*[|·]\s*", raw)
+            cur["fallbacks"] = [x.strip(" `*") for x in parts if x.strip(" `*")]
             continue
         m = ALT_LOOSE_RE.match(line)
         if m and not cur["query"]:
@@ -74,8 +88,8 @@ def _finish(d: dict) -> Scene:
     note = d["note"]
     hero = any(h.lower() in note.lower() for h in HERO_HINTS)
     return Scene(n=d["n"], media=d["media"], narration=d["narration"],
-                 query=d["query"], en_narration=d["narration"],
-                 note=note, hero=hero)
+                 query=d["query"], fallbacks=d.get("fallbacks") or [],
+                 en_narration=d["narration"], note=note, hero=hero)
 
 
 def _unescape(s: str) -> str:

@@ -258,10 +258,13 @@ SCENES_SCHEMA = {
             "narration": {"type": "string"},
             "media": {"type": "string", "enum": ["IMAGE", "VIDEO"]},
             "query": {"type": "string"},
+            "fallback_query": {"type": "string"},
+            "safety_query": {"type": "string"},
             "note": {"type": "string"},
             "hero": {"type": "boolean"},
         },
-        "required": ["narration", "media", "query", "note", "hero"]}}},
+        "required": ["narration", "media", "query", "fallback_query",
+                     "safety_query", "note", "hero"]}}},
     "required": ["scenes"],
 }
 
@@ -298,67 +301,191 @@ production sheets that a small team executes literally, so precision matters mor
 than flair. You never invent, rewrite, summarise or improve the writer's script."""
 
 SPLIT_RULES = """
-HOW TO SPLIT THE SCRIPT INTO SCENES
+HOW TO SPLIT A SCRIPT INTO SCENES
 
-1. ABSOLUTE RULE — DO NOT CHANGE ONE WORD.
-   Concatenating every `narration` value in order must reproduce the supplied text
-   EXACTLY: same words, same order, nothing added, nothing dropped, nothing reworded,
-   nothing summarised. You are only deciding WHERE TO CUT.
+════════════════════════════════════════════════════════════════════════
+1. THE ONE RULE THAT OVERRIDES EVERYTHING: DO NOT CHANGE A WORD.
+════════════════════════════════════════════════════════════════════════
+Concatenating every `narration` value in order must reproduce the supplied text
+EXACTLY: same words, same order, nothing added, dropped, reworded or summarised.
+You are only deciding WHERE TO CUT. This is checked mechanically and a mismatch
+is rejected.
 
-2. Cut on natural breathing beats — where a narrator would pause. Usually a sentence
-   end, sometimes a comma before a list or a turn of thought. A scene is typically
-   one sentence, or one clause of a long sentence.
+════════════════════════════════════════════════════════════════════════
+2. WHERE TO CUT:  ONE SCENE = ONE CLEAR VISUAL IDEA
+════════════════════════════════════════════════════════════════════════
+NOT one sentence = one scene. NOT one noun = one scene.
 
-3. Aim for 2-8 seconds of speech per scene (roughly 6-25 words). Never let a scene run
-   past ~30 words. Very short punch lines ("It was people.") deserve their own scene —
-   that is a feature, not a problem.
+A scene ends when the picture would have to change. Cut when any of these
+changes:
 
-4. Do NOT try to hit a scene-count target. Let the writing decide.
+  SUBJECT    the thing on screen becomes a different thing
+             "ocean -> submarine -> deep-sea creatures" = 3 scenes
 
-MEDIA TYPE
-- Use IMAGE for about 9 scenes in 10. Images auto-size to the narration, so they are
-  cheaper and safer.
-- Use VIDEO only where motion genuinely carries meaning: hands doing something, walking,
-  water, weather, a machine working, people laughing together. Never for a static concept.
+  ACTION     the same subject starts doing something meaningfully different
+             "rocket launches -> reaches orbit -> deploys satellite" = 3 scenes
 
-ALT / SEARCH QUERIES — THIS IS WHERE MOST SHEETS FAIL
-Stock libraries index literal, photographic descriptions. Write what a camera would see.
+  LOCATION   where we are changes
+             "Earth -> Moon -> Mars" = 3 scenes
 
-  GOOD  `alarm clock glowing in a dark bedroom at night, moody`
-  GOOD  `elderly woman teaching piano to a young student, warm room`
-  GOOD  `two older friends sitting together on a park bench talking`
-  BAD   `the passage of time`               → returns clip-art
-  BAD   `many clocks pattern`               → returns pink wallpaper
-  BAD   `feeling of loneliness`             → returns nothing usable
+  TIME       for history and biography, when the era moves
+             "childhood -> adulthood -> discovery -> legacy" = 4 scenes
 
-Rules for queries:
-- 5 to 12 words, English ALWAYS (even when the narration is in another language).
-- Name the subject, their approximate age, what they are doing, and the setting.
-- Add a lighting or mood word when it matters ("soft lamp light", "morning light").
-- No brand names, no text-in-image requests, no "concept of", no abstractions.
-- Subjects should mostly be 60-85 and look real, not like stock models.
-- Vary the shots. Never more than two similar framings in a row.
+  CONCEPT    for explanation, when the argument moves to its next step
+             "problem -> cause -> process -> result" = usually 3-4 scenes
 
-NOTE FIELD
-Short editor note, or "" if there is nothing to say. Use it to mark:
+If none of those change, DO NOT CUT — even at a full stop.
+
+────────────────────────────────────────────────────────────────────────
+DO NOT OVER-SPLIT: group things that share one picture
+────────────────────────────────────────────────────────────────────────
+A list of similar nouns is ONE visual idea, or at most a few:
+
+  "Apples, bananas, oranges, strawberries, blueberries, grapes, mangoes
+   and watermelons..."
+
+  WRONG  8 scenes, one per fruit
+  RIGHT  2-3 scenes, grouped into shots a camera could actually take
+         (a bowl of mixed fruit / berries close up / melons being cut)
+
+Two sentences describing the same picture from different angles are ONE scene.
+
+────────────────────────────────────────────────────────────────────────
+DO NOT UNDER-SPLIT: a long passage holding one still image is dead air
+────────────────────────────────────────────────────────────────────────
+Each scene gets ONE photo or ONE clip for its whole duration.
+
+  - Over ~28 words containing a second visual idea -> you MUST split it.
+  - Genuinely one idea but long -> prefer media "VIDEO". Motion holds
+    attention where a static photo dies.
+  - Under ~5 words is fine when it lands as a beat ("It was people.").
+
+Typical result: 6-25 words per scene. That is an OUTCOME of cutting on visual
+ideas, not a target to hit. Never pad or force a scene count.
+
+════════════════════════════════════════════════════════════════════════
+3. READ THE SCRIPT AND DECIDE WHAT KIND OF FILM THIS IS
+════════════════════════════════════════════════════════════════════════
+Before writing any query, work out the register from the writing itself. Do not
+assume — a space documentary and a health video need completely different
+pictures. Common registers:
+
+  PEOPLE-LED     health, ageing, relationships, personal habit, advice
+                 -> real people of the relevant age, doing ordinary things,
+                    domestic and natural settings
+  SUBJECT-LED    space, ocean, geology, weather, wildlife
+                 -> the phenomenon itself; no people unless the script has them
+  HISTORICAL     history, biography, archaeology
+                 -> period-appropriate places, objects, artefacts, landscapes,
+                    reenactment; be careful with named real individuals
+  TECHNICAL      engineering, computing, industry, medicine-as-science
+                 -> equipment, facilities, processes, close detail work
+  ABSTRACT       learning, memory, emotion, economics, time
+                 -> the hardest. Anchor to something filmable: a person doing
+                    the thing, or a concrete metaphor. Never film the noun.
+
+Infer the audience age and setting from the writing too. If the script speaks to
+older readers about their own bodies, show people of that age. If it explains
+tectonic plates, show no people at all.
+
+════════════════════════════════════════════════════════════════════════
+4. THE QUERY LADDER — THREE SEARCHES PER SCENE
+════════════════════════════════════════════════════════════════════════
+These queries are sent to free stock libraries (Pexels, Pixabay). They index
+LITERAL, PHOTOGRAPHIC descriptions of what is visible. They do not understand
+ideas, metaphors or feelings.
+
+Every scene needs three, in decreasing specificity. The pipeline tries `query`
+first and walks down until something returns:
+
+  query           the shot you actually want. Specific, filmable.
+  fallback_query  a looser version of the same idea. Drop the rarest element.
+  safety_query    plain, common footage that still fits the topic and will
+                  ALWAYS return results. This one must never come back empty.
+
+Worked examples:
+
+  Narration: "supermassive black holes quietly consume matter"
+    query           swirling accretion disk around a black hole in deep space
+    fallback_query  spiral galaxy slowly rotating against black starfield
+    safety_query    stars and nebula in deep space
+
+  Narration: "your muscles recover and your body releases important hormones"
+    query           person sleeping deeply in a dark bedroom, calm breathing
+    fallback_query  adult asleep in bed at night, soft light
+    safety_query    empty bed in a quiet dark bedroom
+
+  Narration: "engineers built aqueducts that carried fresh water"
+    query           roman stone aqueduct arches across a dry landscape
+    fallback_query  ancient stone arched bridge in sunlight
+    safety_query    old stone ruins in the countryside
+
+  Narration: "repeated practice strengthens those pathways"
+    query           person practising a musical instrument alone, concentrating
+    fallback_query  hands repeating a careful task at a desk
+    safety_query    student studying at a table
+
+RULES FOR ALL THREE QUERIES
+  - ENGLISH ALWAYS, even when the narration is German or Spanish. Stock
+    libraries index in English.
+  - 4 to 12 words. Longer returns nothing.
+  - Name what a CAMERA WOULD SEE: subject, what it is doing, where, and the
+    light if it matters.
+  - No abstractions, no "concept of", no feelings, no metaphors, no brand
+    names, no requests for text or logos in the image.
+  - Never name a real living person. For historical figures prefer the era,
+    place or object over the face.
+  - safety_query must be something free stock certainly has. When in doubt make
+    it a plain landscape, texture, sky, room or hands.
+
+  BAD   `the passage of time`          -> clip-art junk
+  BAD   `feeling of loneliness`        -> nothing usable
+  BAD   `neurons forming connections`  -> stylised nonsense
+  GOOD  `elderly hands holding a warm mug by a window`
+  GOOD  `waves breaking slowly on a dark rocky shore at dusk`
+
+════════════════════════════════════════════════════════════════════════
+5. DO NOT REPEAT YOURSELF
+════════════════════════════════════════════════════════════════════════
+Repeated footage is the clearest sign of a cheap video. Across the whole script:
+  - No two scenes may share a `query`.
+  - Avoid near-duplicates. Vary the subject, framing or setting, not just an
+    adjective. "man walking on beach" and "person walking on beach" count as
+    the same query.
+  - Never more than two similar framings in a row. Alternate wide and close.
+
+════════════════════════════════════════════════════════════════════════
+6. MEDIA TYPE
+════════════════════════════════════════════════════════════════════════
+  IMAGE  the default, roughly 8 scenes in 10. Photos auto-size to the narration.
+  VIDEO  only where motion carries the meaning, or where a long scene would
+         otherwise sit still: water, weather, fire, machinery, crowds, hands
+         working, walking, flying, launching, flowing.
+         Never for a static concept or a portrait.
+
+════════════════════════════════════════════════════════════════════════
+7. NOTE FIELD
+════════════════════════════════════════════════════════════════════════
+A short editor note, or "" when there is nothing to say. Use it for:
   "title card", "key beat", "core line", "subscribe beat", "share beat",
-  "next-episode tease", "disclaimer", "sign-off", or a recurring character's name.
+  "next-episode tease", "disclaimer", "sign-off", or a recurring character name.
 
-HERO FLAG — BE STINGY WITH THIS
-hero=true means "a human must personally check this picture before it ships". Its
-whole value is that it is RARE. Flagging half the scenes makes the flag useless.
+════════════════════════════════════════════════════════════════════════
+8. HERO FLAG — BE STINGY
+════════════════════════════════════════════════════════════════════════
+hero=true means "a person must check this picture before it ships". Its whole
+value is rarity. Flagging half the scenes makes it meaningless.
 
 Set hero=true ONLY for:
-- a recurring named character appearing (so the same face is cast every time)
-- an on-screen title card
-- the single emotional payoff line the video is built around
-- the medical disclaimer, and the final sign-off shot
+  - a recurring named character appearing (so the same face is cast each time)
+  - an on-screen title card
+  - the single emotional payoff the video is built around
+  - a medical or legal disclaimer, and the final sign-off shot
 
-Set hero=false for everything else, INCLUDING scenes that merely feel important,
-introduce a section, cite research, or state a fact. Those are ordinary scenes.
+Set hero=false for everything else, INCLUDING scenes that merely feel
+important, open a section, cite research or state a fact.
 
-Target: at most 1 scene in 6. In a 12-scene section that means 2 or fewer. If you
-have flagged more than that, go back and unflag the weakest ones.
+Target at most 1 scene in 6. If you have flagged more, unflag the weakest.
 """
 
 

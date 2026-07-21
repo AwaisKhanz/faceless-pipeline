@@ -153,6 +153,11 @@ def render_master(plan: dict, scenes: list[Scene], pid: str) -> str:
             add(f"**S{s.n} ⬜** · {s.media}{flag}")
             add(f"- Narration: \"{esc(s.narration)}\"")
             add(f"- ALT / search: `{s.query.strip().strip('`')}`")
+            fb = [q.strip().strip('`') for q in getattr(s, "fallbacks", []) if q.strip()]
+            if fb:
+                # Written on its own line so sheets from before the ladder
+                # existed stay valid — the parser treats it as optional.
+                add("- Fallbacks: " + " · ".join(f"`{q}`" for q in fb))
             add("")
 
     add("---")
@@ -270,6 +275,36 @@ def render_translation(plan: dict, scenes: list[Scene], lang: str,
 
 # ------------------------------------------------------------- orchestration
 
+def _flag_repeats(scenes, res) -> None:
+    """Warn when two scenes would search for the same thing.
+
+    The prompt forbids this, but a model will still do it occasionally, and
+    repeated footage is the most visible sign of an automated video. Warning
+    beats silently shipping it; the reviewer sees it on the approval sheet.
+
+    Comparison ignores word order and a handful of filler words, so
+    "man walking on the beach" and "a man walking on beach" are caught as the
+    duplicates they are.
+    """
+    FILLER = {"a", "an", "the", "of", "in", "on", "at", "with", "and", "to"}
+
+    def shape(q: str) -> frozenset:
+        return frozenset(w for w in re.findall(r"[a-z]+", q.lower())
+                         if w not in FILLER)
+
+    seen: dict[frozenset, int] = {}
+    for s in scenes:
+        key = shape(s.query)
+        if not key:
+            continue
+        if key in seen:
+            res.warnings.append(
+                f"S{s.n}: searches for the same thing as S{seen[key]} "
+                f"({s.query!r}) — swap one in the review step.")
+        else:
+            seen[key] = s.n
+
+
 def generate(script: str, pid: str, langs: list[str], key: str,
              model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
              on_warn=lambda *_: None) -> Result:
@@ -312,15 +347,30 @@ def generate(script: str, pid: str, langs: list[str], key: str,
 
     scenes = [Scene(n=i, narration=s.get("narration", ""),
                     media=(s.get("media") or "IMAGE").upper(),
-                    query=s.get("query", ""), note=s.get("note", "") or "",
+                    query=(s.get("query") or "").strip(),
+                    fallbacks=[q for q in ((s.get("fallback_query") or "").strip(),
+                                           (s.get("safety_query") or "").strip())
+                               if q],
+                    note=s.get("note", "") or "",
                     hero=bool(s.get("hero")))
               for i, s in enumerate(all_scenes, start=1)]
+
     for s in scenes:
         if s.media not in ("IMAGE", "VIDEO"):
             s.media = "IMAGE"
         if not s.query.strip():
-            s.query = "warm natural portrait of an older person, soft daylight"
-            res.warnings.append(f"S{s.n}: Gemini gave no search query — placeholder used.")
+            # Promote a fallback rather than inventing a placeholder: a looser
+            # query about the right subject beats a generic one about none.
+            if s.fallbacks:
+                s.query, s.fallbacks = s.fallbacks[0], s.fallbacks[1:]
+                res.warnings.append(
+                    f"S{s.n}: no primary query — used the fallback instead.")
+            else:
+                s.query = "calm natural scene, soft daylight"
+                res.warnings.append(
+                    f"S{s.n}: no search query at all — placeholder used, fix by hand.")
+
+    _flag_repeats(scenes, res)
     res.scenes = scenes
 
     # 3 — English YouTube package
