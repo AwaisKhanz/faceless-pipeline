@@ -14,6 +14,9 @@ class Scene:
     # simply does not have every shot you would want, and one query either hits
     # or ships junk; walking down a ladder keeps the scene on-topic instead.
     fallbacks: list[str] = field(default_factory=list)
+    # Which library to ask. The sources barely overlap (see lib/sources.py),
+    # so this is a routing decision, not a preference.
+    domain: str = ""
     en_narration: str = ""
     note: str = ""        # e.g. "title card", "Arthur intro"
     hero: bool = False    # flagged recurring-character / title-card scene
@@ -30,6 +33,7 @@ ALT_LOOSE_RE = re.compile(r"^-\s*ALT\s*/\s*search:\s*(.+?)\s*$")
 # Optional. Sheets written before the ladder existed have no such line, and
 # must keep parsing exactly as they did.
 FALLBACK_RE = re.compile(r"^-\s*Fallbacks?:\s*(.+?)\s*$")
+DOMAIN_RE = re.compile(r"^-\s*Domain:\s*([a-z]+)\s*$", re.I)
 
 # **S31** · EN: "..."   then next line   DE: "..."  / ES: "..."
 TR_KEY_RE = re.compile(r'^\*\*S(\d+)\*\*\s*·\s*EN:\s*"(.*)"\s*$')
@@ -53,7 +57,8 @@ def parse_master(path: Path) -> list[Scene]:
             tail = m.group(3) or ""
             cur = {"n": int(m.group(1)), "media": m.group(2),
                    "note": tail.replace("⚑", "").replace("*", "").strip(),
-                   "narration": "", "query": "", "fallbacks": []}
+                   "narration": "", "query": "", "fallbacks": [],
+                   "domain": ""}
             continue
         if cur is None:
             continue
@@ -64,6 +69,10 @@ def parse_master(path: Path) -> list[Scene]:
         m = ALT_RE.match(line)
         if m:
             cur["query"] = m.group(1).strip()
+            continue
+        m = DOMAIN_RE.match(line)
+        if m:
+            cur["domain"] = m.group(1).strip().lower()
             continue
         m = FALLBACK_RE.match(line)
         if m:
@@ -89,6 +98,7 @@ def _finish(d: dict) -> Scene:
     hero = any(h.lower() in note.lower() for h in HERO_HINTS)
     return Scene(n=d["n"], media=d["media"], narration=d["narration"],
                  query=d["query"], fallbacks=d.get("fallbacks") or [],
+                 domain=d.get("domain") or "",
                  en_narration=d["narration"], note=note, hero=hero)
 
 

@@ -233,7 +233,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Faceless video pipeline (command line)",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    ap.add_argument("step", choices=["studio", "doctor", "benchtts", "generate",
+    ap.add_argument("step", choices=["studio", "doctor", "sources", "benchtts",
+                                     "generate",
                                      "models", "stock", "voice", "render", "all",
                                      "voices", "list"])
     ap.add_argument("--no-browser", action="store_true",
@@ -261,6 +262,46 @@ def main() -> None:
         # Same thing Start.bat / Start.command do, without leaving the terminal.
         import studio
         studio.main(open_browser=not a.no_browser)
+        return
+
+    if a.step == "sources":
+        # I could not reach these APIs from where this was written, so nothing
+        # about them is assumed to work. This calls each one for real and says
+        # plainly what came back.
+        from lib import sources as SRC
+        cfg = pl.load_config()
+        have = SRC.usable(cfg)
+        banner("Picture sources")
+        print(f"  usable right now: {', '.join(sorted(have)) or 'none'}\n")
+
+        probes = [("nasa", "moon surface", "IMAGE"),
+                  ("nasa", "rocket launch", "VIDEO"),
+                  ("smithsonian", "butterfly specimen", "IMAGE")]
+        for name, q, media in probes:
+            src = SRC.REGISTRY.get(name)
+            if not src or not src.can(media):
+                continue
+            if name not in have:
+                print(f"  -- {name:<12} {media:<6} not configured")
+                continue
+            try:
+                hits = SRC.search(name, q, media, 3, cfg)
+            except Exception as e:
+                print(f"  !! {name:<12} {media:<6} {type(e).__name__}: {str(e)[:56]}")
+                continue
+            if not hits:
+                print(f"  !! {name:<12} {media:<6} reachable, but 0 results for {q!r}")
+                continue
+            print(f"  ok {name:<12} {media:<6} {len(hits)} hit(s) for {q!r}")
+            print(f"       {hits[0].license}")
+            print(f"       {hits[0].url[:82]}")
+
+        banner("Routing")
+        for dom in sorted(SRC.ROUTES):
+            print(f"  {dom:<10} IMAGE -> {SRC.route(dom, 'IMAGE', have)}")
+        print(f"\n  Sheets carry a 'Domain:' line per scene; blank routes to stock.")
+        print(f"  Only CC0 and public-domain material is accepted — nothing here")
+        print(f"  needs crediting or restricts commercial use.")
         return
 
     if a.step == "voices":

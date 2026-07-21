@@ -1,0 +1,23 @@
+{"response": {"rowCount": 3, "rows": [
+  {"id": "edanmdm-nmnh_0001",
+   "content": {"descriptiveNonRepeating": {"online_media": {"media": [
+        {"thumbnail": "https://ids.si.edu/ids/deliveryService?id=ark:/1/t1",
+         "content": "https://ids.si.edu/ids/deliveryService?id=ark:/1/full",
+         "guid": "http://n2t.net/ark:/65665/m30001",
+         "usage": {"access": "CC0"}}]}},
+     "freetext": {"dataSource": [{"content": "National Museum of Natural History"}]}}},
+  {"id": "edanmdm-restricted_0002",
+   "content": {"descriptiveNonRepeating": {"online_media": {"media": [
+        {"thumbnail": "https://ids.si.edu/ids/deliveryService?id=ark:/2/t1",
+         "content": "https://ids.si.edu/ids/deliveryService?id=ark:/2/full",
+         "guid": "http://n2t.net/ark:/65665/m30002",
+         "usage": {"access": "Usage conditions apply"}}]}},
+     "freetext": {"dataSource": [{"content": "Some restricted collection"}]}}},
+  {"id": "edanmdm-nmah_0003",
+   "content": {"descriptiveNonRepeating": {"online_media": {"media": [
+        {"thumbnail": "https://ids.si.edu/ids/deliveryService?id=ark:/3/t1",
+         "content": "https://ids.si.edu/ids/deliveryService?id=ark:/3/full.jpg",
+         "guid": "http://n2t.net/ark:/65665/m30003",
+         "usage": {"access": "CC0"}}]}},
+     "freetext": {"dataSource": [{"content": "National Museum of American History"}]}}}
+]}}

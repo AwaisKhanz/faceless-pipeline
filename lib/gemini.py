@@ -258,12 +258,14 @@ SCENES_SCHEMA = {
             "narration": {"type": "string"},
             "media": {"type": "string", "enum": ["IMAGE", "VIDEO"]},
             "query": {"type": "string"},
+            "domain": {"type": "string", "enum": ["space", "nature", "history",
+                       "art", "science", "tech", "people", "abstract"]},
             "fallback_query": {"type": "string"},
             "safety_query": {"type": "string"},
             "note": {"type": "string"},
             "hero": {"type": "boolean"},
         },
-        "required": ["narration", "media", "query", "fallback_query",
+        "required": ["narration", "media", "domain", "query", "fallback_query",
                      "safety_query", "note", "hero"]}}},
     "required": ["scenes"],
 }
@@ -387,6 +389,27 @@ pictures. Common registers:
 Infer the audience age and setting from the writing too. If the script speaks to
 older readers about their own bodies, show people of that age. If it explains
 tectonic plates, show no people at all.
+
+════════════════════════════════════════════════════════════════════════
+3b. TAG EACH SCENE WITH ITS SUBJECT DOMAIN
+
+`domain` decides WHICH LIBRARY is searched, so it must describe what the
+PICTURE shows — not what the script is about overall.
+
+  space     beyond Earth's atmosphere: planets, stars, spacecraft
+  nature    landscape, weather, oceans, animals, plants, geology
+  history   the past: artefacts, ruins, period scenes, old documents
+  art       paintings, sculpture, design, craft objects
+  science   laboratory, medical, diagrams, specimens, microscopy
+  tech      machines, computing, industry, engineering, construction
+  people    ANY modern human scene: home, family, work, health, daily life
+  abstract  none of the above, nothing concrete to film
+
+Choose `people` whenever the shot is a present-day person doing something,
+even inside a science or history video: a researcher at a bench today is
+`people`, a Victorian microscope is `history`. Museum and government archives
+hold no modern domestic life at all, so tagging such a scene anything else
+sends it to a library that cannot help.
 
 ════════════════════════════════════════════════════════════════════════
 4. THE QUERY LADDER — THREE SEARCHES PER SCENE

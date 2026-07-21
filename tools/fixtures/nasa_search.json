@@ -1,0 +1,19 @@
+{"collection": {"items": [
+  {"href": "https://images-assets.nasa.gov/image/PIA00001/collection.json",
+   "data": [{"center": "JPL", "title": "Lunar surface detail",
+             "nasa_id": "PIA00001", "media_type": "image",
+             "keywords": ["moon", "apollo"]}],
+   "links": [{"href": "https://images-assets.nasa.gov/image/PIA00001/PIA00001~thumb.jpg",
+              "rel": "preview", "render": "image"}]},
+  {"href": "https://images-assets.nasa.gov/image/GETTY99/collection.json",
+   "data": [{"center": "HQ", "title": "Third party photo",
+             "nasa_id": "GETTY99", "media_type": "image",
+             "photographer": "Getty Images", "keywords": ["copyright"]}],
+   "links": [{"href": "https://images-assets.nasa.gov/image/GETTY99/GETTY99~thumb.jpg",
+              "rel": "preview", "render": "image"}]},
+  {"href": "https://images-assets.nasa.gov/image/PIA00002/collection.json",
+   "data": [{"center": "GSFC", "title": "Earth from orbit",
+             "nasa_id": "PIA00002", "media_type": "image"}],
+   "links": [{"href": "https://images-assets.nasa.gov/image/PIA00002/PIA00002~thumb.jpg",
+              "rel": "preview", "render": "image"}]}
+]}}

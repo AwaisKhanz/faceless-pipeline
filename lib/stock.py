@@ -16,6 +16,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from . import sources as _SRC
+
 UA = {"User-Agent": "faceless-pipeline/1.0"}
 TIMEOUT = 30
 
@@ -37,8 +39,12 @@ def _get(url: str, headers: dict | None = None) -> bytes:
     raise StockError("unreachable")
 
 
-def _slug(q: str, media: str, idx: int) -> str:
-    h = hashlib.sha1(f"{q}|{media}|{idx}".encode("utf-8")).hexdigest()[:14]
+def _slug(q: str, media: str, idx: int, sources: list[str] | None = None) -> str:
+    # The source order is part of the identity: the same query routed to NASA
+    # and to Pexels are different searches, and sharing a cache entry would
+    # hand back whichever ran first.
+    tag = ",".join(sources or [])
+    h = hashlib.sha1(f"{q}|{media}|{idx}|{tag}".encode("utf-8")).hexdigest()[:14]
     safe = "".join(c if c.isalnum() else "-" for c in q.lower())[:44].strip("-")
     return f"{safe}_{media}_{idx}_{h}"
 
@@ -103,14 +109,15 @@ def _pixabay(query: str, media: str, key: str, want: int) -> list[dict]:
 # ---------------------------------------------------------------------- fetch
 
 def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
-          pixabay_key: str | None, index: int = 0) -> dict:
+          pixabay_key: str | None, index: int = 0,
+          sources: list[str] | None = None, cfg: dict | None = None) -> dict:
     """Return {path, credit, page, src} for the `index`-th match of `query`.
 
     index=0 is the top match; bump it to pull an alternate take when a pick is
     rejected on the approval sheet.
     """
     cache.mkdir(parents=True, exist_ok=True)
-    slug = _slug(query, media, index)
+    slug = _slug(query, media, index, sources)
     meta_p = cache / f"{slug}.json"
     if meta_p.exists():
         meta = json.loads(meta_p.read_text(encoding="utf-8"))
@@ -119,16 +126,25 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
 
     results: list[dict] = []
     errors: list[str] = []
-    if pexels_key:
+
+    # `sources` is the routed order for this scene. Without it we behave
+    # exactly as before, so every existing caller is unaffected.
+    order = sources or ["pexels", "pixabay"]
+    for name in order:
+        if len(results) > index:
+            break
         try:
-            results = _pexels(query, media, pexels_key, index + 3)
-        except StockError as e:
-            errors.append(f"pexels: {e}")
-    if len(results) <= index and pixabay_key:
-        try:
-            results += _pixabay(query, media, pixabay_key, index + 3)
-        except StockError as e:
-            errors.append(f"pixabay: {e}")
+            if name == "pexels" and pexels_key:
+                results += _pexels(query, media, pexels_key, index + 3)
+            elif name == "pixabay" and pixabay_key:
+                results += _pixabay(query, media, pixabay_key, index + 3)
+            elif name in _SRC.REGISTRY:
+                results += [
+                    {"url": h.url, "ext": h.ext, "credit": h.credit,
+                     "page": h.page, "src": h.src, "license": h.license}
+                    for h in _SRC.search(name, query, media, index + 3, cfg or {})]
+        except Exception as e:
+            errors.append(f"{name}: {e}")
 
     if len(results) <= index:
         raise StockError(
@@ -140,13 +156,16 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     dest = cache / f"{slug}{hit['ext']}"
     dest.write_bytes(_get(hit["url"]))
     meta = {"path": str(dest), "credit": hit["credit"], "page": hit["page"],
-            "src": hit["src"], "query": query, "media": media, "index": index}
+            "src": hit["src"], "license": hit.get("license", ""),
+            "query": query, "media": media, "index": index}
     meta_p.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
 
 
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
-              picks: dict[int, int] | None = None, log=print) -> dict[int, dict]:
+              picks: dict[int, int] | None = None, log=print,
+              cfg: dict | None = None, already: dict | None = None,
+              on_progress=None) -> dict[int, dict]:
     """Fetch a visual for every scene. Failures are reported, not fatal.
 
     Two things happen here beyond a plain search.
@@ -162,12 +181,20 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     skipped, taking the next match down instead.
     """
     picks = picks or {}
+    cfg = cfg or {}
+    have = _SRC.usable({**cfg, "pexels_key": pexels_key, "pixabay_key": pixabay_key})
     out, failed = {}, []
-    used: set[str] = set()          # asset paths already spent in this video
+    # Assets already assigned on a previous run count as used too, or a
+    # re-source of three scenes would happily pick something on screen
+    # elsewhere in the same video.
+    used: set[str] = {a.get("path") for a in (already or {}).values() if a.get("path")}
 
-    for s in scenes:
+    for i, s in enumerate(scenes):
+        if on_progress:
+            on_progress(i + 1, len(scenes), f"S{s.n} {s.media.lower()}")
         base = picks.get(s.n, 0)
         ladder = [q for q in [s.query, *getattr(s, "fallbacks", [])] if q]
+        route = _SRC.route(getattr(s, "domain", ""), s.media, have)
         got = None
         notes: list[str] = []
 
@@ -177,7 +204,7 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             for bump in range(4):
                 try:
                     hit = fetch(query, s.media, cache, pexels_key, pixabay_key,
-                                base + bump)
+                                base + bump, sources=route, cfg=cfg)
                 except StockError as e:
                     if bump == 0:
                         notes.append(f"{query[:34]!r}: {e}")
@@ -201,7 +228,7 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         # The last note is the useful one ("fell back to ..."); earlier
         # entries are just the queries that missed on the way down.
         tail = f"  ({notes[-1]})" if notes else ""
-        log(f"  S{s.n:>3} {s.media:<5} {got['src']:<8} {got['query'][:44]}{tail}")
+        log(f"  S{s.n:>3} {s.media:<5} {got['src']:<11} {got['query'][:40]}{tail}")
 
     if failed:
         log(f"\n{len(failed)} scene(s) had no usable match: "

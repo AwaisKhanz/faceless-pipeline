@@ -154,6 +154,8 @@ def render_master(plan: dict, scenes: list[Scene], pid: str) -> str:
             add(f"- Narration: \"{esc(s.narration)}\"")
             add(f"- ALT / search: `{s.query.strip().strip('`')}`")
             fb = [q.strip().strip('`') for q in getattr(s, "fallbacks", []) if q.strip()]
+            if getattr(s, "domain", ""):
+                add(f"- Domain: {s.domain}")
             if fb:
                 # Written on its own line so sheets from before the ladder
                 # existed stay valid — the parser treats it as optional.
@@ -348,6 +350,7 @@ def generate(script: str, pid: str, langs: list[str], key: str,
     scenes = [Scene(n=i, narration=s.get("narration", ""),
                     media=(s.get("media") or "IMAGE").upper(),
                     query=(s.get("query") or "").strip(),
+                    domain=(s.get("domain") or "").strip().lower(),
                     fallbacks=[q for q in ((s.get("fallback_query") or "").strip(),
                                            (s.get("safety_query") or "").strip())
                                if q],

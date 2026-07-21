@@ -337,14 +337,17 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
         assets = {int(k): v for k, v in json.loads(p["assets"].read_text(encoding="utf-8")).items()}
 
     todo = [s for s in scenes if redo is None or s.n in redo or s.n not in assets]
-    for i, s in enumerate(todo):
-        try:
-            assets[s.n] = stock.fetch(s.query, s.media, p["stockcache"],
-                                      cfg.get("pexels_key"), cfg.get("pixabay_key"),
-                                      picks.get(s.n, 0))
-            on_progress(i + 1, len(todo), f"S{s.n} {s.media.lower()} sourced")
-        except stock.StockError as e:
-            on_progress(i + 1, len(todo), f"S{s.n} no match — {e}")
+
+    # Delegated rather than reimplemented. stock.fetch_all owns the query
+    # ladder, the routing to NASA/Smithsonian/stock, and the refusal to reuse
+    # a clip already on screen — and this used to call stock.fetch directly,
+    # which quietly meant none of that ran.
+    keep = {n: a for n, a in assets.items() if n not in {s.n for s in todo}}
+    fresh = stock.fetch_all(
+        todo, p["stockcache"], cfg.get("pexels_key"), cfg.get("pixabay_key"),
+        picks=picks, log=lambda m: None, cfg=cfg, already=keep,
+        on_progress=on_progress)
+    assets.update(fresh)
 
     p["assets"].write_text(
         json.dumps({str(k): v for k, v in assets.items()}, indent=2),
