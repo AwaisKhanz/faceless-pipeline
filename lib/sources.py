@@ -204,6 +204,129 @@ def smithsonian(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     return out
 
 
+# ────────────────────────────────────────────────── Openverse (no key needed)
+# One API in front of many providers — Flickr, museums, government archives.
+#
+# license=cc0,pdm is doing the important work. Openverse can also filter by
+# license_type=commercial, but "commercial" still includes BY (attribution
+# required) and BY-SA (share-alike), and this project accepts neither. Asking
+# for the two unencumbered licences by name is narrower and unambiguous.
+#
+# Openverse is also the only source so far that reports width and height at
+# search time, so the size floor can be applied before anything is downloaded.
+
+def openverse(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media == "VIDEO":
+        raise SourceError("Openverse indexes images and audio, not video")
+
+    qs = urllib.parse.urlencode({
+        "q": query,
+        "page_size": min(max(want * 3, 10), 40),
+        "license": "cc0,pdm",         # CC0 and Public Domain Mark only
+        "size": "large",
+        "aspect_ratio": "wide",       # 16:9 timeline; portrait scans waste it
+        "mature": "false",
+    })
+    headers = {}
+    if cfg.get("openverse_token"):
+        # Optional. Anonymous access works but is rate-limited more tightly.
+        headers["Authorization"] = f"Bearer {cfg['openverse_token']}"
+
+    data = _json(f"https://api.openverse.org/v1/images/?{qs}", headers)
+    out: list[Hit] = []
+
+    for r in (data.get("results") or []):
+        lic = (r.get("license") or "").lower()
+        if lic not in ("cc0", "pdm"):
+            continue                   # belt and braces over the filter above
+        url = r.get("url") or ""
+        if not url:
+            continue
+        w = int(r.get("width") or 0)
+        if w and w < MIN_WIDTH:
+            continue                   # known too small: do not even download
+        out.append(Hit(
+            url=_https(url), ext=_ext(url), src="openverse",
+            credit=r.get("creator") or r.get("source") or "Openverse",
+            page=r.get("foreign_landing_url") or r.get("detail_url") or "",
+            width=w, height=int(r.get("height") or 0),
+            license=f"{lic.upper()} via Openverse"))
+        if len(out) >= want:
+            break
+    return out
+
+
+# ─────────────────────────────────────────── Wikimedia Commons (no key needed)
+# The largest of the archives, and the one most likely to be misused.
+#
+# Commons is NOT uniformly free. It is full of CC BY-SA, whose share-alike
+# clause can be read as reaching the whole video it appears in, and CC BY,
+# which obliges visible credit. Only files whose own metadata says public
+# domain or CC0 are kept — everything else is dropped, however good it looks.
+#
+# The licence lives in imageinfo's extmetadata, so this asks for it in the same
+# request as the image URL rather than making a second round trip per file.
+
+_PD_OK = re.compile(r"\b(cc0|public\s*domain|pd-|pdm)\b", re.I)
+_NOT_OK = re.compile(r"\b(share\s*-?\s*alike|by-sa|non\s*-?\s*commercial|"
+                     r"by-nc|nd\b|no\s*derivatives|fair\s*use|copyright)\b", re.I)
+
+
+def wikimedia(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media == "VIDEO":
+        # Commons does hold video, but almost all of it is webm/ogv that needs
+        # transcoding, and the free-licensed slice is thin. Not worth the cost.
+        raise SourceError("Wikimedia video is not supported")
+
+    qs = urllib.parse.urlencode({
+        "action": "query", "format": "json", "formatversion": "2",
+        "generator": "search",
+        "gsrsearch": f"filetype:bitmap {query}",
+        "gsrnamespace": "6",           # File: namespace
+        "gsrlimit": min(max(want * 4, 12), 50),
+        "prop": "imageinfo",
+        "iiprop": "url|size|extmetadata",
+        "iiurlwidth": "1920",          # ask for a scaled rendition, not the original
+    })
+    data = _json(f"https://commons.wikimedia.org/w/api.php?{qs}")
+    out: list[Hit] = []
+
+    for page in ((data.get("query") or {}).get("pages") or []):
+        info = (page.get("imageinfo") or [{}])[0]
+        meta = info.get("extmetadata") or {}
+
+        def field(name: str) -> str:
+            return str((meta.get(name) or {}).get("value", ""))
+
+        blob = " ".join(field(k) for k in
+                        ("License", "LicenseShortName", "UsageTerms",
+                         "Copyrighted", "Permission"))
+        if _NOT_OK.search(blob) or not _PD_OK.search(blob):
+            continue                   # anything not plainly PD/CC0 is dropped
+
+        url = info.get("thumburl") or info.get("url") or ""
+        if not url:
+            continue
+        w = int(info.get("thumbwidth") or info.get("width") or 0)
+        if w and w < MIN_WIDTH:
+            continue
+
+        # Artist is HTML in Commons metadata; the credit is informational here
+        # since PD and CC0 require none, so a rough strip is enough.
+        artist = re.sub(r"<[^>]+>", "", field("Artist")).strip()
+        out.append(Hit(
+            url=_https(url), ext=_ext(url), src="wikimedia",
+            credit=artist[:80] or "Wikimedia Commons",
+            page=info.get("descriptionurl", ""),
+            width=w, height=int(info.get("thumbheight") or info.get("height") or 0),
+            license=(field("LicenseShortName") or "public domain") + " (Commons)"))
+        if len(out) >= want:
+            break
+    return out
+
+
+# ─────────────────────────────────────────────── registry
+
 # ══════════════════════════════════════════════ topics, coverage, routing
 #
 # An earlier version had eight hardcoded domains and a route table keyed on
@@ -345,7 +468,21 @@ REGISTRY: dict[str, Source] = {
         "smithsonian", smithsonian, media=("IMAGE",),
         covers=frozenset({"history", "art", "science", "nature", "culture",
                           "transport", "geology"}),
+        # api.data.gov accepts DEMO_KEY at a low rate limit, so this is usable
+        # with no configuration; a free key just raises the ceiling.
         note="objects, specimens, artefacts, artworks. All CC0."),
+
+    "openverse": Source(
+        "openverse", openverse, media=("IMAGE",),
+        covers=frozenset({"art", "history", "nature", "science", "culture",
+                          "geology", "ocean", "transport"}),
+        note="many providers behind one API. CC0 and Public Domain Mark only."),
+
+    "wikimedia": Source(
+        "wikimedia", wikimedia, media=("IMAGE",),
+        covers=frozenset({"history", "art", "science", "nature", "geology",
+                          "culture", "transport", "ocean", "space"}),
+        note="the largest archive. Only its public-domain and CC0 files are used."),
 
     # Stock sites are generalists: shallow on everything, and the only place
     # with modern life and modern motion. They are always a valid last resort,
@@ -419,3 +556,32 @@ def explain(domain: str, media: str, available: set, query: str = "") -> str:
     r = route(domain, media, available, query)
     topic_s = ", ".join(sorted(found)) or "no recognised topic"
     return f"{topic_s} -> {r}"
+
+
+def usable(cfg: dict) -> set:
+    """Sources that are configured and callable right now.
+
+    A source needing a key it does not have is simply not offered, so a
+    half-configured install degrades to "fewer places to look" rather than an
+    error mid-run. Several of these need no key at all, which is why the
+    pipeline still finds pictures with an empty config.json.
+    """
+    ok = set()
+    for name, src in REGISTRY.items():
+        if src.needs_key:
+            if cfg.get(src.needs_key):
+                ok.add(name)
+        else:
+            ok.add(name)
+    return ok
+
+
+def search(name: str, query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    """Ask one source. Raises SourceError; the caller moves on to the next."""
+    src = REGISTRY.get(name)
+    if src is None or src.search is None:
+        raise SourceError(f"no such source: {name}")
+    hits = src.search(query, media, want, cfg) or []
+    # Second pass for sources that DO report dimensions. The ones that do not
+    # are caught after download, in stock.fetch.
+    return [h for h in hits if not h.width or h.width >= MIN_WIDTH]

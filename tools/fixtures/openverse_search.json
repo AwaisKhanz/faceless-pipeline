@@ -1,0 +1,18 @@
+{"result_count": 4, "results": [
+  {"id":"a1","title":"Roman aqueduct","url":"https://example.org/aqueduct_full.jpg",
+   "thumbnail":"https://example.org/aqueduct_thumb.jpg","creator":"Anon",
+   "license":"cc0","license_version":"1.0","width":2400,"height":1350,
+   "source":"museum","foreign_landing_url":"https://museum.example/1"},
+  {"id":"a2","title":"Attribution required photo","url":"https://example.org/by.jpg",
+   "creator":"Someone","license":"by","license_version":"4.0",
+   "width":3000,"height":2000,"foreign_landing_url":"https://x/2"},
+  {"id":"a3","title":"Share alike photo","url":"https://example.org/bysa.jpg",
+   "creator":"Someone","license":"by-sa","license_version":"4.0",
+   "width":3000,"height":2000,"foreign_landing_url":"https://x/3"},
+  {"id":"a4","title":"Tiny public domain scan","url":"https://example.org/tiny.jpg",
+   "creator":"Archive","license":"pdm","license_version":"1.0",
+   "width":420,"height":300,"foreign_landing_url":"https://x/4"},
+  {"id":"a5","title":"Good public domain mark","url":"https://example.org/pdm_big.jpg",
+   "creator":"Archive","license":"pdm","license_version":"1.0",
+   "width":1920,"height":1080,"foreign_landing_url":"https://x/5"}
+]}

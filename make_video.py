@@ -276,7 +276,9 @@ def main() -> None:
 
         probes = [("nasa", "moon surface", "IMAGE"),
                   ("nasa", "rocket launch", "VIDEO"),
-                  ("smithsonian", "butterfly specimen", "IMAGE")]
+                  ("smithsonian", "butterfly specimen", "IMAGE"),
+                  ("openverse", "roman aqueduct", "IMAGE"),
+                  ("wikimedia", "roman aqueduct", "IMAGE")]
         for name, q, media in probes:
             src = SRC.REGISTRY.get(name)
             if not src or not src.can(media):
@@ -307,6 +309,8 @@ def main() -> None:
                        ("sport", "runners crossing a finish line"),
                        ("(anything unknown)", "wibble flurb")):
             print(f"  {dom:<20}{SRC.explain(dom, 'IMAGE', have, q)}")
+        print(f"\n  Routing is frozen by tools/test_routing.py — run that after")
+        print(f"  changing the vocabulary. It is offline and free.")
         print(f"\n  Sheets carry a 'Domain:' line per scene; blank routes to stock.")
         print(f"  Only CC0 and public-domain material is accepted — nothing here")
         print(f"  needs crediting or restricts commercial use.")

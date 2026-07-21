@@ -1,0 +1,51 @@
+{"query": {"pages": [
+  {"pageid":1,"title":"File:Aqueduct.jpg","imageinfo":[{
+     "url":"https://upload.wikimedia.org/a/aqueduct.jpg",
+     "thumburl":"https://upload.wikimedia.org/thumb/a/aqueduct.jpg/1920px.jpg",
+     "thumbwidth":1920,"thumbheight":1080,"width":4000,"height":2250,
+     "descriptionurl":"https://commons.wikimedia.org/wiki/File:Aqueduct.jpg",
+     "extmetadata":{
+       "License":{"value":"pd"},
+       "LicenseShortName":{"value":"Public domain"},
+       "UsageTerms":{"value":"Public domain"},
+       "Artist":{"value":"<a href=\"/wiki/User:X\">Old Photographer</a>"}}}]},
+  {"pageid":2,"title":"File:ShareAlike.jpg","imageinfo":[{
+     "url":"https://upload.wikimedia.org/b/sa.jpg",
+     "thumburl":"https://upload.wikimedia.org/thumb/b/sa.jpg/1920px.jpg",
+     "thumbwidth":1920,"thumbheight":1080,
+     "descriptionurl":"https://commons.wikimedia.org/wiki/File:ShareAlike.jpg",
+     "extmetadata":{
+       "License":{"value":"cc-by-sa-4.0"},
+       "LicenseShortName":{"value":"CC BY-SA 4.0"},
+       "UsageTerms":{"value":"Creative Commons Attribution-Share Alike 4.0"},
+       "Artist":{"value":"Modern Photographer"}}}]},
+  {"pageid":3,"title":"File:CC0.jpg","imageinfo":[{
+     "url":"https://upload.wikimedia.org/c/cc0.jpg",
+     "thumburl":"https://upload.wikimedia.org/thumb/c/cc0.jpg/1920px.jpg",
+     "thumbwidth":1600,"thumbheight":900,
+     "descriptionurl":"https://commons.wikimedia.org/wiki/File:CC0.jpg",
+     "extmetadata":{
+       "License":{"value":"cc0"},
+       "LicenseShortName":{"value":"CC0"},
+       "UsageTerms":{"value":"Creative Commons Zero, Public Domain Dedication"},
+       "Artist":{"value":"Donor"}}}]},
+  {"pageid":4,"title":"File:TinyPD.jpg","imageinfo":[{
+     "url":"https://upload.wikimedia.org/d/tiny.jpg",
+     "thumburl":"https://upload.wikimedia.org/thumb/d/tiny.jpg/600px.jpg",
+     "thumbwidth":600,"thumbheight":400,
+     "descriptionurl":"https://commons.wikimedia.org/wiki/File:TinyPD.jpg",
+     "extmetadata":{
+       "License":{"value":"pd"},
+       "LicenseShortName":{"value":"Public domain"},
+       "Artist":{"value":"Someone"}}}]},
+  {"pageid":5,"title":"File:NonCommercial.jpg","imageinfo":[{
+     "url":"https://upload.wikimedia.org/e/nc.jpg",
+     "thumburl":"https://upload.wikimedia.org/thumb/e/nc.jpg/1920px.jpg",
+     "thumbwidth":1920,
+     "descriptionurl":"https://commons.wikimedia.org/wiki/File:NonCommercial.jpg",
+     "extmetadata":{
+       "License":{"value":"cc-by-nc-2.0"},
+       "LicenseShortName":{"value":"CC BY-NC 2.0"},
+       "UsageTerms":{"value":"Creative Commons Attribution-NonCommercial"},
+       "Artist":{"value":"Photographer"}}}]}
+]}}

@@ -102,6 +102,37 @@ def main() -> int:
         bad += not passed
         print(f"    {'ok' if passed else '!!'}  {label}")
 
+    # ── the module's own surface ───────────────────────────────────────────
+    # A section replacement once deleted usable() and search() while every
+    # routing case still passed, because none of them call those. stock.py
+    # calls both, so sourcing would have crashed at runtime. Check they exist.
+    print("\n  module surface (stock.py depends on all of these):")
+    for name in ("route", "explain", "usable", "search", "topics_in",
+                 "REGISTRY", "TOPICS", "MAX_SOURCES", "MIN_WIDTH"):
+        present = hasattr(S, name)
+        bad += not present
+        print(f"    {'ok' if present else '!!'}  sources.{name}")
+
+    print("\n  every registered source is well-formed:")
+    for name, src in sorted(S.REGISTRY.items()):
+        problems = []
+        if src.media not in (("IMAGE",), ("IMAGE", "VIDEO"), ("VIDEO",)):
+            problems.append(f"odd media {src.media}")
+        if src.search is None and name not in ("pexels", "pixabay"):
+            problems.append("no search function")
+        if not src.covers and not src.generalist:
+            problems.append("covers nothing and is not a generalist")
+        if not src.note:
+            problems.append("undocumented")
+        bad += bool(problems)
+        detail = "; ".join(problems) or f"{len(src.covers)} topics, {'/'.join(src.media)}"
+        print(f"    {'ok' if not problems else '!!'}  {name:<14}{detail}")
+
+    print("\n  no-key install still finds pictures:")
+    bare = S.usable({})
+    bad += not bare
+    print(f"    {'ok' if bare else '!!'}  {sorted(bare)}")
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
