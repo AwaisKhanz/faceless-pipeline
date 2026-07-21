@@ -45,12 +45,12 @@ html[data-theme="light"]{
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{background:var(--bg);color:var(--ink);
-  font:14px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+  font:16.5px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
   -webkit-font-smoothing:antialiased}
 a{color:inherit;text-decoration:none}
 button,input,select,textarea{font:inherit;color:inherit}
 h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.01em}
-h1{font-size:22px}
+h1{font-size:26px}
 .mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 
 /* ─── layout ─────────────────────────────────────────────────────────────── */
@@ -59,50 +59,50 @@ h1{font-size:22px}
   position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
 .brand{display:flex;align-items:center;gap:9px;padding:2px 8px 16px}
 .dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;
-  place-items:center;color:var(--accent-ink);font-weight:800;font-size:12px}
-.brand b{font-size:14.5px;letter-spacing:-.02em}
+  place-items:center;color:var(--accent-ink);font-weight:800;font-size:14.2px}
+.brand b{font-size:17.1px;letter-spacing:-.02em}
 .nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
-  color:var(--ink2);cursor:pointer;border:1px solid transparent;font-size:13.5px}
+  color:var(--ink2);cursor:pointer;border:1px solid transparent;font-size:15.9px}
 .nav:hover{background:var(--panel2);color:var(--ink)}
 .nav.on{background:var(--panel2);color:var(--ink);border-color:var(--line)}
-.nav .ico{width:16px;text-align:center;opacity:.85;font-size:13px}
-.badge{margin-left:auto;font-size:11px;background:var(--accent);color:var(--accent-ink);
+.nav .ico{width:16px;text-align:center;opacity:.85;font-size:15.3px}
+.badge{margin-left:auto;font-size:13px;background:var(--accent);color:var(--accent-ink);
   padding:1px 6px;border-radius:99px;font-weight:700;font-variant-numeric:tabular-nums}
 .side .foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:8px}
-.main{padding:26px 30px 60px;max-width:1180px;width:100%}
+.main{padding:26px 30px 60px;max-width:1560px;width:100%}
 .head{display:flex;align-items:flex-start;gap:14px;margin-bottom:20px;flex-wrap:wrap}
 .head .grow{flex:1;min-width:200px}
-.head p{margin:4px 0 0;color:var(--ink2);font-size:13px}
-.back{cursor:pointer;color:var(--ink3);font-size:12.5px}
+.head p{margin:4px 0 0;color:var(--ink2);font-size:15.3px}
+.back{cursor:pointer;color:var(--ink3);font-size:14.8px}
 .back:hover{color:var(--ink)}
 
 /* ─── controls ───────────────────────────────────────────────────────────── */
 .btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
-  padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:550;
+  padding:8px 14px;border-radius:8px;cursor:pointer;font-size:15.3px;font-weight:550;
   transition:.12s;white-space:nowrap}
 .btn:hover:not(:disabled){border-color:var(--ink3)}
 .btn:disabled{opacity:.42;cursor:not-allowed}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:650}
 .btn.primary:hover:not(:disabled){filter:brightness(1.08)}
-.btn.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+.btn.sm{padding:5px 10px;font-size:14.2px;border-radius:7px}
 .btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
 input[type=text],select,textarea{background:var(--bg);border:1px solid var(--line);
   border-radius:8px;padding:8px 10px;width:100%}
 input:focus,select:focus,textarea:focus{
   outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:-1px}
-label.chk{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--ink2)}
+label.chk{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:15.3px;color:var(--ink2)}
 label.chk input{accent-color:var(--accent)}
 
 /* ─── cards ──────────────────────────────────────────────────────────────── */
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
-.card h3{font-size:14.5px;margin-bottom:2px}
-.sub{color:var(--ink3);font-size:12px}
+.card h3{font-size:17.1px;margin-bottom:2px}
+.sub{color:var(--ink3);font-size:14.2px}
 .card.click{cursor:pointer;transition:.13s}
 .card.click:hover{border-color:var(--ink3);transform:translateY(-1px);box-shadow:var(--shadow)}
 
 /* ─── status ─────────────────────────────────────────────────────────────── */
-.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:650;
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:650;
   padding:2px 8px;border-radius:99px;border:1px solid}
 .pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 34%,transparent);
   background:color-mix(in srgb,var(--ok) 11%,transparent)}
@@ -113,22 +113,22 @@ label.chk input{accent-color:var(--accent)}
   background:color-mix(in srgb,var(--bad) 11%,transparent)}
 .langrow{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
 .langrow:first-of-type{border-top:0}
-.lang{width:30px;font-weight:700;font-size:11.5px;color:var(--ink2);text-transform:uppercase}
+.lang{width:30px;font-weight:700;font-size:13.6px;color:var(--ink2);text-transform:uppercase}
 .steps{display:flex;gap:4px;flex:1}
 .step{flex:1;height:5px;border-radius:3px;background:var(--panel2)}
 .step.done{background:var(--ok)}
 .step.part{background:linear-gradient(90deg,var(--warn) var(--p,50%),var(--panel2) var(--p,50%))}
 .steplabels{display:flex;gap:4px;margin-top:3px}
-.steplabels span{flex:1;font-size:9.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
+.steplabels span{flex:1;font-size:11.2px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
 
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+table{width:100%;border-collapse:collapse;font-size:15.3px}
+th{text-align:left;font-size:13px;text-transform:uppercase;letter-spacing:.05em;
   color:var(--ink3);font-weight:650;padding:0 10px 8px}
 td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
 
 /* ─── terminal ───────────────────────────────────────────────────────────── */
 .term{background:var(--term-bg);border:1px solid var(--line);border-radius:var(--r);
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14.2px;
   line-height:1.65;padding:12px 14px;height:400px;overflow:auto;color:var(--term-ink)}
 .term .ln{display:flex;gap:10px;white-space:pre-wrap;word-break:break-word}
 .term .ts{color:#4b5563;flex:none;-webkit-user-select:none;user-select:none}
@@ -143,16 +143,16 @@ td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
   background:var(--line);border:1px solid var(--line);border-radius:var(--r);
   overflow:hidden;margin-top:14px}
 .stat{background:var(--panel);padding:12px 14px}
-.stat b{display:block;font-size:20px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.stat span{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
+.stat b{display:block;font-size:23.6px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat span{font-size:13px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
 
 /* ─── misc ───────────────────────────────────────────────────────────────── */
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .empty{text-align:center;padding:56px 20px;color:var(--ink2)}
-.empty b{display:block;font-size:15px;color:var(--ink);margin-bottom:6px}
+.empty b{display:block;font-size:17.7px;color:var(--ink);margin-bottom:6px}
 .sec{margin-bottom:11px;display:flex;align-items:center;gap:10px}
-.sec h2{font-size:15px}
+.sec h2{font-size:17.7px}
 .hr{height:1px;background:var(--line);margin:22px 0}
 .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:9px}
 .thumb{position:relative;aspect-ratio:16/9;border-radius:7px;overflow:hidden;
@@ -161,26 +161,26 @@ td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
 .thumb.rej{border-color:var(--bad);opacity:.45}
 .thumb.hero{border-color:var(--accent)}
 .thumb .n{position:absolute;left:0;top:0;background:rgba(0,0,0,.72);color:#fff;
-  font-size:10px;padding:1px 5px;border-radius:0 0 5px 0;font-weight:700}
+  font-size:11.8px;padding:1px 5px;border-radius:0 0 5px 0;font-weight:700}
 #banner{position:sticky;top:0;z-index:30;margin:-26px -30px 20px;padding:11px 30px;
   background:color-mix(in srgb,var(--accent) 14%,var(--panel));
   border-bottom:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));
-  display:flex;align-items:center;gap:12px;font-size:13px}
+  display:flex;align-items:center;gap:12px;font-size:15.3px}
 #banner.err{background:color-mix(in srgb,var(--bad) 14%,var(--panel));
   border-bottom-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
 #banner .bar{flex:1;max-width:220px}
 .toast{position:fixed;right:18px;bottom:18px;background:var(--panel);border:1px solid var(--line);
   border-left:3px solid var(--accent);padding:11px 15px;border-radius:9px;
-  box-shadow:var(--shadow);z-index:50;max-width:340px;font-size:13px}
+  box-shadow:var(--shadow);z-index:50;max-width:340px;font-size:15.3px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;
   z-index:60;padding:20px}
 .modal .box{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
   padding:20px;max-width:520px;width:100%;box-shadow:var(--shadow)}
-.modal h3{font-size:16px;margin-bottom:6px}
+.modal h3{font-size:18.9px;margin-bottom:6px}
 .dgroup{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
 .dgroup:first-of-type{border-top:0}
 .dgroup .what{flex:1}
-.dgroup .what b{font-size:13px}
+.dgroup .what b{font-size:15.3px}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--ink3);
   border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -436,7 +436,7 @@ async function viewProject(id) {
           }, 'choose a voice')));
     }
     return el('div', {},
-      el('b', { style: 'font-size:12.5px' }, l.voice_label),
+      el('b', { style: 'font-size:14.8px' }, l.voice_label),
       el('div', { class: 'sub', style: 'margin-top:2px' },
         el('span', {
           style: 'color:var(--accent);cursor:pointer',
@@ -459,7 +459,7 @@ async function viewProject(id) {
             : el('span', { class: 'pill none' },
               l.voice_ref ? 'none yet' : 'no voice set')),
         el('td', {}, l.render
-          ? el('div', {}, el('div', { class: 'mono', style: 'font-size:12px' }, l.mp4),
+          ? el('div', {}, el('div', { class: 'mono', style: 'font-size:14.2px' }, l.mp4),
             el('div', { class: 'sub' }, `${l.size_mb} MB · ${ago(l.built)}`))
           : el('span', { class: 'sub' }, '—')),
         el('td', { style: 'text-align:right' },
@@ -515,7 +515,7 @@ function viewRun() {
   v.append(el('div', { class: 'card', id: 'runCard' }));
   v.append(el('div', { style: 'margin-top:18px' },
     el('div', { class: 'termbar' },
-      el('h2', { style: 'font-size:14px;flex:1' }, 'Output'),
+      el('h2', { style: 'font-size:16.5px;flex:1' }, 'Output'),
       el('label', { class: 'chk' },
         el('input', { type: 'checkbox', checked: follow, onchange: e => follow = e.target.checked }),
         'Follow'),
@@ -548,7 +548,10 @@ function paintRun() {
         : j.stage === 'approve' ? 'Visuals ready to review.' : 'Nothing running.';
 
   card.innerHTML = '';
-  card.append(
+  // Native .append() — unlike the el() helper — turns a null argument into the
+  // literal text "null". With an error showing but no steps and no outputs, the
+  // two trailing nulls rendered as "nullnull" under the stats. Filter them out.
+  card.append(...[
     el('div', { class: 'row', style: 'margin-bottom:10px' },
       busy ? el('span', { class: 'spin' }) : null,
       el('b', {}, busy ? (j.label || j.stage)
@@ -580,7 +583,8 @@ function paintRun() {
       el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Finished files'),
       el('div', { class: 'row' }, j.outputs.map(o => el('button', {
         class: 'btn sm', onclick: () => playVideo(o.name)
-      }, `${o.name} · ${o.size_mb} MB`)))) : null);
+      }, `${o.name} · ${o.size_mb} MB`)))) : null,
+  ].filter(Boolean));
 
   const t = $('#term'); if (!t) return;
   const near = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
@@ -612,7 +616,7 @@ function viewNew() {
   const id = el('input', { type: 'text', placeholder: 'video06' });
   const script = el('textarea', {
     rows: 16, placeholder: 'Paste the whole script here…',
-    style: 'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px'
+    style: 'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14.8px'
   });
   const langs = { en: true, de: true, es: true };
   v.append(el('div', { class: 'card' },
@@ -738,7 +742,7 @@ async function viewVoices(lang) {
     v.append(el('div', { class: 'empty card' },
       el('b', {}, `No clips for ${d.lang_name} yet`),
       el('div', {}, 'Put one or more audio files in this folder, then reload:'),
-      el('div', { class: 'mono', style: 'margin:10px 0;font-size:13px;color:var(--accent)' },
+      el('div', { class: 'mono', style: 'margin:10px 0;font-size:15.3px;color:var(--accent)' },
         d.folder + '/'),
       el('div', { class: 'sub' },
         'Thirty seconds of clean, continuous speech clones far better than ten. '
