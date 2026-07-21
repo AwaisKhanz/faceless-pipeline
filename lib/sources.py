@@ -31,6 +31,7 @@ WHO DECIDES WHAT
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -72,6 +73,8 @@ class Source:
     search: object                    # (query, media, want, cfg) -> list[Hit]
     media: tuple = ("IMAGE",)         # what it can serve
     needs_key: str = ""               # config.json key, "" when none needed
+    covers: frozenset = frozenset()   # canonical topics this source is strong on
+    generalist: bool = False          # shallow on everything, never useless
     note: str = ""
 
     def can(self, media: str) -> bool:
@@ -201,89 +204,218 @@ def smithsonian(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     return out
 
 
-# ─────────────────────────────────────────────── registry + capability table
+# ══════════════════════════════════════════════ topics, coverage, routing
+#
+# An earlier version had eight hardcoded domains and a route table keyed on
+# them. That does not scale: real scripts are about sport, food, medicine,
+# farming, war, architecture, mythology, shipping, insects — and a closed list
+# only ever helps if each entry routes DIFFERENTLY. Adding forty more values
+# that all resolve to "ask stock" would be noise pretending to be capability.
+#
+# So routing is data-driven instead:
+#
+#   TOPICS   an open vocabulary. Many surface words map onto one canonical
+#            topic, so "astrophysics", "cosmos", "orbit" and "nebula" all
+#            resolve to `space` without the model needing to guess our spelling.
+#
+#   covers   each Source declares the topics it is genuinely strong on.
+#            Adding a new archive later means declaring what it holds — no
+#            central table to edit and no risk of forgetting a row.
+#
+#   route()  scores each available source against the topics found in BOTH the
+#            domain tag and the query text, and returns the best few. The query
+#            matters as much as the tag: "roman aqueduct at sunset" says
+#            "historical" whatever the scene was labelled.
+
+# Canonical topic -> the words that mean it. Extend freely; this is just data.
+TOPICS: dict[str, frozenset] = {
+    "space": frozenset("""space astronomy astronomical cosmos cosmic universe galaxy
+        galaxies star stars stellar nebula planet planetary moon lunar solar sun
+        orbit orbital spacecraft satellite rocket launch astronaut telescope mars
+        jupiter saturn venus mercury comet asteroid meteor eclipse constellation
+        blackhole supernova interstellar nasa apollo shuttle""".split()),
+
+    "geology": frozenset("""geology geological tectonic volcano volcanic
+        earthquake seismic mountain mountains canyon glacier ice arctic antarctic
+        desert erosion mineral rock rocks crust mantle lava magma fossil
+        continent island landscape terrain sediment strata quarry mine
+        mining excavation drilling""".split()),
+
+    "weather": frozenset("""weather storm rain snow cloud clouds lightning thunder
+        hurricane tornado wind fog mist frost drought flood monsoon sky
+        sunrise sunset season seasonal""".split()),
+
+    "ocean": frozenset("""ocean sea marine underwater reef coral wave waves tide
+        coast coastal shore beach submarine deepsea diving fish whale dolphin
+        shark plankton current estuary harbour harbor""".split()),
+
+    "nature": frozenset("""nature natural wildlife animal animals bird birds
+        insect insects butterfly bee forest tree trees plant plants flower
+        flowers leaf jungle savanna meadow river lake waterfall wilderness
+        ecosystem habitat migration species mammal reptile""".split()),
+
+    "history": frozenset("""history historical ancient antiquity medieval
+        renaissance victorian empire roman rome greek greece egypt egyptian
+        pharaoh viking colonial revolution civilisation civilization archaeology
+        archaeological artefact artifact ruin ruins monument castle temple
+        manuscript century dynasty war battle soldier army treaty""".split()),
+
+    "art": frozenset("""art artistic painting paint portrait sculpture statue
+        museum gallery drawing illustration engraving fresco mosaic ceramic
+        pottery textile craft design architecture architectural cathedral""".split()),
+
+    "science": frozenset("""science scientific laboratory lab experiment research
+        microscope specimen molecule atom atomic chemistry chemical physics
+        biology biological cell dna genetic evolution bacteria virus
+        skeleton fossil dinosaur botany zoology taxonomy""".split()),
+
+    # Split from science on purpose. A modern hospital is a stock subject; a
+    # Victorian surgical kit is a museum one, and reaches the archives through
+    # `history` instead.
+    "medicine": frozenset("""medicine medical health healthcare hospital clinic
+        surgery surgeon surgical doctor nurse patient diagnosis clinical
+        treatment therapy anatomy organ neuron brain heart blood bone muscle
+        pharmacy medication prescription stethoscope""".split()),
+
+    "tech": frozenset("""technology computer computing software hardware machine
+        machinery engineering engineer industrial industry factory robot robotic
+        electronics circuit server data network internet code programming
+        manufacturing construction crane welding assembly mining mine quarry
+        drilling refinery pipeline warehouse logistics energy power turbine
+        solar wind nuclear electricity grid""".split()),
+
+    "transport": frozenset("""transport train railway locomotive car automobile
+        truck lorry bus aircraft aeroplane airplane aviation flight ship boat
+        sailing port bridge road highway traffic bicycle motorcycle""".split()),
+
+    "people": frozenset("""people person man woman child children family home
+        house kitchen bedroom living room work office worker student teacher
+        doctor patient nurse elderly senior retirement friend friends couple
+        neighbour neighbor community daily routine habit sleep exercise walking
+        cooking eating meal conversation hands smile portrait lifestyle""".split()),
+
+    "food": frozenset("""food cooking kitchen meal recipe ingredient vegetable
+        fruit bread meat fish rice grain spice farm farming agriculture crop
+        harvest field orchard livestock cattle dairy market restaurant chef""".split()),
+
+    "sport": frozenset("""sport sports athlete athletic running runner swimming
+        cycling football soccer basketball tennis golf gym fitness training
+        stadium race marathon yoga stretching""".split()),
+
+    "money": frozenset("""money finance financial economy economic business trade
+        market bank banking currency coin investment stock commerce shop retail
+        commercial office meeting corporate""".split()),
+
+    "culture": frozenset("""culture cultural religion religious church mosque
+        temple ritual ceremony festival tradition myth mythology legend folklore
+        music musical instrument dance theatre theater book library reading
+        writing language school education classroom""".split()),
+}
+
+# Reverse index, built once: surface word -> canonical topic.
+_WORD2TOPIC: dict[str, str] = {
+    w: topic for topic, words in TOPICS.items() for w in words
+}
+
+
+def topics_in(*texts: str) -> set:
+    """Canonical topics mentioned anywhere in the given text.
+
+    Deliberately generous: a scene tagged `astronomy` whose query mentions a
+    telescope should reach NASA on either signal alone.
+    """
+    found = set()
+    for t in texts:
+        for w in re.findall(r"[a-z]+", (t or "").lower()):
+            topic = _WORD2TOPIC.get(w) or _WORD2TOPIC.get(w.rstrip("s"))
+            if topic:
+                found.add(topic)
+    return found
+
+
+# ─────────────────────────────────────────────────────────────── registry
 
 REGISTRY: dict[str, Source] = {
-    "nasa": Source("nasa", nasa, media=("IMAGE", "VIDEO"),
-                   note="space, Earth science, aeronautics. Public domain."),
-    "smithsonian": Source("smithsonian", smithsonian, media=("IMAGE",),
-                          needs_key="smithsonian_key",
-                          note="objects, specimens, artefacts, history. All CC0."),
+    "nasa": Source(
+        "nasa", nasa, media=("IMAGE", "VIDEO"),
+        covers=frozenset({"space"}),
+        note="space, Earth observation, aeronautics. Public domain."),
+
+    "smithsonian": Source(
+        "smithsonian", smithsonian, media=("IMAGE",),
+        covers=frozenset({"history", "art", "science", "nature", "culture",
+                          "transport", "geology"}),
+        note="objects, specimens, artefacts, artworks. All CC0."),
+
+    # Stock sites are generalists: shallow on everything, and the only place
+    # with modern life and modern motion. They are always a valid last resort,
+    # which is what `generalist` means here.
+    "pexels": Source("pexels", None, media=("IMAGE", "VIDEO"),
+                     needs_key="pexels_key", generalist=True,
+                     covers=frozenset({"people", "food", "sport", "money", "tech",
+                                       "transport", "nature", "weather", "medicine"}),
+                     note="modern life, modern motion. The only source for either."),
+
+    "pixabay": Source("pixabay", None, media=("IMAGE", "VIDEO"),
+                      needs_key="pixabay_key", generalist=True,
+                      covers=frozenset({"people", "food", "sport", "money", "tech",
+                                        "transport", "nature", "weather", "medicine"}),
+                      note="second generalist, different catalogue to Pexels."),
 }
 
-# Subject domains a scene can be tagged with, and who to ask, in order.
-#
-# The rule behind every row: ask the archive that actually holds this material
-# FIRST, and fall through to stock only when the topic is one stock covers.
-# "people" has no archive at all — no free archive has modern domestic life —
-# so it goes straight to stock, which is not a compromise but the correct
-# answer for that subject.
-ROUTES: dict[str, tuple] = {
-    "space":    ("nasa", "pexels", "pixabay"),
-    "nature":   ("smithsonian", "pexels", "pixabay"),
-    "history":  ("smithsonian", "pexels", "pixabay"),
-    "art":      ("smithsonian", "pexels", "pixabay"),
-    "science":  ("smithsonian", "nasa", "pexels"),
-    "tech":     ("pexels", "pixabay"),
-    "people":   ("pexels", "pixabay"),
-    "abstract": ("pexels", "pixabay"),
-}
-DEFAULT_ROUTE = ("pexels", "pixabay")
+# Topics where an archive is genuinely better than stock, so it should be asked
+# FIRST. Everything else starts with stock, because for modern subjects the
+# archives simply have nothing and asking them wastes a request.
+ARCHIVE_FIRST = frozenset({"space", "history", "art", "science", "geology",
+                           "culture", "ocean", "nature"})
 
-# Never ask more than this many sources for one scene. Three rungs of the query
-# ladder times eight sources would be 24 requests per scene; at 115 scenes that
-# is a sourcing run measured in hours.
+# Never ask more than this many sources for one scene. Three ladder rungs times
+# eight sources would be 24 requests per scene; at 115 scenes that is a sourcing
+# run measured in hours.
 MAX_SOURCES = 3
 
 
-def route(domain: str, media: str, available: set) -> list[str]:
-    """Which sources to ask for this scene, in order.
+def route(domain: str, media: str, available: set, query: str = "") -> list[str]:
+    """Which sources to ask for this scene, best first.
 
-    `available` is the set of source names usable right now — a source whose
-    key is missing simply is not offered, so a half-configured install degrades
-    to "fewer places to look" rather than an error.
+    `available` is the set usable right now, so a source whose key is missing
+    is simply not offered and a half-configured install degrades to "fewer
+    places to look" rather than an error.
     """
-    order = ROUTES.get((domain or "").strip().lower(), DEFAULT_ROUTE)
+    found = topics_in(domain, query)
 
-    # Motion overrides subject. Archives are stills; asking them for video
-    # burns a request to learn something already known.
-    if media == "VIDEO":
-        order = tuple(n for n in ("pexels", "pixabay", *order) if n)
-
-    seen, out = set(), []
-    for name in order:
-        if name in seen or name not in available:
-            continue
+    scored: list[tuple] = []
+    for name in available:
         src = REGISTRY.get(name)
-        if src and not src.can(media):
-            continue                     # declared incapable, skip silently
-        seen.add(name)
-        out.append(name)
-        if len(out) >= MAX_SOURCES:
-            break
-    return out
+        if src is None or not src.can(media):
+            continue                       # declared incapable: never asked
+
+        overlap = len(found & src.covers)
+        score = overlap * 10.0
+
+        # A generalist is never a strong match but is never useless either,
+        # which is exactly the tie-break behaviour wanted at the bottom.
+        if src.generalist:
+            score += 3.0
+            # Modern subjects: stock is not a fallback, it is the right answer.
+            if not (found & ARCHIVE_FIRST):
+                score += 8.0
+
+        # Motion overrides subject entirely. No free archive holds modern 16:9
+        # video, so a VIDEO scene starts with stock whatever it is about.
+        if media == "VIDEO" and src.generalist:
+            score += 20.0
+
+        if score > 0:
+            scored.append((score, name))
+
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [n for _, n in scored[:MAX_SOURCES]]
 
 
-def usable(cfg: dict) -> set:
-    """Sources that are configured and can be called right now."""
-    ok = set()
-    for name, src in REGISTRY.items():
-        if not src.needs_key or cfg.get(src.needs_key):
-            ok.add(name)
-        elif name == "smithsonian":
-            ok.add(name)                 # DEMO_KEY works, just rate-limited
-    if cfg.get("pexels_key"):
-        ok.add("pexels")
-    if cfg.get("pixabay_key"):
-        ok.add("pixabay")
-    return ok
-
-
-def search(name: str, query: str, media: str, want: int, cfg: dict) -> list[Hit]:
-    """Ask one source. Raises SourceError; callers move on to the next."""
-    src = REGISTRY.get(name)
-    if src is None:
-        raise SourceError(f"no such source: {name}")
-    hits = src.search(query, media, want, cfg) or []
-    # A picture too small to fill a 1080p frame is not a usable result.
-    return [h for h in hits if not h.width or h.width >= MIN_WIDTH]
+def explain(domain: str, media: str, available: set, query: str = "") -> str:
+    """Human-readable reason for a route, for `faceless sources` and debugging."""
+    found = topics_in(domain, query)
+    r = route(domain, media, available, query)
+    topic_s = ", ".join(sorted(found)) or "no recognised topic"
+    return f"{topic_s} -> {r}"

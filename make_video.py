@@ -297,8 +297,16 @@ def main() -> None:
             print(f"       {hits[0].url[:82]}")
 
         banner("Routing")
-        for dom in sorted(SRC.ROUTES):
-            print(f"  {dom:<10} IMAGE -> {SRC.route(dom, 'IMAGE', have)}")
+        print(f"  {len(SRC.TOPICS)} topics, {len(SRC._WORD2TOPIC)} words recognised.")
+        print(f"  Scene tags are free text — anything sensible works.\n")
+        for dom, q in (("astrophysics", "spiral galaxy in deep space"),
+                       ("ancient rome", "stone aqueduct arches"),
+                       ("dinosaurs", "fossil skeleton in a museum"),
+                       ("modern medicine", "surgeon in an operating room"),
+                       ("daily life", "older woman making tea at home"),
+                       ("sport", "runners crossing a finish line"),
+                       ("(anything unknown)", "wibble flurb")):
+            print(f"  {dom:<20}{SRC.explain(dom, 'IMAGE', have, q)}")
         print(f"\n  Sheets carry a 'Domain:' line per scene; blank routes to stock.")
         print(f"  Only CC0 and public-domain material is accepted — nothing here")
         print(f"  needs crediting or restricts commercial use.")

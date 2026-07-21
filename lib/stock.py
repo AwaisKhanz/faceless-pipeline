@@ -221,7 +221,10 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             on_progress(i + 1, len(scenes), f"S{s.n} {s.media.lower()}")
         base = picks.get(s.n, 0)
         ladder = [q for q in [s.query, *getattr(s, "fallbacks", [])] if q]
-        route = _SRC.route(getattr(s, "domain", ""), s.media, have)
+        # The query text is as strong a signal as the tag: "roman aqueduct"
+        # says historical whatever the scene was labelled.
+        route = _SRC.route(getattr(s, "domain", ""), s.media, have,
+                           query=" ".join(ladder))
         got = None
         notes: list[str] = []
 

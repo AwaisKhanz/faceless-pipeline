@@ -258,8 +258,7 @@ SCENES_SCHEMA = {
             "narration": {"type": "string"},
             "media": {"type": "string", "enum": ["IMAGE", "VIDEO"]},
             "query": {"type": "string"},
-            "domain": {"type": "string", "enum": ["space", "nature", "history",
-                       "art", "science", "tech", "people", "abstract"]},
+            "domain": {"type": "string"},
             "fallback_query": {"type": "string"},
             "safety_query": {"type": "string"},
             "note": {"type": "string"},
@@ -391,27 +390,28 @@ older readers about their own bodies, show people of that age. If it explains
 tectonic plates, show no people at all.
 
 ════════════════════════════════════════════════════════════════════════
-3b. TAG EACH SCENE WITH ITS SUBJECT DOMAIN
-
+3b. TAG EACH SCENE WITH ITS SUBJECT
+════════════════════════════════════════════════════════════════════════
 `domain` decides WHICH LIBRARY is searched, so it must describe what the
 PICTURE shows — not what the script is about overall.
 
-  space     beyond Earth's atmosphere: planets, stars, spacecraft
-  nature    landscape, weather, oceans, animals, plants, geology
-  history   the past: artefacts, ruins, period scenes, old documents
-  art       paintings, sculpture, design, craft objects
-  science   laboratory, medical, diagrams, specimens, microscopy
-  tech      machines, computing, industry, engineering, construction
-  people    ANY modern human scene: home, family, work, health, daily life
-  abstract  none of the above, nothing concrete to film
+Write one or two plain words. There is NO fixed list: use whatever actually
+names the subject — astronomy, farming, surgery, shipping, mythology,
+metalwork, insects, banking, monsoon, pottery. The pipeline maps your words
+onto the libraries it has, and an unfamiliar word is handled gracefully, so
+be accurate rather than trying to guess an approved category.
 
-Choose `people` whenever the shot is a present-day person doing something,
-even inside a science or history video: a researcher at a bench today is
-`people`, a Victorian microscope is `history`. Museum and government archives
-hold no modern domestic life at all, so tagging such a scene anything else
-sends it to a library that cannot help.
+The one distinction that genuinely matters is MODERN versus HISTORICAL,
+because it decides between a stock library and a museum archive:
 
-════════════════════════════════════════════════════════════════════════
+  modern life        a present-day person, home, workplace, hospital, street
+                     -> say `people`, `daily life`, `modern medicine`, `office`
+  the past           artefacts, ruins, period scenes, old instruments
+                     -> say `history`, `ancient rome`, `victorian`, `archaeology`
+
+A researcher at a bench today is modern. A Victorian microscope is historical.
+The same video will often contain both, and they must be tagged differently.
+
 4. THE QUERY LADDER — THREE SEARCHES PER SCENE
 ════════════════════════════════════════════════════════════════════════
 These queries are sent to free stock libraries (Pexels, Pixabay). They index
