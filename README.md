@@ -182,6 +182,22 @@ Your browser opens to the panel. Leave the terminal open while you work; press C
 it when you're finished. `faceless start --no-browser` if you'd rather open the page
 yourself.
 
+The panel has four sections, and each is a real page — Back and Forward work, and any
+view can be bookmarked or reloaded:
+
+| | |
+|---|---|
+| **Dashboard** | every project, with a four-step bar per language: sheets, visuals, voice, render. Tells you at a glance what is done and what isn't. |
+| **Project** | one video. Source or review visuals; voice, re-voice, render or re-render any single language without redoing the rest. |
+| **Activity** | live terminal with timestamps, plus exact counts — scene *n* of *N*, elapsed, estimated remaining, seconds per item, and a per-step breakdown once each finishes. |
+| **Voices / Settings** | audition reference clips and choose one per language; check the machine, GPU, keys and finished files. |
+
+There's a light/dark toggle at the bottom of the sidebar; the choice is remembered.
+
+Status is **derived from what's on disk**, never stored. Delete an MP4 or clear a cache by
+hand and the dashboard tells the truth on the next refresh — it can't claim something
+exists when it doesn't.
+
 `faceless` is installed by the setup script as a normal console command — the same
 mechanism behind `npm start` or `git`. It works from any folder inside the project, as
 long as the `.venv` is active.
@@ -585,6 +601,8 @@ studio.py           the control panel
 make_video.py       command-line equivalent
 lib/                the pipeline itself
 lib/console.py      keeps output readable on Windows consoles
+lib/ui.html         the whole interface, one file, no build step
+tools/check_ui.mjs  renders every view headlessly to catch breakage
 cli.py              the `faceless` command
 pyproject.toml      declares that command (deliberately no dependencies)
 

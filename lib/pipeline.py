@@ -86,6 +86,72 @@ def find_projects(sheets_dir: Path) -> list[dict]:
     return out
 
 
+def project_status(sheet: Path, langs: list[dict]) -> dict:
+    """Which steps are finished, per language, judged from what's on disk.
+
+    Deliberately derived rather than stored. A status file would drift the
+    moment anyone deleted an MP4 or cleared a cache by hand — this way the
+    dashboard can never claim something exists when it doesn't.
+
+    Per language, four steps:
+        sheets   the narration text exists (always true for en; needs a
+                 translation file otherwise)
+        visuals  stock footage has been sourced and assigned to scenes
+        voice    every scene has a cached narration file
+        render   the finished MP4 is on disk
+    """
+    pid = project_id(sheet)
+    p_shared = paths_for(sheet, "en")
+    n_scenes = 0
+    try:
+        n_scenes = len(sheetlib.parse_master(sheet))
+    except Exception:
+        pass
+
+    # Visuals are shared across languages — sourced once, reused everywhere.
+    assets_n = 0
+    if p_shared["assets"].exists():
+        try:
+            assets_n = len(json.loads(
+                p_shared["assets"].read_text(encoding="utf-8")))
+        except Exception:
+            assets_n = 0
+
+    out = {"scenes": n_scenes, "assets": assets_n, "languages": {}}
+    for lg in langs:
+        code = lg["code"]
+        pl_ = paths_for(sheet, code)
+        mp4 = pl_["out"]
+
+        # Count cached narration for this language. The cache key includes the
+        # reference clip and settings, so this counts only files that the
+        # CURRENT voice choice would produce.
+        voiced = 0
+        try:
+            scenes = load_scenes(sheet, code,
+                                 translation_for(sheet.parent, pid, code))
+            vp = tts.voice_paths(scenes, code, p_shared['voicecache'])
+            voiced = sum(1 for v in vp
+                         if v.exists() and v.stat().st_size > 1024)
+        except Exception:
+            scenes = []
+
+        out["languages"][code] = {
+            "name": lg.get("name", code),
+            "sheets": bool(lg.get("file")) or code == "en",
+            "visuals": assets_n > 0 and assets_n >= n_scenes,
+            "visuals_n": assets_n,
+            "voice_n": voiced,
+            "voice": n_scenes > 0 and voiced >= n_scenes,
+            "render": mp4.exists(),
+            "mp4": mp4.name if mp4.exists() else None,
+            "size_mb": round(mp4.stat().st_size / 1e6, 1) if mp4.exists() else None,
+            "built": int(mp4.stat().st_mtime) if mp4.exists() else None,
+            "srt": pl_["srt"].name if pl_["srt"].exists() else None,
+        }
+    return out
+
+
 def translation_for(sheets_dir: Path, pid: str, lang: str) -> Path | None:
     if lang == "en":
         return None

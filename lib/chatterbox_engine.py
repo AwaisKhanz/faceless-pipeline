@@ -199,6 +199,9 @@ def prepare_reference(src: Path, out: Path | None = None) -> Path:
         raise ChatterboxError(f"Reference clip not found: {src}")
     out = out or (REFS / f"{src.stem}_prepared.wav")
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Already prepared and still newer than the source? Nothing to redo.
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out
     r = subprocess.run(
         ["ffmpeg", "-y", "-i", str(src),
          "-af", "silenceremove=start_periods=1:start_silence=0.1:start_threshold=-45dB,"
@@ -351,6 +354,25 @@ def synth_one(text: str, ref_wav: Path, lang: str, out: Path,
         # After the tensor is on disk nothing needs it on the GPU any more.
         del wav
         _free_device_memory()
+
+
+def prepared_name(reference: str) -> str:
+    """What prepare_reference() will call its output, without running ffmpeg."""
+    return f"{Path(reference).stem}_prepared.wav"
+
+
+def expected_paths(scenes, lang: str, reference: str, cache: Path = CACHE,
+                   opts: dict | None = None) -> list[Path]:
+    """Where each scene's audio WOULD be cached, generating nothing.
+
+    Must stay in step with synth() below — same key, same filename. Used by the
+    dashboard to report how much of a language is already voiced without
+    loading a 3 GB model to find out.
+    """
+    o = {**DEFAULTS, **(opts or {})}
+    ref_name = prepared_name(reference)
+    return [cache / f"cb_{lang}_{s.n:03d}_{_key(s.narration, ref_name, lang, o)}.wav"
+            for s in scenes]
 
 
 def synth(scenes, lang: str, ref_wav: Path, cache: Path = CACHE,

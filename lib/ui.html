@@ -1,592 +1,852 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>Faceless Studio</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Faceless Studio</title>
+<!--
+  The whole interface, in one file. No build step, no bundler, no node_modules —
+  `faceless start` serves this directly.
+
+  Views are switched by the URL hash, so Back/Forward work and any view can be
+  bookmarked or reloaded:
+
+     #/dashboard        every project, with per-language status
+     #/project/<id>     one project: visuals, per-language steps, actions
+     #/review/<id>      click the pictures that don't fit
+     #/run              live terminal, exact counts, elapsed and remaining
+     #/new              paste a script, generate sheets
+     #/voices[/<lang>]  audition and choose reference clips
+     #/settings         machine check, keys, finished files
+
+  One poll loop drives the whole app (900ms). It repaints the run view only when
+  that view is open, but always keeps the sidebar badge current so you can walk
+  away from a long build and still see it moving.
+-->
 <style>
-:root{--bg:#0f1115;--panel:#171a21;--line:#252a34;--txt:#e9ecf1;--dim:#9aa3b2;
-      --blue:#3b82f6;--green:#22c55e;--red:#ef4444;--gold:#d29922}
+/* ─── design tokens ──────────────────────────────────────────────────────── */
+:root{
+  --bg:#0f1115; --panel:#16181d; --panel2:#1c1f26; --line:#272b34;
+  --ink:#e6e8ec; --ink2:#9aa1ad; --ink3:#6b7280;
+  --accent:#f5a524; --accent-ink:#1a1204;
+  --ok:#22c55e; --warn:#f5a524; --bad:#ef4444;
+  --term-bg:#0b0d11; --term-ink:#c8d0dc;
+  --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+  --r:10px;
+}
+html[data-theme="light"]{
+  --bg:#f6f7f9; --panel:#fff; --panel2:#f2f4f7; --line:#e3e7ed;
+  --ink:#141821; --ink2:#5b6371; --ink3:#8b93a1;
+  --accent:#b45309; --accent-ink:#fff;
+  --ok:#15803d; --warn:#b45309; --bad:#b91c1c;
+  --term-bg:#12151b; --term-ink:#d6dce6;
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 8px 24px rgba(16,24,40,.06);
+}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--txt);
-  font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-header{padding:22px 28px;border-bottom:1px solid var(--line);display:flex;
-  align-items:center;gap:14px}
-header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:-.2px}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--green)}
-.wrap{max-width:1180px;margin:0 auto;padding:28px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-  padding:22px 24px;margin-bottom:18px}
-.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);
-  margin:0 0 16px;font-weight:650}
-label{display:block;font-size:13px;color:var(--dim);margin:0 0 6px}
-select,input[type=text]{width:100%;background:#0e1013;color:var(--txt);
-  border:1px solid var(--line);border-radius:8px;padding:11px 12px;font-size:15px}
-.row{display:flex;gap:18px;flex-wrap:wrap}
-.row>*{flex:1;min-width:220px}
-.checks{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
-.chk{display:flex;align-items:center;gap:9px;background:#0e1013;border:1px solid var(--line);
-  border-radius:8px;padding:10px 14px;cursor:pointer;user-select:none;font-size:14px}
-.chk input{accent-color:var(--blue);width:16px;height:16px;margin:0}
-.chk.on{border-color:var(--blue);background:#11203c}
-button{background:var(--blue);color:#fff;border:0;border-radius:8px;padding:12px 22px;
-  font-size:15px;font-weight:620;cursor:pointer}
-button:disabled{opacity:.42;cursor:not-allowed}
-button.ghost{background:#242a35}
-button.go{background:var(--green)}
-.bar{height:8px;background:#0e1013;border-radius:99px;overflow:hidden;margin:14px 0 8px}
-.bar i{display:block;height:100%;background:var(--blue);width:0;transition:width .35s}
-.stat{display:flex;justify-content:space-between;font-size:13px;color:var(--dim)}
-pre.log{background:#0b0d10;border:1px solid var(--line);border-radius:8px;padding:14px;
-  max-height:190px;overflow:auto;font:12px/1.6 ui-monospace,Menlo,monospace;
-  color:#8b96a8;margin:14px 0 0;white-space:pre-wrap}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
-.tile{background:#12151b;border:2px solid var(--line);border-radius:10px;overflow:hidden;
-  cursor:pointer;transition:border-color .12s,transform .12s}
-.tile:hover{border-color:#4a5464;transform:translateY(-1px)}
-.tile.redo{border-color:var(--red);background:#26161a}
-.tile.hero{border-color:var(--gold)}
-.tile.hero.redo{border-color:var(--red)}
-.thumb{position:relative;aspect-ratio:16/9;background:#000}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);
+  font:14px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+  -webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button,input,select,textarea{font:inherit;color:inherit}
+h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.01em}
+h1{font-size:22px}
+.mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* ─── layout ─────────────────────────────────────────────────────────────── */
+.app{display:grid;grid-template-columns:224px 1fr;min-height:100vh}
+.side{background:var(--panel);border-right:1px solid var(--line);padding:18px 12px;
+  position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
+.brand{display:flex;align-items:center;gap:9px;padding:2px 8px 16px}
+.dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;
+  place-items:center;color:var(--accent-ink);font-weight:800;font-size:12px}
+.brand b{font-size:14.5px;letter-spacing:-.02em}
+.nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+  color:var(--ink2);cursor:pointer;border:1px solid transparent;font-size:13.5px}
+.nav:hover{background:var(--panel2);color:var(--ink)}
+.nav.on{background:var(--panel2);color:var(--ink);border-color:var(--line)}
+.nav .ico{width:16px;text-align:center;opacity:.85;font-size:13px}
+.badge{margin-left:auto;font-size:11px;background:var(--accent);color:var(--accent-ink);
+  padding:1px 6px;border-radius:99px;font-weight:700;font-variant-numeric:tabular-nums}
+.side .foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:8px}
+.main{padding:26px 30px 60px;max-width:1180px;width:100%}
+.head{display:flex;align-items:flex-start;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+.head .grow{flex:1;min-width:200px}
+.head p{margin:4px 0 0;color:var(--ink2);font-size:13px}
+.back{cursor:pointer;color:var(--ink3);font-size:12.5px}
+.back:hover{color:var(--ink)}
+
+/* ─── controls ───────────────────────────────────────────────────────────── */
+.btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+  padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:550;
+  transition:.12s;white-space:nowrap}
+.btn:hover:not(:disabled){border-color:var(--ink3)}
+.btn:disabled{opacity:.42;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:650}
+.btn.primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+.btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
+input[type=text],select,textarea{background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;width:100%}
+input:focus,select:focus,textarea:focus{
+  outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:-1px}
+label.chk{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--ink2)}
+label.chk input{accent-color:var(--accent)}
+
+/* ─── cards ──────────────────────────────────────────────────────────────── */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.card h3{font-size:14.5px;margin-bottom:2px}
+.sub{color:var(--ink3);font-size:12px}
+.card.click{cursor:pointer;transition:.13s}
+.card.click:hover{border-color:var(--ink3);transform:translateY(-1px);box-shadow:var(--shadow)}
+
+/* ─── status ─────────────────────────────────────────────────────────────── */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:650;
+  padding:2px 8px;border-radius:99px;border:1px solid}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 34%,transparent);
+  background:color-mix(in srgb,var(--ok) 11%,transparent)}
+.pill.part{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 34%,transparent);
+  background:color-mix(in srgb,var(--warn) 11%,transparent)}
+.pill.none{color:var(--ink3);border-color:var(--line);background:var(--panel2)}
+.pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 34%,transparent);
+  background:color-mix(in srgb,var(--bad) 11%,transparent)}
+.langrow{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
+.langrow:first-of-type{border-top:0}
+.lang{width:30px;font-weight:700;font-size:11.5px;color:var(--ink2);text-transform:uppercase}
+.steps{display:flex;gap:4px;flex:1}
+.step{flex:1;height:5px;border-radius:3px;background:var(--panel2)}
+.step.done{background:var(--ok)}
+.step.part{background:linear-gradient(90deg,var(--warn) var(--p,50%),var(--panel2) var(--p,50%))}
+.steplabels{display:flex;gap:4px;margin-top:3px}
+.steplabels span{flex:1;font-size:9.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--ink3);font-weight:650;padding:0 10px 8px}
+td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
+
+/* ─── terminal ───────────────────────────────────────────────────────────── */
+.term{background:var(--term-bg);border:1px solid var(--line);border-radius:var(--r);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+  line-height:1.65;padding:12px 14px;height:400px;overflow:auto;color:var(--term-ink)}
+.term .ln{display:flex;gap:10px;white-space:pre-wrap;word-break:break-word}
+.term .ts{color:#4b5563;flex:none;-webkit-user-select:none;user-select:none}
+.term .e{color:#f87171}.term .w{color:#fbbf24}.term .g{color:#4ade80}.term .d{color:#6b7280}
+.termbar{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+
+/* ─── progress ───────────────────────────────────────────────────────────── */
+.bar{height:8px;background:var(--panel2);border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+.bar i{display:block;height:100%;background:var(--accent);transition:width .3s ease}
+.bar.idle i{background:var(--ink3)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:var(--r);
+  overflow:hidden;margin-top:14px}
+.stat{background:var(--panel);padding:12px 14px}
+.stat b{display:block;font-size:20px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat span{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
+
+/* ─── misc ───────────────────────────────────────────────────────────────── */
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.empty{text-align:center;padding:56px 20px;color:var(--ink2)}
+.empty b{display:block;font-size:15px;color:var(--ink);margin-bottom:6px}
+.sec{margin-bottom:11px;display:flex;align-items:center;gap:10px}
+.sec h2{font-size:15px}
+.hr{height:1px;background:var(--line);margin:22px 0}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:9px}
+.thumb{position:relative;aspect-ratio:16/9;border-radius:7px;overflow:hidden;
+  background:var(--panel2);border:2px solid transparent;cursor:pointer}
 .thumb img,.thumb video{width:100%;height:100%;object-fit:cover;display:block}
-.thumb .none{display:flex;align-items:center;justify-content:center;height:100%;
-  color:var(--red);font-size:13px;text-align:center;padding:14px}
-.badge{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.8);font-size:10.5px;
-  font-weight:700;letter-spacing:.4px;padding:4px 7px;border-radius:4px}
-.badge.h{left:auto;right:8px;background:var(--gold);color:#0f1115}
-.tile.redo .thumb::after{content:'REDO';position:absolute;bottom:8px;right:8px;
-  background:var(--red);font-size:10.5px;font-weight:700;padding:4px 7px;border-radius:4px}
-.tbody{padding:11px 13px}
-.tbody p{margin:0 0 7px;font-size:13px}
-.tbody code{font:11.5px ui-monospace,Menlo,monospace;color:#6e7a8c;word-break:break-word}
-.sticky{position:sticky;bottom:0;background:linear-gradient(transparent,var(--bg) 26%);
-  padding:24px 0 4px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-.out{display:flex;align-items:center;gap:14px;background:#0e1013;border:1px solid var(--line);
-  border-radius:8px;padding:14px 16px;margin-bottom:10px}
-.out b{flex:1}
-.warn{background:#2a1f10;border-color:#5a4416;color:#f0c674}
-.hide{display:none}
-a{color:#6ea8ff}
+.thumb.rej{border-color:var(--bad);opacity:.45}
+.thumb.hero{border-color:var(--accent)}
+.thumb .n{position:absolute;left:0;top:0;background:rgba(0,0,0,.72);color:#fff;
+  font-size:10px;padding:1px 5px;border-radius:0 0 5px 0;font-weight:700}
+.toast{position:fixed;right:18px;bottom:18px;background:var(--panel);border:1px solid var(--line);
+  border-left:3px solid var(--accent);padding:11px 15px;border-radius:9px;
+  box-shadow:var(--shadow);z-index:50;max-width:340px;font-size:13px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--ink3);
+  border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media(max-width:820px){
+  .app{grid-template-columns:1fr}
+  .side{position:static;height:auto;flex-direction:row;overflow-x:auto;align-items:center}
+  .side .foot{margin:0;flex-direction:row}
+  .brand{padding:0 12px 0 4px}
+  .grid2{grid-template-columns:1fr}
+  .main{padding:18px}
+}
 </style>
 
-<header>
-  <span class="dot"></span>
-  <h1>Faceless Studio</h1>
-  <span style="flex:1"></span>
-  <span id="hint" class="stat" style="color:var(--dim)"></span>
-</header>
-
-<div class="wrap">
-
-  <div id="keywarn" class="card warn hide">
-    <b>No stock API keys yet.</b> Open <code>config.json</code> in this folder and paste in
-    your free Pexels and Pixabay keys, then reload this page.
-  </div>
-
-  <!-- ------------------------------------------------------- generate -->
-  <div class="card" id="gen">
-    <h2 style="display:flex;align-items:center;gap:12px">
-      <span>0 · Start from a script</span>
-      <button class="ghost" id="genToggle" style="padding:5px 12px;font-size:12.5px">Open</button>
-      <span style="flex:1"></span>
-      <span class="stat" id="genKeyNote"></span>
-    </h2>
-    <div id="genBody" class="hide">
-      <p style="margin:-4px 0 16px;color:var(--dim);font-size:14px">
-        Paste a finished script. Gemini splits it into scenes and writes the master sheet,
-        the translations and the YouTube packages — then they appear in the list below.
-        Your words are never rewritten: every line is checked against what you pasted.
-      </p>
-      <div class="row">
-        <div style="flex:0 0 220px">
-          <label>Name it</label>
-          <input type="text" id="genId" placeholder="video05">
-        </div>
-        <div>
-          <label>Languages</label>
-          <div class="checks" id="genLangs">
-            <label class="chk on"><input type="checkbox" value="en" checked disabled> English</label>
-            <label class="chk on"><input type="checkbox" value="de" checked> German</label>
-            <label class="chk on"><input type="checkbox" value="es" checked> Spanish</label>
-          </div>
-        </div>
-      </div>
-      <div style="margin-top:16px">
-        <label>Script</label>
-        <textarea id="genScript" rows="12" placeholder="Paste the whole script here…"
-          style="width:100%;background:#0e1013;color:var(--txt);border:1px solid var(--line);
-                 border-radius:8px;padding:12px;font-size:14px;line-height:1.6;resize:vertical"></textarea>
-        <div class="stat" style="margin-top:6px"><span id="genCount">0 words</span></div>
-      </div>
-      <div style="margin-top:18px;display:flex;gap:12px;align-items:center">
-        <button id="btnGen">Generate the sheets</button>
-        <label class="chk"><input type="checkbox" id="genOver"> Overwrite if it already exists</label>
-      </div>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="dot">F</span><b>Faceless</b></div>
+    <a class="nav" data-r="#/dashboard"><span class="ico">▦</span>Dashboard</a>
+    <a class="nav" data-r="#/run"><span class="ico">▶</span>Activity<span class="badge" id="navBadge" style="display:none"></span></a>
+    <a class="nav" data-r="#/voices"><span class="ico">◍</span>Voices</a>
+    <a class="nav" data-r="#/settings"><span class="ico">⚙</span>Settings</a>
+    <div class="foot">
+      <button class="btn sm" id="themeBtn">Light mode</button>
+      <div class="sub mono">127.0.0.1:8765</div>
     </div>
-  </div>
-
-  <!-- ---------------------------------------------------------- setup -->
-  <div class="card" id="setup">
-    <h2>1 · What are we making?</h2>
-    <div class="row">
-      <div>
-        <label>Video</label>
-        <select id="proj"></select>
-      </div>
-      <div>
-        <label>Background music (optional)</label>
-        <select id="music"><option value="">None</option></select>
-      </div>
-    </div>
-
-    <div style="margin-top:18px">
-      <label>Languages</label>
-      <div class="checks" id="langs"></div>
-    </div>
-
-    <div style="margin-top:18px">
-      <label>Options</label>
-      <div class="checks">
-        <label class="chk on"><input type="checkbox" id="captions" checked> Burn captions in</label>
-        <label class="chk on"><input type="checkbox" id="zoom" checked> Slow zoom on photos</label>
-      </div>
-    </div>
-
-    <div style="margin-top:22px;display:flex;gap:12px;align-items:center">
-      <button id="btnSource">Find visuals</button>
-      <span class="stat" id="setupNote"></span>
-    </div>
-  </div>
-
-  <!-- ----------------------------------------------------------- voices -->
-  <div class="card" id="voice">
-    <h2 style="display:flex;align-items:center;gap:12px">
-      <span>Voices</span>
-      <button class="ghost" id="voiceToggle" style="padding:5px 12px;font-size:12.5px">Open</button>
-      <span style="flex:1"></span>
-      <span class="stat" id="voiceNow"></span>
-    </h2>
-    <div id="voiceBody" class="hide">
-      <p style="margin:-4px 0 16px;color:var(--dim);font-size:14px">
-        Narration is cloned from a reference clip by Chatterbox, running on this Mac.
-        Press ▶ to hear a clip read a real line from your own script. Whatever you pick
-        is saved per language and used for every render from then on.
-      </p>
-      <div class="row">
-        <div style="flex:0 0 200px">
-          <label>Language</label>
-          <select id="vLang"></select>
-        </div>
-        <div>
-          <label>Sample line</label>
-          <input type="text" id="vText">
-          <div id="vStatus" style="margin-top:8px;font-size:13px"></div>
-        </div>
-      </div>
-      <div class="row" style="margin-top:16px">
-        <div>
-          <label>Expression <span class="stat" id="vExagVal"></span></label>
-          <input type="range" id="vExag" min="0" max="100" step="5" style="width:100%">
-          <div class="stat" style="margin-top:4px">low = calm and even · high = performed</div>
-        </div>
-        <div>
-          <label>Guidance <span class="stat" id="vCfgVal"></span></label>
-          <input type="range" id="vCfg" min="0" max="100" step="5" style="width:100%">
-          <div class="stat" style="margin-top:4px">how closely it copies the clip</div>
-        </div>
-      </div>
-
-      <div id="vList" style="margin-top:18px"></div>
-    </div>
-  </div>
-
-  <!-- --------------------------------------------------------- progress -->
-  <div class="card hide" id="prog">
-    <h2 id="progTitle">Working</h2>
-    <div class="bar"><i id="progBar"></i></div>
-    <div class="stat"><span id="progLabel">…</span><span id="progCount"></span></div>
-    <pre class="log" id="log"></pre>
-  </div>
-
-  <!-- --------------------------------------------------------- approval -->
-  <div class="card hide" id="review">
-    <h2>2 · Check the visuals</h2>
-    <p style="margin:-4px 0 18px;color:var(--dim);font-size:14px">
-      Click any picture that doesn't suit its line — that's all "rejecting" means.
-      Gold border = a scene that carries the story, worth a proper look.
-      Everything you leave alone is approved.
-    </p>
-    <div class="grid" id="grid"></div>
-    <div class="sticky">
-      <button id="btnRedo" class="ghost" disabled>Get new pictures (0)</button>
-      <button id="btnBuild" class="go">Looks good — build the videos</button>
-      <span class="stat" id="reviewNote"></span>
-    </div>
-  </div>
-
-  <!-- ---------------------------------------------------------- results -->
-  <div class="card hide" id="results">
-    <h2>Finished</h2>
-    <div id="outs"></div>
-    <button class="ghost" onclick="reveal()">Show files in Finder</button>
-    <button class="ghost" onclick="location.reload()">Make another video</button>
-  </div>
-
+  </aside>
+  <main class="main" id="view"></main>
 </div>
+<div id="toast"></div>
 
 <script>
-let DATA = null, PROJ = null, redo = new Set(), phase = 'setup', pollTimer = null;
-
+// ═══ tiny helpers ═════════════════════════════════════════════════════════
 const $ = s => document.querySelector(s);
-const show = (s, on) => $(s).classList.toggle('hide', !on);
-
-async function api(path, body) {
-  const r = await fetch(path, body ? {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+const el = (t, a = {}, ...kids) => {
+  const n = document.createElement(t);
+  for (const [k, v] of Object.entries(a)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+    else if (k === 'checked' || k === 'selected' || k === 'muted') n[k] = !!v;
+    else n.setAttribute(k, v);
+  }
+  for (const c of kids.flat(3)) {
+    if (c === null || c === undefined || c === false) continue;
+    n.append(c.nodeType ? c : document.createTextNode(c));
+  }
+  return n;
+};
+async function api(ep, body) {
+  const r = await fetch(ep, body ? {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
-  } : undefined);
-  return r.json();
+  } : {});
+  const j = await r.json().catch(() => ({ error: 'the server sent something unreadable' }));
+  if (j.error && body) toast(j.error, true);
+  return j;
 }
-
-// -------------------------------------------------------------- generate
-$('#genToggle').onclick = () => {
-  const b = $('#genBody'), open = b.classList.contains('hide');
-  b.classList.toggle('hide', !open);
-  $('#genToggle').textContent = open ? 'Close' : 'Open';
+let toastT;
+function toast(msg, bad) {
+  clearTimeout(toastT);
+  $('#toast').innerHTML = '';
+  const n = el('div', { class: 'toast' }, msg);
+  if (bad) n.style.borderLeftColor = 'var(--bad)';
+  $('#toast').append(n);
+  toastT = setTimeout(() => n.remove(), 5200);
+}
+const fmtT = s => {
+  s = Math.max(0, Math.round(s || 0));
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${String(s % 60).padStart(2, '0')}s`
+                : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 };
-$('#genScript').oninput = e => {
-  const n = e.target.value.trim().split(/\s+/).filter(Boolean).length;
-  const mins = (n / 150).toFixed(0);
-  $('#genCount').textContent = n ? `${n.toLocaleString()} words · roughly ${mins} min of narration` : '0 words';
-};
-$('#genLangs').querySelectorAll('input').forEach(cb => {
-  cb.onchange = () => cb.closest('.chk').classList.toggle('on', cb.checked);
-});
-$('#genOver').onchange = e => e.target.closest('.chk').classList.toggle('on', e.target.checked);
-
-$('#btnGen').onclick = async () => {
-  const script = $('#genScript').value.trim();
-  if (script.split(/\s+/).length < 120) { alert('Paste the full script first.'); return; }
-  const id = ($('#genId').value || '').trim();
-  if (!/^[A-Za-z0-9_-]+$/.test(id)) { alert('Give it a simple name, like video05.'); return; }
-  const langs = [...$('#genLangs').querySelectorAll('input:checked')].map(i => i.value);
-  phase = 'generate';
-  show('#gen', false); show('#setup', false); show('#prog', true);
-  $('#progTitle').textContent = 'Writing the production sheets';
-  await api('/api/generate', {script, id, langs, overwrite: $('#genOver').checked});
-  poll();
+const ago = ts => {
+  if (!ts) return '';
+  const d = (Date.now() / 1000) - ts;
+  if (d < 90) return 'just now';
+  if (d < 3600) return Math.round(d / 60) + ' min ago';
+  if (d < 86400) return Math.round(d / 3600) + ' h ago';
+  return Math.round(d / 86400) + ' d ago';
 };
 
-// -------------------------------------------------------------- voices
-let VDATA = null, vAudio = null;
+// ═══ theme ════════════════════════════════════════════════════════════════
+// localStorage is correct here: this page is served from your own machine and
+// the choice should survive a restart.
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $('#themeBtn').textContent = t === 'light' ? 'Dark mode' : 'Light mode';
+  try { localStorage.setItem('faceless.theme', t); } catch (e) { }
+}
+let _t = 'dark';
+try { _t = localStorage.getItem('faceless.theme') || 'dark'; } catch (e) { }
+applyTheme(_t);
+$('#themeBtn').onclick = () =>
+  applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
 
-$('#voiceToggle').onclick = async () => {
-  const b = $('#voiceBody'), open = b.classList.contains('hide');
-  b.classList.toggle('hide', !open);
-  $('#voiceToggle').textContent = open ? 'Close' : 'Open';
-  if (open && !VDATA) await loadVoices();
-};
-$('#vLang').onchange = loadVoices;
-$('#vExag').oninput = () => { $('#vExagVal').textContent = exag().toFixed(2); };
-$('#vCfg').oninput  = () => { $('#vCfgVal').textContent  = cfg().toFixed(2); };
+// ═══ shared state ═════════════════════════════════════════════════════════
+const S = { projects: [], music: [], status: {}, meta: {} };
 
-const exag = () => +$('#vExag').value / 100;
-const cfg  = () => +$('#vCfg').value / 100;
-
-// Everything the panel currently means, in one place — used for previews and saving.
-function voiceSettings(extra = {}) {
-  return Object.assign({
-    lang: $('#vLang').value,
-    reference: VDATA ? VDATA.chosen.reference : '',
-    exaggeration: exag(), cfg_weight: cfg()
-  }, extra);
+// ═══ status maths ═════════════════════════════════════════════════════════
+const STEPS = ['sheets', 'visuals', 'voice', 'render'];
+function fractions(st, l) {
+  const n = st.scenes || 0;
+  return {
+    sheets: l.sheets ? 1 : 0,
+    visuals: n ? Math.min(1, (st.assets || 0) / n) : 0,
+    voice: n ? Math.min(1, (l.voice_n || 0) / n) : 0,
+    render: l.render ? 1 : 0,
+  };
+}
+function overall(st) {
+  const ls = Object.values(st.languages || {});
+  if (!ls.length) return { cls: 'none', text: 'empty' };
+  const done = ls.filter(l => l.render).length;
+  if (done === ls.length) return { cls: 'ok', text: 'complete' };
+  if (done > 0) return { cls: 'part', text: `${done}/${ls.length} rendered` };
+  if (ls.some(l => l.voice_n > 0) || st.assets > 0) return { cls: 'part', text: 'in progress' };
+  return { cls: 'none', text: 'not started' };
+}
+function stepBar(st, l) {
+  const f = fractions(st, l);
+  return el('div', {},
+    el('div', { class: 'steps' }, STEPS.map(k => {
+      const v = f[k];
+      const d = el('div', { class: 'step ' + (v >= 1 ? 'done' : v > 0 ? 'part' : '') });
+      if (v > 0 && v < 1) d.style.setProperty('--p', Math.round(v * 100) + '%');
+      return d;
+    })),
+    el('div', { class: 'steplabels' }, STEPS.map(k => el('span', {}, k))));
 }
 
-function renderStatus() {
-  const st = VDATA.status;
-  const box = $('#vStatus');
-  if (!st.supported) {
-    box.innerHTML = `<span style="color:var(--red)">Chatterbox cannot speak this
-      language.</span>`;
-  } else if (!st.installed) {
-    box.innerHTML = `<span style="color:var(--gold)">Chatterbox isn't installed —
-      run <code>bash setup.sh</code> in Terminal, then reload.</span>`;
-  } else {
-    box.innerHTML = `<span class="stat">running on ${st.device}</span>`;
-  }
-}
+// ═══ dashboard ════════════════════════════════════════════════════════════
+async function viewDashboard() {
+  const d = await api('/api/projects');
+  S.projects = d.projects || []; S.music = d.music || [];
+  S.meta = { has_keys: d.has_keys, has_gemini: d.has_gemini };
+  const v = $('#view'); v.innerHTML = '';
 
-async function loadVoices() {
-  const lang = $('#vLang').value || 'en';
-  $('#vList').innerHTML = '<p class="stat">Loading…</p>';
-  VDATA = await api(`/api/voices?lang=${lang}&id=${encodeURIComponent(PROJ ? PROJ.id : '')}`);
+  const scenes = S.projects.reduce((a, p) => a + (p.status?.scenes || 0), 0);
+  const built = S.projects.reduce((a, p) =>
+    a + Object.values(p.status?.languages || {}).filter(l => l.render).length, 0);
 
-  $('#vText').value = VDATA.sample;
-  $('#vExag').value = Math.round((VDATA.chosen.exaggeration ?? 0.4) * 100);
-  $('#vCfg').value  = Math.round((VDATA.chosen.cfg_weight  ?? 0.5) * 100);
-  $('#vExagVal').textContent = exag().toFixed(2);
-  $('#vCfgVal').textContent  = cfg().toFixed(2);
+  v.append(el('div', { class: 'head' },
+    el('div', { class: 'grow' }, el('h1', {}, 'Dashboard'),
+      el('p', {}, `${S.projects.length} project${S.projects.length === 1 ? '' : 's'} · `
+        + `${scenes} scenes · ${built} video${built === 1 ? '' : 's'} rendered`)),
+    el('button', { class: 'btn', onclick: () => location.hash = '#/new' }, '+ New from script')));
 
-  renderStatus();
-  $('#vList').innerHTML = cloneRows();
-  wireRows();
-  updateVoiceNow();
-}
+  if (!d.has_keys) v.append(el('div', { class: 'card', style: 'border-color:var(--warn);margin-bottom:14px' },
+    el('b', {}, 'No stock API keys yet. '), 'Sourcing visuals will not work — add them in Settings.'));
 
-function cloneRows() {
-  if (!VDATA.references.length) return `
-    <p class="stat" style="display:block">
-      No reference clips yet. Put a 30-second clip of clean speech in the
-      <b>voices_refs</b> folder and reload.<br>
-      It must be audio you hold rights to — your own voice, a CC0 clip from
-      Mozilla Common Voice, or a public-domain LibriVox reading.
-    </p>`;
-  return VDATA.references.map(r => row({
-    id: r.name,
-    title: r.name,
-    meta: `${r.seconds}s` + (r.short
-      ? ' · <span style="color:var(--gold)">short — 30s+ clones better</span>' : ''),
-    chosen: r.name === VDATA.chosen.reference
-  })).join('');
-}
-
-function row(o) {
-  return `<div class="out" data-v="${o.id}"
-       style="${o.chosen ? 'border-color:var(--green)' : ''}">
-    <button class="ghost play" data-v="${o.id}" style="padding:8px 14px">▶</button>
-    <b style="flex:0 0 250px;font-family:ui-monospace,Menlo,monospace;font-size:13px">${o.title}</b>
-    <span class="stat" style="flex:1">${o.meta}</span>
-    <span class="stat use-note"></span>
-    <button class="use" data-v="${o.id}">${o.chosen ? 'In use' : 'Use this'}</button>
-  </div>`;
-}
-
-function wireRows() {
-  $('#vList').querySelectorAll('.play').forEach(b => b.onclick = () => playVoice(b));
-  $('#vList').querySelectorAll('.use').forEach(b => b.onclick = () => useVoice(b.dataset.v));
-}
-
-async function playVoice(btn) {
-  const name = btn.closest('.out').dataset.v;
-  const note = btn.closest('.out').querySelector('.use-note');
-  if (vAudio) { vAudio.pause(); vAudio = null; }
-  btn.textContent = '…';
-  note.textContent = 'generating — the first one also loads the model';
-
-  const r = await api('/api/preview',
-                      voiceSettings({text: $('#vText').value, reference: name}));
-  btn.textContent = '▶';
-  if (r.error) { note.textContent = r.error.slice(0, 90); return; }
-  note.textContent = '';
-  vAudio = new Audio(r.url);
-  vAudio.play();
-  btn.textContent = '❚❚';
-  vAudio.onended = () => { btn.textContent = '▶'; };
-}
-
-async function useVoice(name) {
-  const r = await api('/api/choose_voice', voiceSettings({reference: name}));
-  VDATA.chosen = r.saved;
-  $('#vList').querySelectorAll('.out').forEach(el => {
-    const on = el.dataset.v === name;
-    el.style.borderColor = on ? 'var(--green)' : '';
-    el.querySelector('.use').textContent = on ? 'In use' : 'Use this';
-  });
-  updateVoiceNow();
-}
-
-function updateVoiceNow() {
-  if (!VDATA) return;
-  const c = VDATA.chosen, L = $('#vLang').value.toUpperCase();
-  $('#voiceNow').textContent = `${L}: ${c.reference || 'no clip chosen'}`;
-}
-
-// ------------------------------------------------------------------ boot
-async function boot() {
-  DATA = await api('/api/projects');
-  show('#keywarn', !DATA.has_keys);
-  $('#btnSource').disabled = !DATA.has_keys;
-  $('#btnGen').disabled = !DATA.has_gemini;
-  $('#genKeyNote').textContent = DATA.has_gemini
-    ? '' : 'add "gemini_key" to config.json to enable';
-
-  if (!DATA.projects.length) {
-    $('#setupNote').textContent = 'No sheets found — put your master sheet in the sheets folder.';
-    $('#btnSource').disabled = true;
+  if (!S.projects.length) {
+    v.append(el('div', { class: 'empty card' }, el('b', {}, 'No projects yet'),
+      'Put a master sheet in sheets/, or paste a script and let Gemini split it.',
+      el('div', { style: 'margin-top:14px' },
+        el('button', { class: 'btn primary', onclick: () => location.hash = '#/new' },
+          'Start from a script'))));
     return;
   }
-  $('#proj').innerHTML = DATA.projects
-    .map(p => `<option value="${p.id}">${p.label} · ${p.scenes} scenes</option>`).join('');
-  $('#music').innerHTML = '<option value="">None</option>' +
-    DATA.music.map(m => `<option>${m}</option>`).join('');
-  $('#proj').onchange = pickProject;
-  pickProject();
+
+  v.append(el('div', { class: 'cards' }, S.projects.map(p => {
+    const st = p.status || { languages: {}, scenes: 0, assets: 0 };
+    const o = overall(st);
+    return el('div', { class: 'card click', onclick: () => location.hash = '#/project/' + p.id },
+      el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
+        el('div', { style: 'min-width:0' }, el('h3', {}, p.id),
+          el('div', { class: 'sub', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+            (p.label || '').replace(p.id + ' — ', ''))),
+        el('span', { class: 'pill ' + o.cls }, o.text)),
+      el('div', { style: 'margin:12px 0 4px' },
+        Object.entries(st.languages || {}).map(([code, l]) =>
+          el('div', { class: 'langrow' },
+            el('span', { class: 'lang' }, code),
+            stepBar(st, l),
+            el('span', { class: 'sub mono', style: 'width:56px;text-align:right;flex:none' },
+              l.render ? l.size_mb + ' MB' : `${l.voice_n || 0}/${st.scenes}`)))),
+      el('div', { class: 'sub', style: 'margin-top:10px' },
+        `${st.scenes} scenes · ${st.assets} visuals sourced`));
+  })));
 }
 
-function pickProject() {
-  PROJ = DATA.projects.find(p => p.id === $('#proj').value);
-  $('#langs').innerHTML = PROJ.languages.map((l, i) => `
-    <label class="chk ${i === 0 ? 'on' : ''}">
-      <input type="checkbox" value="${l.code}" ${i === 0 ? 'checked' : ''}> ${l.name}
-    </label>`).join('');
-  $('#langs').querySelectorAll('input').forEach(cb => {
-    cb.onchange = () => cb.closest('.chk').classList.toggle('on', cb.checked);
+// ═══ project detail ═══════════════════════════════════════════════════════
+async function viewProject(id) {
+  if (!S.projects.length) {
+    const d = await api('/api/projects');
+    S.projects = d.projects || []; S.music = d.music || [];
+  }
+  const p = S.projects.find(x => x.id === id);
+  const v = $('#view'); v.innerHTML = '';
+  if (!p) { v.append(el('div', { class: 'empty card' }, el('b', {}, 'No such project'), id)); return; }
+  const st = p.status || { languages: {}, scenes: 0, assets: 0 };
+  const o = overall(st);
+
+  v.append(el('div', { class: 'head' },
+    el('div', { class: 'grow' },
+      el('div', { class: 'back', onclick: () => location.hash = '#/dashboard' }, '← Dashboard'),
+      el('h1', { style: 'margin-top:4px' }, p.id),
+      el('p', {}, p.label || '')),
+    el('span', { class: 'pill ' + o.cls }, o.text)));
+
+  // visuals ---------------------------------------------------------------
+  const sourced = st.assets >= st.scenes && st.scenes > 0;
+  v.append(el('div', { class: 'sec' }, el('h2', {}, 'Visuals'),
+    el('span', { class: 'sub' }, 'sourced once, shared by every language')));
+  v.append(el('div', { class: 'card', style: 'margin-bottom:22px' },
+    el('div', { class: 'row' },
+      el('button', {
+        class: 'btn' + (st.assets ? '' : ' primary'),
+        onclick: async e => {
+          e.target.disabled = true;
+          const r = await api('/api/source', { id: p.id });
+          if (r.started) location.hash = '#/run'; else e.target.disabled = false;
+        }
+      }, st.assets ? 'Re-source all' : 'Find visuals'),
+      st.assets ? el('button', { class: 'btn', onclick: () => location.hash = '#/review/' + p.id },
+        'Review & swap pictures') : null,
+      el('div', { style: 'flex:1' }),
+      el('span', { class: 'pill ' + (sourced ? 'ok' : st.assets ? 'part' : 'none') },
+        `${st.assets} / ${st.scenes}`))));
+
+  // languages -------------------------------------------------------------
+  const opts = { captions: true, zoom: true, music: '' };
+  const run = async (langs, steps, force) => {
+    const r = await api('/api/run', {
+      id: p.id, langs, steps, force,
+      captions: opts.captions, zoom: opts.zoom, music: opts.music || null
+    });
+    if (r.started) location.hash = '#/run';
+  };
+
+  v.append(el('div', { class: 'sec' }, el('h2', {}, 'Languages')));
+  v.append(el('div', { class: 'card' },
+    el('table', {},
+      el('thead', {}, el('tr', {}, ['Language', 'Progress', 'Narration', 'Video', ''].map(h => el('th', {}, h)))),
+      el('tbody', {}, Object.entries(st.languages || {}).map(([code, l]) => el('tr', {},
+        el('td', {}, el('b', {}, l.name || code), el('div', { class: 'sub mono' }, code)),
+        el('td', { style: 'width:210px' }, stepBar(st, l)),
+        el('td', {}, l.voice ? el('span', { class: 'pill ok' }, 'complete')
+          : l.voice_n ? el('span', { class: 'pill part' }, `${l.voice_n} / ${st.scenes}`)
+            : el('span', { class: 'pill none' }, 'none')),
+        el('td', {}, l.render
+          ? el('div', {}, el('div', { class: 'mono', style: 'font-size:12px' }, l.mp4),
+            el('div', { class: 'sub' }, `${l.size_mb} MB · ${ago(l.built)}`))
+          : el('span', { class: 'sub' }, '—')),
+        el('td', { style: 'text-align:right' },
+          el('div', { class: 'row', style: 'justify-content:flex-end;gap:6px' },
+            l.render ? el('button', {
+              class: 'btn sm',
+              onclick: () => window.open('/media/out/' + l.mp4, '_blank')
+            }, 'Play') : null,
+            el('button', { class: 'btn sm', onclick: () => run([code], ['voice'], false) },
+              l.voice ? 'Re-check' : l.voice_n ? 'Resume' : 'Voice'),
+            l.voice_n ? el('button', {
+              class: 'btn sm danger',
+              onclick: () => confirm(`Delete ${l.voice_n} cached narration file(s) for `
+                + `${l.name || code} and generate them from scratch?`)
+                && run([code], ['voice'], true)
+            }, 'Redo') : null,
+            el('button', {
+              class: 'btn sm' + (l.voice && !l.render ? ' primary' : ''),
+              onclick: () => run([code], ['render'], false)
+            }, l.render ? 'Re-render' : 'Render')))))) ),
+    el('div', { class: 'hr' }),
+    el('div', { class: 'row' },
+      el('label', { class: 'chk' },
+        el('input', { type: 'checkbox', checked: true, onchange: e => opts.captions = e.target.checked }),
+        'Burn in captions'),
+      el('label', { class: 'chk' },
+        el('input', { type: 'checkbox', checked: true, onchange: e => opts.zoom = e.target.checked }),
+        'Slow zoom on photos'),
+      el('div', { style: 'flex:1' }),
+      el('span', { class: 'sub' }, 'Music'),
+      el('select', { style: 'width:auto;min-width:140px', onchange: e => opts.music = e.target.value },
+        el('option', { value: '' }, 'None'), S.music.map(m => el('option', { value: m }, m))),
+      el('button', {
+        class: 'btn primary',
+        onclick: () => run(Object.keys(st.languages || {}), ['voice', 'render'], false)
+      }, 'Build every language'))));
+}
+
+// ═══ activity / live run ══════════════════════════════════════════════════
+let follow = true;
+function viewRun() {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('div', { class: 'head' },
+    el('div', { class: 'grow' }, el('h1', {}, 'Activity'), el('p', { id: 'runSub' }, ''))));
+  v.append(el('div', { class: 'card', id: 'runCard' }));
+  v.append(el('div', { style: 'margin-top:18px' },
+    el('div', { class: 'termbar' },
+      el('h2', { style: 'font-size:14px;flex:1' }, 'Output'),
+      el('label', { class: 'chk' },
+        el('input', { type: 'checkbox', checked: follow, onchange: e => follow = e.target.checked }),
+        'Follow'),
+      el('button', {
+        class: 'btn sm', onclick: () => {
+          const t = [...document.querySelectorAll('#term .ln')].map(n => n.innerText).join('\n');
+          navigator.clipboard?.writeText(t);
+          toast('Log copied to the clipboard.');
+        }
+      }, 'Copy')),
+    el('div', { class: 'term', id: 'term' })));
+  paintRun();
+}
+
+const BUSY = ['generate', 'stock', 'voice', 'render'];
+function paintRun() {
+  const j = S.status || {};
+  const card = $('#runCard'); if (!card) return;
+  const busy = BUSY.includes(j.stage);
+  const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+
+  const sub = $('#runSub');
+  if (sub) sub.textContent = busy ? `${j.project || ''} · ${j.label || j.stage}`
+    : j.stage === 'error' ? 'Stopped with an error.'
+      : j.stage === 'done' ? 'Finished.'
+        : j.stage === 'approve' ? 'Visuals ready to review.' : 'Nothing running.';
+
+  card.innerHTML = '';
+  card.append(
+    el('div', { class: 'row', style: 'margin-bottom:10px' },
+      busy ? el('span', { class: 'spin' }) : null,
+      el('b', {}, busy ? (j.label || j.stage)
+        : j.stage === 'error' ? 'Error' : j.stage === 'done' ? 'Done' : 'Idle'),
+      el('div', { style: 'flex:1' }),
+      el('span', { class: 'mono sub' }, j.total ? `${j.done} / ${j.total}` : '')),
+    el('div', { class: 'bar' + (busy ? '' : ' idle') }, el('i', { style: `width:${pct}%` })),
+    j.error ? el('div', { class: 'card', style: 'margin-top:12px;border-color:var(--bad);color:var(--bad)' },
+      j.error) : null,
+    el('div', { class: 'stats' },
+      el('div', { class: 'stat' }, el('b', {}, pct + '%'), el('span', {}, 'complete')),
+      el('div', { class: 'stat' }, el('b', {}, (j.done ?? 0) + '/' + (j.total ?? 0)), el('span', {}, 'items')),
+      el('div', { class: 'stat' }, el('b', {}, j.started ? fmtT(Date.now() / 1000 - j.started) : '—'),
+        el('span', {}, 'elapsed')),
+      el('div', { class: 'stat' }, el('b', {}, busy && j.eta != null ? fmtT(j.eta) : '—'),
+        el('span', {}, 'remaining')),
+      el('div', { class: 'stat' },
+        el('b', {}, j.rate ? (j.rate >= 1 ? j.rate.toFixed(1) + '/s' : (1 / j.rate).toFixed(1) + 's ea') : '—'),
+        el('span', {}, 'rate'))),
+    (j.steps || []).length ? el('div', { style: 'margin-top:16px' },
+      el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Completed steps'),
+      el('table', {}, el('tbody', {}, j.steps.map(s => el('tr', {},
+        el('td', {}, el('b', {}, s.name), s.lang ? ' · ' + s.lang.toUpperCase() : ''),
+        el('td', { class: 'mono sub' }, s.items ? s.items + ' items' : ''),
+        el('td', { class: 'mono', style: 'text-align:right' }, fmtT(s.seconds)),
+        el('td', { class: 'sub mono', style: 'text-align:right;width:92px' },
+          s.items ? (s.seconds / s.items).toFixed(2) + 's ea' : '')))))) : null,
+    (j.outputs || []).length ? el('div', { style: 'margin-top:16px' },
+      el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Finished files'),
+      el('div', { class: 'row' }, j.outputs.map(o => el('button', {
+        class: 'btn sm', onclick: () => window.open('/media/out/' + o.name, '_blank')
+      }, `${o.name} · ${o.size_mb} MB`)))) : null);
+
+  const t = $('#term'); if (!t) return;
+  const near = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
+  t.innerHTML = '';
+  for (const L of (j.log || [])) {
+    const text = typeof L === 'string' ? L : L.text;
+    const ts = typeof L === 'string' ? null : L.t;
+    let cls = '';
+    if (/^ERROR|Traceback|failed/i.test(text)) cls = 'e';
+    else if (/WARNING|⚠/i.test(text)) cls = 'w';
+    else if (/done|finished|ready/i.test(text)) cls = 'g';
+    else if (/^\s{2,}/.test(text)) cls = 'd';
+    t.append(el('div', { class: 'ln' },
+      el('span', { class: 'ts' },
+        ts ? new Date(ts * 1000).toLocaleTimeString([], { hour12: false }) : '--:--:--'),
+      el('span', { class: cls }, text)));
+  }
+  if (follow && near) t.scrollTop = t.scrollHeight;
+}
+
+// ═══ new from script ══════════════════════════════════════════════════════
+function viewNew() {
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
+    el('div', { class: 'back', onclick: () => location.hash = '#/dashboard' }, '← Dashboard'),
+    el('h1', { style: 'margin-top:4px' }, 'New video from a script'),
+    el('p', {}, 'Gemini decides only where to cut. Your words are checked back against '
+      + 'what you paste, word by word — nothing is rewritten silently.'))));
+  const id = el('input', { type: 'text', placeholder: 'video06' });
+  const script = el('textarea', {
+    rows: 16, placeholder: 'Paste the whole script here…',
+    style: 'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px'
   });
-  const missing = ['de', 'es'].filter(c => !PROJ.languages.some(l => l.code === c));
-  $('#setupNote').textContent = missing.length
-    ? `No translation file found for: ${missing.join(', ')}` : '';
-
-  // keep the voices panel's language list in step with this project
-  const cur = $('#vLang').value;
-  $('#vLang').innerHTML = PROJ.languages
-    .map(l => `<option value="${l.code}">${l.name}</option>`).join('');
-  if ([...$('#vLang').options].some(o => o.value === cur)) $('#vLang').value = cur;
-  if (VDATA) loadVoices();
+  const langs = { en: true, de: true, es: true };
+  v.append(el('div', { class: 'card' },
+    el('div', { class: 'grid2' },
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Languages'),
+        el('div', { class: 'row', style: 'padding-top:6px' },
+          Object.keys(langs).map(k => el('label', { class: 'chk' },
+            el('input', { type: 'checkbox', checked: true, onchange: e => langs[k] = e.target.checked }),
+            k.toUpperCase()))))),
+    el('div', { class: 'sub', style: 'margin:14px 0 5px' }, 'Script'), script,
+    el('div', { class: 'row', style: 'margin-top:14px' },
+      el('button', {
+        class: 'btn primary', onclick: async e => {
+          if (!id.value.trim()) return toast('Give it a name first.', true);
+          if (script.value.trim().length < 200) return toast('That script looks too short.', true);
+          e.target.disabled = true;
+          const r = await api('/api/generate', {
+            id: id.value.trim(), script: script.value,
+            langs: Object.keys(langs).filter(k => langs[k]), overwrite: false
+          });
+          if (r.started) location.hash = '#/run'; else e.target.disabled = false;
+        }
+      }, 'Generate the sheets'),
+      el('span', { class: 'sub' }, 'Roughly 15–25 Gemini requests; the free allowance is about 250/day.'))));
 }
 
-document.querySelectorAll('#captions,#zoom').forEach(cb => {
-  cb.onchange = () => cb.closest('.chk').classList.toggle('on', cb.checked);
-});
+// ═══ voices ═══════════════════════════════════════════════════════════════
+async function viewVoices() {
+  const lang = location.hash.split('/')[2] || 'en';
+  const d = await api('/api/voices?lang=' + lang);
+  const v = $('#view'); v.innerHTML = '';
+  const chosen = (d.chosen || {}).reference || '';
 
-const chosenLangs = () =>
-  [...$('#langs').querySelectorAll('input:checked')].map(i => i.value);
+  v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
+    el('h1', {}, 'Voices'),
+    el('p', {}, 'Narration is cloned from a reference clip. Choose one per language — '
+      + 'nothing can be voiced until you do.'))));
 
-// ---------------------------------------------------------------- actions
-$('#btnSource').onclick = async () => {
-  phase = 'stock';
-  show('#setup', false); show('#prog', true);
-  $('#progTitle').textContent = 'Finding visuals';
-  await api('/api/source', {id: PROJ.id});
-  poll();
-};
+  if (d.status && !d.status.installed) v.append(el('div', {
+    class: 'card', style: 'border-color:var(--bad);margin-bottom:14px'
+  }, el('b', {}, 'The voice engine is not installed. '), 'Run setup, then reload.'));
 
-$('#btnRedo').onclick = async () => {
-  if (!redo.size) return;
-  phase = 'stock';
-  show('#review', false); show('#prog', true);
-  $('#progTitle').textContent = `Finding ${redo.size} new picture${redo.size > 1 ? 's' : ''}`;
-  await api('/api/source', {id: PROJ.id, redo: [...redo]});
-  redo.clear();
-  poll();
-};
+  v.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, el('div', { class: 'row' },
+    el('span', { class: 'sub' }, 'Language'),
+    el('select', {
+      style: 'width:auto;min-width:180px',
+      onchange: e => location.hash = '#/voices/' + e.target.value
+    }, Object.entries(d.languages || {}).map(([c, n]) =>
+      el('option', { value: c, selected: c === lang }, `${n} (${c})`))),
+    el('div', { style: 'flex:1' }),
+    chosen ? el('span', { class: 'pill ok' }, chosen) : el('span', { class: 'pill none' }, 'no clip chosen'))));
 
-$('#btnBuild').onclick = async () => {
-  const langs = chosenLangs();
-  if (!langs.length) { alert('Pick at least one language.'); return; }
-  phase = 'build';
-  show('#review', false); show('#prog', true);
-  $('#progTitle').textContent = 'Building videos';
-  await api('/api/build', {
-    id: PROJ.id, langs,
-    captions: $('#captions').checked,
-    zoom: $('#zoom').checked,
-    music: $('#music').value || null
-  });
-  poll();
-};
-
-// ---------------------------------------------------------------- polling
-function poll() {
-  clearInterval(pollTimer);
-  pollTimer = setInterval(tick, 700);
-  tick();
-}
-
-async function tick() {
-  const j = await api('/api/status');
-  const pct = j.total ? Math.round(j.done / j.total * 100) : 0;
-  $('#progBar').style.width = pct + '%';
-  $('#progLabel').textContent = j.label || j.stage;
-  $('#progCount').textContent = j.total ? `${j.done} / ${j.total}` : '';
-  const log = $('#log');
-  const stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
-  log.textContent = (j.log || []).join('\n');
-  if (stuck) log.scrollTop = log.scrollHeight;
-
-  if (j.stage === 'error') {
-    clearInterval(pollTimer);
-    $('#progTitle').textContent = 'Something went wrong';
-    $('#progBar').style.background = 'var(--red)';
+  if (!(d.references || []).length) {
+    v.append(el('div', { class: 'empty card' }, el('b', {}, 'No reference clips'),
+      'Put a .mp3 or .wav in voices_refs/. Thirty seconds of clean, continuous speech '
+      + 'clones far better than ten — and it must be audio you hold rights to.'));
     return;
   }
-  if (j.stage === 'generated' && phase === 'generate') {
-    clearInterval(pollTimer);
-    const warned = (j.warnings || []).length;
-    $('#progTitle').textContent = warned
-      ? `Sheets written — ${warned} thing${warned > 1 ? 's' : ''} to check in the log`
-      : 'Sheets written';
-    await boot();                       // reload the project list
-    const opt = [...$('#proj').options].find(o => o.value === j.project);
-    if (opt) { $('#proj').value = j.project; pickProject(); }
-    show('#setup', true);
-    $('#setupNote').textContent = warned
-      ? 'Read the log above before sourcing visuals.'
-      : `Sheets ready for ${j.project}.`;
+
+  const tune = {
+    exag: (d.chosen || {}).exaggeration ?? 0.4,
+    cfg: (d.chosen || {}).cfg_weight ?? 0.5
+  };
+
+  // Built as named pieces rather than one deep expression — the nesting got
+  // deep enough that a miscounted bracket was easy to write and hard to see.
+  const voiceCard = r => {
+    const preview = el('button', {
+      class: 'btn sm',
+      onclick: async e => {
+        const b = e.target;
+        b.textContent = 'Generating…'; b.disabled = true;
+        const j = await api('/api/preview', {
+          lang, reference: r.name, text: d.sample,
+          exaggeration: tune.exag, cfg_weight: tune.cfg
+        });
+        b.textContent = 'Preview'; b.disabled = false;
+        if (j.url) new Audio(j.url + '?t=' + Date.now()).play();
+      }
+    }, 'Preview');
+
+    const choose = el('button', {
+      class: 'btn sm' + (r.name === chosen ? '' : ' primary'),
+      onclick: async () => {
+        await api('/api/choose_voice', {
+          lang, reference: r.name,
+          exaggeration: tune.exag, cfg_weight: tune.cfg
+        });
+        toast(`${r.name} will now read ${lang.toUpperCase()}.`);
+        viewVoices();
+      }
+    }, r.name === chosen ? 'Save these settings' : 'Use this');
+
+    const title = el('div', {}, el('h3', {}, r.name),
+      el('div', { class: 'sub' },
+        `${r.seconds}s` + (r.short ? ' · under 8s, clones poorly' : '')));
+
+    return el('div', { class: 'card' },
+      el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' },
+        title,
+        r.name === chosen ? el('span', { class: 'pill ok' }, 'in use') : null),
+      el('div', { class: 'row', style: 'margin-top:12px' }, preview, choose));
+  };
+  v.append(el('div', { class: 'cards' }, d.references.map(voiceCard)));
+
+  const slider = (label, key, note) => {
+    const out = el('b', { class: 'mono' }, tune[key].toFixed(2));
+    return el('div', {},
+      el('div', { class: 'row' }, el('span', { class: 'sub', style: 'flex:1' }, label), out),
+      el('input', {
+        type: 'range', min: 0, max: 1, step: 0.05, value: tune[key],
+        style: 'width:100%;accent-color:var(--accent)',
+        oninput: e => { tune[key] = +e.target.value; out.textContent = tune[key].toFixed(2); }
+      }),
+      el('div', { class: 'sub' }, note));
+  };
+  v.append(el('div', { class: 'card', style: 'margin-top:14px' },
+    el('div', { class: 'grid2' },
+      slider('Expression', 'exag', 'Low is calm and even. 0.40 suits documentary narration.'),
+      slider('Guidance', 'cfg', 'How closely it copies the reference. 0.50 is a good start.')),
+    el('div', { class: 'sub', style: 'margin-top:12px' },
+      'Preview first, then Use this — the settings are saved together with the clip.')));
+}
+
+// ═══ settings ═════════════════════════════════════════════════════════════
+async function viewSettings() {
+  const v = $('#view'); v.innerHTML = '';
+  const header = () => el('div', { class: 'head' }, el('div', { class: 'grow' },
+    el('h1', {}, 'Settings'),
+    el('p', {}, 'The same checks that `faceless check` runs in the terminal.')));
+  v.append(header(), el('div', { class: 'card' }, el('span', { class: 'spin' }), ' Checking…'));
+
+  const d = await api('/api/doctor');
+  v.innerHTML = ''; v.append(header());
+
+  const line = (ok, label, detail, hint) => el('tr', {},
+    el('td', { style: 'width:44px' },
+      el('span', { class: 'pill ' + (ok === null ? 'none' : ok ? 'ok' : 'bad') },
+        ok === null ? '–' : ok ? 'ok' : '!!')),
+    el('td', {}, el('b', {}, label),
+      (!ok && hint) ? el('div', { class: 'sub mono', style: 'margin-top:2px' }, hint) : null),
+    el('td', { class: 'mono sub', style: 'text-align:right' }, detail));
+
+  const dev = d.device || {};
+  v.append(el('div', { class: 'sec' }, el('h2', {}, 'This machine')));
+  v.append(el('div', { class: 'card' }, el('table', {}, el('tbody', {},
+    line(true, 'Python', d.python),
+    line(d.in_venv, 'Environment', d.in_venv ? 'project .venv' : 'system Python',
+      'run setup.sh (macOS) or setup.bat (Windows)'),
+    line(!!d.ffmpeg, 'ffmpeg', d.ffmpeg ? 'found' : 'NOT FOUND', d.ffmpeg_hint),
+    line(d.captions_ok, 'Captions', d.captions, d.ffmpeg_hint),
+    line(d.chatterbox, 'Voice engine', d.chatterbox ? 'installed' : 'missing',
+      'run setup.sh / setup.bat'),
+    line(d.chatterbox ? d.gpu_ok : null, 'GPU',
+      dev.name ? dev.name + (dev.vram_gb ? ' · ' + dev.vram_gb + ' GB' : '') : 'none',
+      'PyTorch has no CUDA build — see README section 6'),
+    dev.note ? el('tr', {}, el('td', {}),
+      el('td', { class: 'sub', colspan: '2' }, dev.note)) : null))));
+
+  v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'API keys')));
+  v.append(el('div', { class: 'card' }, el('table', {}, el('tbody', {},
+    line(d.keys.pexels, 'Pexels', d.keys.pexels ? 'set' : 'missing', 'pexels.com/api'),
+    line(d.keys.pixabay, 'Pixabay', d.keys.pixabay ? 'set' : 'missing', 'pixabay.com/api/docs'),
+    line(d.keys.gemini, 'Gemini (optional)', d.keys.gemini ? 'set' : 'not set',
+      'aistudio.google.com/apikey'))),
+    el('div', { class: 'sub', style: 'margin-top:10px' },
+      'Keys live in config.json. Edit that file in a plain text editor, then reload this page.')));
+
+  v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'Chosen voices')));
+  v.append(el('div', { class: 'card' }, el('table', {}, el('tbody', {},
+    Object.entries(d.voices || {}).map(([lg, s]) =>
+      line(!!s.reference_ok, lg.toUpperCase(), s.reference || 'none chosen',
+        'pick one in the Voices panel')))),
+    el('div', { class: 'row', style: 'margin-top:12px' },
+      el('button', { class: 'btn sm', onclick: () => location.hash = '#/voices' }, 'Open Voices'))));
+
+  v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'Finished files'),
+    el('span', { class: 'sub' }, `${(d.outputs || []).length} in out/`)));
+  v.append(el('div', { class: 'card' }, (d.outputs || []).length
+    ? el('table', {}, el('tbody', {}, d.outputs.map(o => el('tr', {},
+      el('td', { class: 'mono' }, o.name),
+      el('td', { class: 'sub', style: 'text-align:right' }, o.size_mb + ' MB'),
+      el('td', { class: 'sub', style: 'text-align:right;width:110px' }, ago(o.built)),
+      el('td', { style: 'text-align:right;width:76px' },
+        el('button', {
+          class: 'btn sm', onclick: () => window.open('/media/out/' + o.name, '_blank')
+        }, 'Play'))))))
+    : el('div', { class: 'sub' }, 'Nothing rendered yet.')));
+}
+
+// ═══ review visuals ═══════════════════════════════════════════════════════
+async function viewReview(id) {
+  const d = await api('/api/approval?id=' + encodeURIComponent(id));
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
+    el('div', { class: 'back', onclick: () => location.hash = '#/project/' + id }, '← ' + id),
+    el('h1', { style: 'margin-top:4px' }, 'Review visuals'),
+    el('p', {}, 'Click any picture that does not suit its line. Anything you leave alone '
+      + 'is approved — there is no approve button. Gold border marks a scene that carries the story.'))));
+
+  const items = d.items || [];
+  if (!items.length) {
+    v.append(el('div', { class: 'empty card' }, el('b', {}, 'Nothing sourced yet'),
+      'Run "Find visuals" first.'));
     return;
   }
-  if (j.stage === 'approve' && phase === 'stock') {
-    clearInterval(pollTimer);
-    show('#prog', false);
-    loadReview();
+  const rejected = new Set();
+  const count = el('span', { class: 'sub' }, '0 marked for replacement');
+
+  v.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, el('div', { class: 'row' },
+    count, el('div', { style: 'flex:1' }),
+    d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no match`) : null,
+    el('button', {
+      class: 'btn primary', onclick: async e => {
+        if (!rejected.size) return toast('Nothing marked yet.');
+        e.target.disabled = true;
+        const r = await api('/api/source', { id, redo: [...rejected] });
+        if (r.started) location.hash = '#/run'; else e.target.disabled = false;
+      }
+    }, 'Get new pictures for these'))));
+
+  v.append(el('div', { class: 'thumbs' }, items.map(s => {
+    const t = el('div', {
+      class: 'thumb' + (s.hero ? ' hero' : ''),
+      title: `S${s.n} · ${s.narration || ''}`,
+      onclick: e => {
+        const n = e.currentTarget;
+        if (rejected.has(s.n)) { rejected.delete(s.n); n.classList.remove('rej'); }
+        else { rejected.add(s.n); n.classList.add('rej'); }
+        count.textContent = `${rejected.size} marked for replacement`;
+      }
+    }, el('span', { class: 'n' }, 'S' + s.n));
+    if (s.url) t.append(s.video
+      ? el('video', {
+        src: s.url, muted: true, loop: true, playsinline: true, preload: 'metadata',
+        onmouseenter: e => e.target.play().catch(() => { }),
+        onmouseleave: e => e.target.pause()
+      })
+      : el('img', { src: s.url, loading: 'lazy', alt: s.query || '' }));
+    return t;
+  })));
+}
+
+// ═══ router ═══════════════════════════════════════════════════════════════
+const ROUTES = [
+  [/^#\/dashboard$/, viewDashboard],
+  [/^#\/project\/(.+)$/, viewProject],
+  [/^#\/review\/(.+)$/, viewReview],
+  [/^#\/run$/, viewRun],
+  [/^#\/new$/, viewNew],
+  [/^#\/voices/, viewVoices],
+  [/^#\/settings$/, viewSettings],
+];
+async function route() {
+  const h = location.hash || '#/dashboard';
+  for (const [re, fn] of ROUTES) {
+    const m = h.match(re);
+    if (!m) continue;
+    document.querySelectorAll('.nav').forEach(n => n.classList.toggle('on', h.startsWith(n.dataset.r)));
+    try { await fn(m[1]); }
+    catch (e) {
+      $('#view').innerHTML = '';
+      $('#view').append(el('div', { class: 'empty card' },
+        el('b', {}, 'That view failed to load'),
+        el('div', { class: 'mono sub' }, String(e && e.message || e))));
+    }
+    window.scrollTo(0, 0);
+    return;
   }
-  if (j.stage === 'done' && phase === 'build') {
-    clearInterval(pollTimer);
-    show('#prog', false); show('#results', true);
-    $('#outs').innerHTML = (j.outputs || []).map(o => `
-      <div class="out">
-        <b>${o.name}</b>
-        <span class="stat">${o.size_mb} MB</span>
-        <button class="ghost" onclick="reveal('${o.path.replace(/'/g, "\\'")}')">Show</button>
-      </div>`).join('');
-  }
+  location.hash = '#/dashboard';
+}
+addEventListener('hashchange', route);
+document.querySelectorAll('.nav').forEach(n => n.onclick = () => location.hash = n.dataset.r);
+
+// ═══ polling ══════════════════════════════════════════════════════════════
+let lastStage = null;
+async function poll() {
+  try {
+    const j = await api('/api/status');
+    S.status = j;
+    const busy = BUSY.includes(j.stage);
+    const badge = $('#navBadge');
+    badge.style.display = busy ? '' : 'none';
+    if (busy) badge.textContent = j.total ? Math.round(100 * j.done / j.total) + '%' : '···';
+
+    if (location.hash === '#/run') paintRun();
+
+    // A run just ended — refresh whatever is on screen so the status is honest.
+    if (lastStage && lastStage !== j.stage && ['done', 'approve', 'error'].includes(j.stage)) {
+      if (j.stage === 'done') toast('Finished.');
+      if (j.stage === 'error') toast(j.error || 'Something failed — see Activity.', true);
+      if (j.stage === 'approve') toast('Visuals ready to review.');
+      if (location.hash === '#/dashboard' || location.hash.startsWith('#/project/')) route();
+    }
+    lastStage = j.stage;
+  } catch (e) { /* server restarting — try again on the next tick */ }
+  setTimeout(poll, 900);
 }
 
-// ---------------------------------------------------------------- review
-async function loadReview() {
-  const d = await api('/api/approval?id=' + encodeURIComponent(PROJ.id));
-  $('#grid').innerHTML = d.items.map(it => `
-    <div class="tile ${it.hero ? 'hero' : ''}" data-n="${it.n}">
-      <div class="thumb">
-        ${it.url
-          ? (it.video
-             ? `<video src="${it.url}" muted preload="metadata"></video>`
-             : `<img src="${it.url}" loading="lazy">`)
-          : `<div class="none">no match found<br>edit the search line in your sheet</div>`}
-        <span class="badge">S${it.n} · ${it.media}${it.take > 1 ? ' · take ' + it.take : ''}</span>
-        ${it.hero ? '<span class="badge h">STORY</span>' : ''}
-      </div>
-      <div class="tbody">
-        <p>${escapeHtml(it.narration.slice(0, 150))}${it.narration.length > 150 ? '…' : ''}</p>
-        <code>${escapeHtml(it.query)}</code>
-      </div>
-    </div>`).join('');
-
-  $('#grid').querySelectorAll('.tile').forEach(t => {
-    t.onclick = e => {
-      if (e.target.tagName === 'VIDEO') return;
-      const n = +t.dataset.n;
-      t.classList.toggle('redo');
-      t.classList.contains('redo') ? redo.add(n) : redo.delete(n);
-      $('#btnRedo').textContent = `Get new pictures (${redo.size})`;
-      $('#btnRedo').disabled = !redo.size;
-    };
-  });
-
-  $('#reviewNote').textContent = d.missing.length
-    ? `${d.missing.length} scene(s) found nothing: ${d.missing.join(', ')}`
-    : `${d.items.length} scenes ready`;
-  $('#btnRedo').textContent = 'Get new pictures (0)';
-  $('#btnRedo').disabled = true;
-  show('#review', true);
-  $('#hint').textContent = PROJ.label;
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c =>
-    ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-}
-
-async function reveal(p) { await api('/api/reveal', p ? {path: p} : {}); }
-
-boot();
+route();
+poll();
 </script>
 </html>

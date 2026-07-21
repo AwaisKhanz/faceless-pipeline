@@ -57,6 +57,21 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
                      "cfg_weight": p["cfg_weight"]}, log=log)
 
 
+def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> list[Path]:
+    """Where this language's narration is (or would be) cached. Generates nothing.
+
+    Returns an empty list when no reference clip has been chosen — that is not
+    an error here, it just means nothing can have been voiced yet.
+    """
+    name = voice or V.pref_for(lang)["reference"]
+    if not name or not V.supported(lang):
+        return []
+    p = V.pref_for(lang)
+    return CB.expected_paths(scenes, lang, name, cache,
+                             {"exaggeration": p["exaggeration"],
+                              "cfg_weight": p["cfg_weight"]})
+
+
 def list_voices(lang: str | None = None) -> None:
     """Print the reference clips available to clone from."""
     refs = V.references()

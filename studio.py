@@ -75,6 +75,7 @@ from lib import console  # noqa: E402
 # characters. Do this before anything is printed.
 console.setup()
 from lib import gemini as gem  # noqa: E402
+from lib import render as R  # noqa: E402
 from lib import tts, voices as vx  # noqa: E402
 
 PORT = 8765
@@ -83,7 +84,7 @@ UI = ROOT / "lib" / "ui.html"
 # ------------------------------------------------------------------- job state
 
 JOB = {
-    "stage": "idle",      # idle | stock | voice | render | done | error
+    "stage": "idle",      # idle | generate | stock | voice | render | done | error
     "label": "",
     "done": 0, "total": 0,
     "log": [],
@@ -92,6 +93,13 @@ JOB = {
     "project": None,
     "langs": [],
     "warnings": [],
+    # Timing, so the interface can show real numbers instead of a spinner.
+    "started": None,       # epoch seconds, whole job
+    "step_started": None,  # epoch seconds, current step
+    "steps": [],           # [{name, lang, seconds, items}] as each one finishes
+    "eta": None,           # seconds remaining in this step, or None
+    "rate": None,          # items per second in this step
+    "lang": None,          # language currently being worked on
 }
 LOCK = threading.Lock()
 
@@ -101,17 +109,55 @@ def set_job(**kw) -> None:
         JOB.update(kw)
 
 
+def begin_job(project: str, langs: list[str], stage: str) -> None:
+    """Reset the board for a new run. Called once, before any work starts."""
+    with LOCK:
+        JOB.update(stage=stage, project=project, langs=langs, label="",
+                   done=0, total=0, log=[], error="", outputs=[], warnings=[],
+                   started=time.time(), step_started=time.time(),
+                   steps=[], eta=None, rate=None, lang=None)
+
+
+def begin_step(stage: str, lang: str | None = None) -> None:
+    with LOCK:
+        JOB.update(stage=stage, lang=lang, step_started=time.time(),
+                   done=0, total=0, eta=None, rate=None, label="")
+
+
+def end_step(items: int = 0) -> None:
+    """Record how long the step took, so the UI can show a per-step breakdown."""
+    with LOCK:
+        t0 = JOB.get("step_started") or time.time()
+        JOB["steps"].append({"name": JOB["stage"], "lang": JOB.get("lang"),
+                             "seconds": round(time.time() - t0, 1),
+                             "items": items or JOB.get("done", 0)})
+
+
 def log(msg: str) -> None:
     with LOCK:
-        JOB["log"].append(msg)
-        del JOB["log"][:-400]
+        JOB["log"].append({"t": time.time(), "text": str(msg)})
+        del JOB["log"][:-600]
 
 
 def progress(done: int, total: int, label: str = "") -> None:
+    """Record progress and work out a rate and ETA from it.
+
+    The estimate is based on elapsed time for THIS step only. Steps have wildly
+    different per-item costs — sourcing a photo is a download, voicing a line is
+    a GPU inference — so carrying a rate across them would produce a confidently
+    wrong number, which is worse than no number.
+    """
     with LOCK:
         JOB["done"], JOB["total"] = done, total
         if label:
             JOB["label"] = label
+        t0 = JOB.get("step_started")
+        if t0 and done > 0:
+            elapsed = time.time() - t0
+            rate = done / elapsed if elapsed > 0 else 0
+            JOB["rate"] = round(rate, 3) if rate else None
+            remaining = max(0, (total or 0) - done)
+            JOB["eta"] = round(remaining / rate) if rate > 0 and remaining else 0
 
 
 # ------------------------------------------------------------------ the work
@@ -120,6 +166,7 @@ def run_generate(script: str, pid: str, langs: list[str], overwrite: bool) -> No
     """Script in → production sheets out. Gemini returns structured data only;
     the file format is written by compose.py, so it cannot come out malformed."""
     try:
+        begin_job(pid, langs, "generate")
         cfg = pl.load_config()
         key = cfg.get("gemini_key", "")
         if not key:
@@ -172,8 +219,8 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
                 "No stock API key yet. Open config.json and paste your free "
                 "Pexels and Pixabay keys in, then try again.")
         scenes = pl.load_scenes(sheet, "en", None)
-        set_job(stage="stock", label="sourcing visuals", done=0,
-                total=len(redo or scenes), error="", project=pid)
+        begin_job(pid, ["en"], "stock")
+        set_job(total=len(redo or scenes))
         log(f"Sourcing visuals for {proj['label']}")
 
         def onp(d, t, m):
@@ -181,6 +228,7 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
             log(f"  {m}")
 
         pl.source_stock(scenes, sheet, cfg, redo=redo, on_progress=onp)
+        end_step()
         set_job(stage="approve", label="ready for review")
         log("Visuals ready — review them below.")
     except Exception as e:
@@ -198,14 +246,15 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
         assets_f = pl.paths_for(sheet, "en")["assets"]
         assets = {int(k): v for k, v in json.loads(assets_f.read_text(encoding="utf-8")).items()}
         outputs = []
-        set_job(stage="voice", error="", outputs=[], project=pid, langs=langs)
+        begin_job(pid, langs, "voice")
 
         for li, lang in enumerate(langs):
             tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
             tr = pl.translation_for(sheets, pid, lang)
             scenes = pl.load_scenes(sheet, lang, tr)
 
-            set_job(stage="voice", label=f"{tag} — narration")
+            begin_step("voice", lang)
+            set_job(label=f"{tag} — narration")
             log(f"{tag}: generating narration ({len(scenes)} lines)")
             t0 = time.time()
             vs = pl.generate_voice(
@@ -213,8 +262,10 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
                 on_progress=lambda d, t, m: (progress(d, t, f"{tag} — voicing line {d} of {t}"),
                                              log(f"  {m}")))
             log(f"{tag}: narration done in {time.time() - t0:.0f}s")
+            end_step(len(scenes))
 
-            set_job(stage="render", label=f"{tag} — building video")
+            begin_step("render", lang)
+            set_job(label=f"{tag} — building video")
             log(f"{tag}: rendering")
             t0 = time.time()
             try:
@@ -231,6 +282,7 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
                 log(f"    To fix burn-in: {R.ffmpeg_fix_hint()}")
             mins = (time.time() - t0) / 60
             log(f"{tag}: finished in {mins:.1f} min → {out.name}")
+            end_step(len(scenes))
             outputs.append({"lang": lang, "name": out.name, "path": str(out),
                             "size_mb": round(out.stat().st_size / 1e6)})
             set_job(outputs=list(outputs))
@@ -243,10 +295,102 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
         traceback.print_exc()
 
 
+def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
+              music: str | None, zoom: bool, voices: dict[str, str],
+              force: bool = False) -> None:
+    """Run a chosen subset of steps for chosen languages.
+
+    `steps` is any of "voice" and "render". This is what the project view's
+    per-step buttons call, so re-rendering does not silently redo narration
+    (7 minutes) and vice versa.
+
+    `force` deletes this language's cached narration first — the only way to
+    genuinely redo voicing, since the cache is keyed by text and settings and
+    would otherwise be reused.
+    """
+    try:
+        sheets = ROOT / "sheets"
+        proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
+        sheet = sheets / proj["sheet"]
+        begin_job(pid, langs, steps[0] if steps else "voice")
+
+        assets = {}
+        if "render" in steps:
+            assets_f = pl.paths_for(sheet, "en")["assets"]
+            if not assets_f.exists():
+                raise RuntimeError(
+                    "No visuals sourced yet. Run 'Find visuals' first.")
+            assets = {int(k): v for k, v in
+                      json.loads(assets_f.read_text(encoding="utf-8")).items()}
+
+        outputs = []
+        for li, lang in enumerate(langs):
+            tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
+            tr = pl.translation_for(sheets, pid, lang)
+            scenes = pl.load_scenes(sheet, lang, tr)
+            vs = []
+
+            if force and "voice" in steps:
+                gone = 0
+                for f in tts.voice_paths(scenes, lang,
+                                         pl.paths_for(sheet, lang)["voicecache"]):
+                    if f.exists():
+                        f.unlink()
+                        gone += 1
+                log(f"{tag}: cleared {gone} cached narration file(s)")
+
+            if "voice" in steps:
+                begin_step("voice", lang)
+                set_job(label=f"{tag} — narration")
+                log(f"{tag}: generating narration ({len(scenes)} lines)")
+                t0 = time.time()
+                vs = pl.generate_voice(
+                    scenes, lang, sheet, voice=voices.get(lang) or None,
+                    on_progress=lambda d, t, m: (
+                        progress(d, t, f"{tag} — voicing line {d} of {t}"),
+                        log(f"  {m}")))
+                log(f"{tag}: narration done in {time.time() - t0:.0f}s")
+                end_step(len(scenes))
+
+            if "render" in steps:
+                if not vs:
+                    # Reuse what is already cached rather than regenerating.
+                    vs = pl.generate_voice(scenes, lang, sheet,
+                                           voice=voices.get(lang) or None)
+                begin_step("render", lang)
+                set_job(label=f"{tag} — building video")
+                log(f"{tag}: rendering")
+                t0 = time.time()
+                try:
+                    out = pl.render_video(
+                        scenes, assets, vs, sheet, lang, captions=captions,
+                        music=Path(music) if music else None, zoom=zoom,
+                        on_progress=lambda d, t, m: progress(d, t, f"{tag} — {m}"))
+                except pl.CaptionsSkipped as cs:
+                    out = cs.video
+                    log(f"{tag}: WARNING video finished, captions not burned in.")
+                    log(f"    {cs.reason}")
+                    log(f"    Upload {cs.srt.name} to YouTube instead.")
+                    log(f"    To fix burn-in: {R.ffmpeg_fix_hint()}")
+                log(f"{tag}: finished in {(time.time() - t0) / 60:.1f} min "
+                    f"-> {out.name}")
+                end_step(len(scenes))
+                outputs.append({"lang": lang, "name": out.name, "path": str(out),
+                                "size_mb": round(out.stat().st_size / 1e6)})
+                set_job(outputs=list(outputs))
+
+        set_job(stage="done", label="finished")
+        log("Done.")
+    except Exception as e:
+        set_job(stage="error", error=str(e))
+        log(f"ERROR: {e}")
+        traceback.print_exc()
+
+
 def start_thread(fn, *a) -> bool:
     with LOCK:
-        if JOB["stage"] in ("stock", "voice", "render"):
-            return False
+        if JOB["stage"] in ("generate", "stock", "voice", "render"):
+            return False      # something is already running
         JOB["log"] = []
         JOB["error"] = ""
     threading.Thread(target=fn, args=a, daemon=True).start()
@@ -321,10 +465,56 @@ class Handler(BaseHTTPRequestHandler):
             cfg = pl.load_config()
             music = sorted(f.name for f in (ROOT / "music").glob("*")
                            if f.suffix.lower() in (".mp3", ".m4a", ".wav", ".aac"))
+            # Attach per-language status so the dashboard needs one request,
+            # not one per project.
+            for pr in projects:
+                try:
+                    pr["status"] = pl.project_status(
+                        ROOT / "sheets" / pr["sheet"], pr["languages"])
+                except Exception as e:
+                    pr["status"] = {"error": str(e), "scenes": pr.get("scenes", 0),
+                                    "assets": 0, "languages": {}}
             return self._json({
                 "projects": projects, "music": music,
                 "has_keys": bool(cfg.get("pexels_key") or cfg.get("pixabay_key")),
                 "has_gemini": bool(cfg.get("gemini_key")),
+            })
+
+        if path == "/api/doctor":
+            # The same checks the `faceless check` command runs, for Settings.
+            from lib import chatterbox_engine as CB
+            import shutil as _sh
+            caps = R.caption_method()
+            dev = CB.device_info() if CB.installed() else {}
+            langs = {}
+            for lg in ("en", "de", "es"):
+                try:
+                    langs[lg] = vx.status(lg)
+                except Exception:
+                    langs[lg] = {}
+            cfg = pl.load_config()
+            return self._json({
+                "python": sys.version.split()[0],
+                "in_venv": Path(sys.prefix) == (ROOT / ".venv"),
+                "ffmpeg": _sh.which("ffmpeg") or "",
+                "ffprobe": _sh.which("ffprobe") or "",
+                "captions": caps,
+                "captions_ok": caps in ("ass", "subtitles"),
+                "ffmpeg_hint": R.ffmpeg_fix_hint(),
+                "chatterbox": CB.installed(),
+                "device": dev,
+                "gpu_ok": dev.get("device") in ("cuda", "mps"),
+                "references": CB.list_references() if CB.installed() else [],
+                "voices": langs,
+                "keys": {"pexels": bool(cfg.get("pexels_key")),
+                         "pixabay": bool(cfg.get("pixabay_key")),
+                         "gemini": bool(cfg.get("gemini_key"))},
+                "outputs": sorted(
+                    ({"name": f.name,
+                      "size_mb": round(f.stat().st_size / 1e6, 1),
+                      "built": int(f.stat().st_mtime)}
+                     for f in (ROOT / "out").glob("*.mp4")),
+                    key=lambda d: -d["built"]),
             })
 
         if path == "/api/status":
@@ -426,6 +616,25 @@ class Handler(BaseHTTPRequestHandler):
                               b.get("music") and str(ROOT / "music" / b["music"]),
                               bool(b.get("zoom", True)), b.get("voices") or {})
             return self._json({"started": ok})
+
+        if path == "/api/run":
+            steps = [x for x in (b.get("steps") or ["voice", "render"])
+                     if x in ("voice", "render")]
+            if not steps:
+                return self._json({"error": "nothing to run"}, 400)
+            # "id" for consistency with every sibling endpoint; "project" is
+            # accepted too so neither spelling is a silent no-op.
+            pid = b.get("id") or b.get("project")
+            if not pid:
+                return self._json({"error": "which project?"}, 400)
+            ok = start_thread(run_steps, pid,
+                              b.get("langs") or ["en"], steps,
+                              bool(b.get("captions")), b.get("music") or None,
+                              b.get("zoom", True), b.get("voices") or {},
+                              bool(b.get("force")))
+            if not ok:
+                return self._json({"error": "something is already running"}, 409)
+            return self._json({"started": ok, "steps": steps})
 
         if path == "/api/reveal":
             target = ROOT / "out"

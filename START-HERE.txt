@@ -126,12 +126,21 @@ Open the control panel:
 
     faceless start
 
-Then in the browser:
+The panel has four sections in the left sidebar:
 
-    0. Paste a script and generate the sheets     (optional)
-    1. Find visuals
-    2. Click any picture that doesn't fit, get new ones
-    3. Build the videos
+    Dashboard   every video, and how far along each language is
+    Activity    live log and exact numbers while something is running
+    Voices      audition and choose a reference clip per language
+    Settings    machine check, GPU, API keys, finished files
+
+A normal day:
+
+    0. Dashboard -> + New from script          (optional)
+    1. Open the project -> Find visuals
+    2. Review & swap any picture that doesn't fit
+    3. Build every language - or just re-render one
+
+There is a light/dark toggle at the bottom of the sidebar.
 
 Leave the terminal open while you work. Ctrl+C when finished.
 
