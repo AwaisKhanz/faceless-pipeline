@@ -15,11 +15,10 @@ __pycache__/
 *.pyo
 
 # ── Reference audio ─────────────────────────────────────────────────────────
-# Voice clips are copied between machines by hand rather than published, since
-# redistributing someone else's recording is a separate question from using it
-# locally. The README inside the folder is tracked so the folder survives.
-voices_refs/*
-!voices_refs/README.txt
+# Tracked. These are LibriVox recordings (public domain), they are small, and
+# having them travel with the repo means a fresh clone can voice immediately.
+# If you ever add a clip you do NOT hold redistribution rights to, add it here
+# by name and copy it between machines by hand instead.
 
 # ── Music ───────────────────────────────────────────────────────────────────
 # Background tracks are licensed to you, not necessarily redistributable.
