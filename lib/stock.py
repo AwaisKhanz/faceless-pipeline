@@ -14,6 +14,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+import subprocess
 from pathlib import Path
 
 from . import sources as _SRC
@@ -108,6 +109,23 @@ def _pixabay(query: str, media: str, key: str, want: int) -> list[dict]:
 
 # ---------------------------------------------------------------------- fetch
 
+def _pixel_width(f: Path) -> int:
+    """Width of an image or video file, or 0 if it cannot be determined.
+
+    Uses ffprobe, already a hard dependency of this project, so this adds
+    nothing to install. Failure returns 0 and the caller keeps the file — a
+    probe that cannot run is not evidence the picture is bad.
+    """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width", "-of", "csv=p=0", str(f)],
+            capture_output=True, text=True, timeout=20)
+        return int((r.stdout.strip().split(",") or ["0"])[0] or 0)
+    except Exception:
+        return 0
+
+
 def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
           pixabay_key: str | None, index: int = 0,
           sources: list[str] | None = None, cfg: dict | None = None) -> dict:
@@ -155,6 +173,15 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     hit = results[index]
     dest = cache / f"{slug}{hit['ext']}"
     dest.write_bytes(_get(hit["url"]))
+
+    # Measure what actually arrived. Archives happily return a 400px scan of a
+    # postcard, which looks like a mistake at 1080p — and no search API reports
+    # dimensions, so this is the first honest opportunity to check.
+    w = _pixel_width(dest)
+    if w and w < _SRC.MIN_WIDTH:
+        dest.unlink(missing_ok=True)
+        raise StockError(
+            f"{hit['src']} returned {w}px for '{query}' — too small for 1080p")
     meta = {"path": str(dest), "credit": hit["credit"], "page": hit["page"],
             "src": hit["src"], "license": hit.get("license", ""),
             "query": query, "media": media, "index": index}

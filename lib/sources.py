@@ -39,8 +39,12 @@ TIMEOUT = 25
 UA = "faceless-studio/1.0 (local video pipeline; contact via project README)"
 
 # Archive scans are frequently portrait, 4:3, or a 600px thumbnail of a
-# postcard. At 1080p those look like mistakes, so anything smaller is dropped
-# before it can reach a timeline.
+# postcard, and at 1080p those look like mistakes.
+#
+# Search responses do NOT carry dimensions — neither NASA's nor Smithsonian's
+# — so this cannot be enforced at search time. It is checked after download in
+# stock.fetch, where the file itself can be measured. A hit whose width IS
+# known and is too small is dropped here as a cheap first pass.
 MIN_WIDTH = 1100
 
 
@@ -93,6 +97,16 @@ def _json(url: str, headers: dict | None = None) -> dict:
         raise SourceError("the server did not return JSON")
 
 
+def _https(url: str) -> str:
+    """Upgrade plain http to https.
+
+    NASA's asset manifests hand back http:// URLs. Plenty of networks and
+    corporate proxies block that outright, and there is no reason to download
+    a public file in the clear. The hosts all serve https.
+    """
+    return "https://" + url[7:] if url.startswith("http://") else url
+
+
 def _ext(url: str, default: str = ".jpg") -> str:
     tail = urllib.parse.urlparse(url).path.rsplit(".", 1)
     if len(tail) == 2 and 2 <= len(tail[1]) <= 4:
@@ -140,6 +154,7 @@ def nasa(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
             best = best or next((f for f in files if f.lower().endswith((".jpg", ".png"))), "")
         if not best:
             continue
+        best = _https(best)
         out.append(Hit(url=best, ext=_ext(best, ".mp4" if kind == "video" else ".jpg"),
                        credit=meta.get("center", "NASA") or "NASA",
                        page=preview or href, src="nasa",
@@ -174,7 +189,7 @@ def smithsonian(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
             if not url:
                 continue
             out.append(Hit(
-                url=url, ext=_ext(url), src="smithsonian",
+                url=_https(url), ext=_ext(url), src="smithsonian",
                 credit=(content.get("freetext", {}).get("dataSource", [{}])[0]
                         .get("content", "Smithsonian") if content.get("freetext")
                         else "Smithsonian"),
