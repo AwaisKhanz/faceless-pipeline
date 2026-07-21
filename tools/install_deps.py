@@ -37,7 +37,8 @@ def pip(*args: str, quiet: bool = False) -> int:
     cmd = [sys.executable, "-m", "pip", "install", *args]
     if quiet:
         cmd.insert(4, "--quiet")
-    return subprocess.run(cmd).returncode
+    # cwd=ROOT so a bare "." always means this project, however setup was invoked.
+    return subprocess.run(cmd, cwd=ROOT).returncode
 
 
 def say(msg: str = "") -> None:
@@ -116,7 +117,7 @@ def main() -> int:
     # callable", because perth swallows its own ImportError and leaves the
     # class as None. Pinned before AND after, because Chatterbox's own
     # dependency resolution can drag setuptools forward again.
-    say("\n  [1/4] pinning setuptools (perth still needs pkg_resources)")
+    say("\n  [1/5] pinning setuptools (perth still needs pkg_resources)")
     pip("setuptools<81", quiet=True)
 
     # ORDER MATTERS, and it is the opposite of what you would expect.
@@ -130,7 +131,7 @@ def main() -> int:
     # Overriding the pin is not optional on a recent card. torch 2.6 predates
     # Blackwell (RTX 50-series) support, so no build of it can drive one at all.
     # Chatterbox runs fine on newer torch in practice — the pin is over-strict.
-    say("\n  [2/4] installing Chatterbox (the voice engine)")
+    say("\n  [2/5] installing Chatterbox (the voice engine)")
     say("     this pulls in PyTorch — several GB, leave it running")
     if pip("--upgrade", "chatterbox-tts") != 0:
         say("\n  !! Chatterbox failed to install. Nothing can be voiced until it does.")
@@ -138,7 +139,7 @@ def main() -> int:
 
     want_cuda = not a.cpu_only and platform.system() in ("Windows", "Linux")
     if want_cuda:
-        say("\n  [3/4] looking for an NVIDIA GPU")
+        say("\n  [3/5] looking for an NVIDIA GPU")
         if have_nvidia_gpu():
             say("     replacing Chatterbox's CPU-only PyTorch with the CUDA 12.8 build")
             say("     (pip will warn about a version conflict — that is expected")
@@ -154,11 +155,21 @@ def main() -> int:
             say("     https://www.nvidia.com/drivers , then run setup again.")
             want_cuda = False
     else:
-        say("\n  [3/4] skipping CUDA (no NVIDIA GPU expected on this machine)")
+        say("\n  [3/5] skipping CUDA (no NVIDIA GPU expected on this machine)")
 
     pip("setuptools<81", quiet=True)      # put it back if anything moved it
 
-    say("\n  [4/4] checking the install actually works")
+    # The `faceless` command. --no-deps is essential: this project declares no
+    # dependencies precisely so pip cannot re-resolve the environment here and
+    # undo the CUDA build we just installed.
+    say("\n  [4/5] installing the 'faceless' command")
+    if pip("-e", ".", "--no-deps", quiet=True) == 0:
+        say("     you can now type:  faceless start")
+    else:
+        say("     could not install it — no harm done, use:")
+        say("       python make_video.py studio")
+
+    say("\n  [5/5] checking the install actually works")
     t = torch_report()
     if t.get("error") and not t.get("works"):
         say(f"     !! {t['error']}")
@@ -202,7 +213,7 @@ def main() -> int:
     say()
     say("  " + "-" * 38)
     if ok:
-        say("  Done. Put a reference clip in voices_refs/, then start the studio.")
+        say("  Done. Start it with:   faceless start")
     else:
         say("  Finished with warnings — see the !! lines above before voicing.")
     say()

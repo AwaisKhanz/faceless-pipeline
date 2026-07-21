@@ -13,6 +13,9 @@ out/
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+build/
+dist/
 
 # ── Reference audio ─────────────────────────────────────────────────────────
 # Tracked. These are LibriVox recordings (public domain), they are small, and

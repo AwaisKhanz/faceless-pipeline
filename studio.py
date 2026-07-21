@@ -444,7 +444,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "unknown endpoint"}, 404)
 
 
-def main() -> None:
+def main(open_browser: bool = True) -> None:
     for d in ("sheets", "cache/stock", "cache/voice", "work", "out", "music"):
         (ROOT / d).mkdir(parents=True, exist_ok=True)
     if not UI.exists():
@@ -461,7 +461,8 @@ def main() -> None:
     print("  │  Press Ctrl+C here when you're finished.   │")
     print("  └────────────────────────────────────────────┘")
     print()
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    if open_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

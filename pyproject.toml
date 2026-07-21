@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faceless-studio"
+version = "1.0.0"
+description = "Turns a script into a finished YouTube video in several languages, locally."
+requires-python = ">=3.10"
+
+# DELIBERATELY EMPTY, and it must stay that way.
+#
+# The heavy dependencies (torch, torchaudio, chatterbox-tts) are installed by
+# setup.sh / setup.bat in a specific order, because chatterbox-tts pins
+# torch==2.6.0 and pip will happily tear out a working CUDA build to satisfy
+# that pin. Listing anything here would let `pip install -e .` re-resolve the
+# environment and silently undo it — the exact failure that cost an afternoon.
+#
+# This file exists only to provide the `faceless` command. Always install it
+# with --no-deps.
+dependencies = []
+
+[project.scripts]
+faceless = "cli:main"
+
+[tool.setuptools]
+# Flat layout: scripts at the root, one package. Spelled out rather than
+# auto-discovered, so setuptools never guesses wrong about what to include.
+py-modules = ["cli", "make_video", "studio"]
+packages = ["lib"]

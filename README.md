@@ -1,7 +1,7 @@
 # Faceless Studio
 
 Turns a script into a finished YouTube video — in English, German and Spanish — on your
-own Mac. No subscriptions, no watermarks, no scene limit.
+own computer. Windows or macOS. No subscriptions, no watermarks, no scene limit.
 
 ```
    script  →  production sheets  →  visuals  →  narration  →  MP4
@@ -122,9 +122,15 @@ Two are required, one is optional. All free.
 | **Pixabay** | fallback when Pexels has no match | https://pixabay.com/api/docs/ |
 | **Gemini** | *optional* — turning a script into sheets | https://aistudio.google.com/apikey |
 
-Open the config file:
+Copy the template, then open it:
+
+```powershell
+copy config.example.json config.json      :: Windows
+notepad config.json
+```
 
 ```bash
+cp config.example.json config.json        # macOS
 open -e config.json
 ```
 
@@ -136,8 +142,9 @@ Paste each key **between the existing quote marks**:
 "gemini_key": ""
 ```
 
-> Use `open -e`, not a double-click. TextEdit's rich-text mode turns `"` into curly
-> quotes and silently breaks the file.
+> Use a plain text editor — Notepad on Windows, `open -e` (not a double-click) on macOS.
+> TextEdit's rich-text mode and Word both turn `"` into curly quotes, which silently
+> breaks the file.
 
 Prefer keys out of files? Set `PEXELS_API_KEY`, `PIXABAY_API_KEY` and `GEMINI_API_KEY`
 as environment variables instead — those win over `config.json`.
@@ -145,18 +152,51 @@ as environment variables instead — those win over `config.json`.
 ## 1.5 Check it
 
 ```bash
-python3 make_video.py doctor
+faceless check
 ```
 
 Everything you need should show `ok`. Anything showing `!!` is explained in section 6.
+
+The two lines that matter most:
+
+```
+ok chatterbox  installed · NVIDIA GeForce RTX 5060 Ti · 17.1 GB VRAM · sm_120
+ok captions    ass: libass present — full styled captions
+```
+
+If `chatterbox` says `CPU` on a machine with an NVIDIA card, stop and fix that first —
+section 6 explains why, and it's a one-line fix. Nothing errors; voicing is just twenty
+times slower than it should be.
 
 ---
 
 # 2 · Making a video
 
-**Double-click `Start.command`.** A Terminal window opens and your browser shows the
-control panel. Leave that Terminal window open while you work; press Ctrl+C in it when
-you're finished.
+Open the control panel:
+
+```bash
+faceless start
+```
+
+Your browser opens to the panel. Leave the terminal open while you work; press Ctrl+C in
+it when you're finished. `faceless start --no-browser` if you'd rather open the page
+yourself.
+
+`faceless` is installed by the setup script as a normal console command — the same
+mechanism behind `npm start` or `git`. It works from any folder inside the project, as
+long as the `.venv` is active.
+
+Three ways to do the identical thing, in case one isn't available:
+
+| | |
+|---|---|
+| `faceless start` | the short form, once setup has run |
+| `python3 make_video.py studio` | always works, no install needed |
+| double-click `Start.bat` / `Start.command` | no terminal at all |
+
+**A note on `python` vs `python3`:** on Windows type `python`, on macOS type `python3`.
+That's the only difference between the platforms once setup is done. `faceless` is
+spelled the same on both.
 
 ## Step 0 · Start from a script *(optional)*
 
@@ -196,7 +236,12 @@ same scene three times and you'll get the fourth-best result.
 ## Step 3 · Build
 
 Click **Looks good — build the videos**. Narration is generated and every ticked language
-rendered, with progress as it goes. Roughly 12–18 minutes per language.
+rendered, with progress as it goes.
+
+Timing depends almost entirely on whether you have an NVIDIA card. On an RTX 5060 Ti,
+narration for a 115-scene video takes about 7 minutes per language; on Apple Silicon it
+is closer to 100. Rendering the picture is similar on both — it's ffmpeg, not the GPU.
+Run `benchtts` once to see where your machine sits.
 
 Finished files land in `out/`, with a **Show files in Finder** button.
 
@@ -205,7 +250,7 @@ Finished files land in `out/`, with a **Show files in Finder** button.
 # 3 · Voices
 
 Narration is cloned from a reference clip by **Chatterbox** — MIT licensed, running
-locally on your Mac, free and unlimited. There is no per-character cost and nothing is
+locally on your own machine, free and unlimited. There is no per-character cost and nothing is
 sent to a third party.
 
 ## Reference clips
@@ -252,9 +297,25 @@ It times five real lines from your sheets, measures **seconds per character** (l
 vary too much for a per-line average to mean anything), takes the median, and extrapolates
 to a full video in three languages.
 
-If the fastest and slowest lines differ by 3× or more it says so and refuses to treat the
-estimate as reliable — because that pattern means the machine is running out of memory, not
-that the model is slow. Two different machines can differ by 10× on identical work.
+Two things it deliberately handles:
+
+- **The first line is always slower** — the GPU compiles kernels on its first real call.
+  That cost is paid once per session, not per line, so it's reported separately and left
+  out of the estimate.
+- **If the later lines are slower than the earlier ones**, it says so and refuses to treat
+  the estimate as reliable. That direction of drift means the machine is running out of
+  memory as it goes, which is a different problem from being slow.
+
+Measured on the two machines this was built against, same 115-scene script:
+
+| | Apple Silicon (MPS) | RTX 5060 Ti (CUDA) |
+|---|---|---|
+| per line | 53.7s | **3.8s** |
+| one language | 103 min | **7 min** |
+| all three languages | 5+ hours | **22 min** |
+
+The Mac wasn't just slower — it degraded as it ran, from 27 it/s down to 2.5, because the
+GPU shares system memory with the OS. The PC held 55 it/s flat across every line.
 
 **On a Mac**, the GPU shares system memory. A long job can exhaust it, and then everything
 slows down together — the model, and your desktop. If that happens, force the CPU:
@@ -280,10 +341,30 @@ Spanish, Swahili, Swedish, Turkish.
 
 # 4 · Command line
 
-Everything the studio does, for scripting or troubleshooting. Plain `python3` is fine —
-the scripts switch to `.venv` themselves.
+Everything the studio does, for scripting or troubleshooting.
+
+`faceless <verb>` is the short form. Every verb maps to a `make_video.py` step, so the
+two columns below are interchangeable — use whichever you prefer.
+
+| short | long | what it does |
+|---|---|---|
+| `faceless start` | `make_video.py studio` | open the control panel |
+| `faceless check` | `make_video.py doctor` | check this machine |
+| `faceless sheets` | `make_video.py list` | projects found in `sheets/` |
+| `faceless bench` | `make_video.py benchtts` | time the voice engine |
+| `faceless new` | `make_video.py generate` | script → production sheets |
+| `faceless visuals` | `make_video.py stock` | source photos and clips |
+| `faceless voice` | `make_video.py voice` | generate narration |
+| `faceless render` | `make_video.py render` | build the MP4 |
+| `faceless all` | `make_video.py all` | everything, start to finish |
+
+`faceless --help` prints this list. Add `--verbose` to anything to see full tracebacks;
+without it, expected failures print a plain sentence instead.
 
 ```bash
+python3 make_video.py studio         # open the control panel (same as Start.bat)
+python3 make_video.py studio --no-browser    # ...without opening a browser
+
 python3 make_video.py doctor         # check this machine — run this first when stuck
 python3 make_video.py list           # projects found in sheets/
 python3 make_video.py models         # which Gemini models your key can call
@@ -491,8 +572,8 @@ This is the single best reason to move voicing to a machine with a discrete NVID
 # 7 · What's in the folder
 
 ```
-Start.bat           Windows — double-click this
-Start.command       macOS — double-click this
+Start.bat           Windows — double-click this (same as: make_video.py studio)
+Start.command       macOS — double-click this   (same as: make_video.py studio)
 setup.bat           Windows — one-time setup
 setup.sh            macOS/Linux — one-time Python setup
 install.sh          macOS — one-time system setup (Homebrew, ffmpeg)
@@ -503,6 +584,9 @@ voices.json         chosen voice per language
 studio.py           the control panel
 make_video.py       command-line equivalent
 lib/                the pipeline itself
+lib/console.py      keeps output readable on Windows consoles
+cli.py              the `faceless` command
+pyproject.toml      declares that command (deliberately no dependencies)
 
 sheets/             master sheets + translation files
 voices_refs/        reference clips for voice cloning
@@ -521,7 +605,8 @@ work. Deleting `.venv` is safe too; re-run `bash setup.sh`.
 
 # 8 · Honest limits
 
-- **Voicing is slow.** Chatterbox runs on your Mac rather than a datacentre. Run
+- **Voicing is slow without a GPU.** Chatterbox runs on your own machine rather than a
+  datacentre — fast on an NVIDIA card, slow on anything else. Run
   `benchtts` to see what that means in minutes before planning around it.
 - **The reference clip is your responsibility.** Whatever you put in `voices_refs/`
   becomes the channel's voice, so it needs to be yours or clearly cleared.

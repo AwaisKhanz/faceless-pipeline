@@ -3,6 +3,7 @@
 (Windows) or Start.command (macOS) instead — this exists for scripting,
 automation and troubleshooting.
 
+  python3 make_video.py studio                       # open the control panel
   python3 make_video.py stock  --sheet sheets/video04_MASTER_production_sheet.md
   python3 make_video.py voice  --sheet sheets/video04_MASTER_production_sheet.md --lang en
   python3 make_video.py render --sheet sheets/video04_MASTER_production_sheet.md --lang en --captions
@@ -232,9 +233,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Faceless video pipeline (command line)",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    ap.add_argument("step", choices=["doctor", "benchtts", "generate", "models",
-                                     "stock", "voice", "render", "all",
+    ap.add_argument("step", choices=["studio", "doctor", "benchtts", "generate",
+                                     "models", "stock", "voice", "render", "all",
                                      "voices", "list"])
+    ap.add_argument("--no-browser", action="store_true",
+                    help="studio: don't open a browser window automatically")
     ap.add_argument("--sheet")
     ap.add_argument("--script", help="script file to generate sheets from")
     ap.add_argument("--id", help="project name, e.g. video05")
@@ -253,6 +256,12 @@ def main() -> None:
     ap.add_argument("--no-zoom", action="store_true")
     ap.add_argument("--yes", action="store_true", help="'all' skips the approval pause")
     a = ap.parse_args()
+
+    if a.step == "studio":
+        # Same thing Start.bat / Start.command do, without leaving the terminal.
+        import studio
+        studio.main(open_browser=not a.no_browser)
+        return
 
     if a.step == "voices":
         from lib import voices as V
@@ -505,6 +514,27 @@ def main() -> None:
         return
     if a.step == "generate":
         return step_generate(a)
+
+    if a.step == "list":
+        # Was advertised in the help and the docs but never implemented — it
+        # fell through to the --sheet check below and then raised KeyError.
+        projects = pl.find_projects(ROOT / "sheets")
+        if not projects:
+            print("\n  No projects in sheets/.")
+            print("  Make one with:  make_video.py generate --script my.txt "
+                  "--id video06")
+            return
+        banner(f"{len(projects)} project(s) in sheets/")
+        for p in projects:
+            langs = ", ".join(
+                lg["code"] + ("" if lg["file"] or lg["code"] == "en" else "?")
+                for lg in p["languages"])
+            print(f"\n  {p['id']}  ·  {p['scenes']} scenes  ·  {langs}")
+            print(f"    {p['label']}")
+            print(f"    --sheet sheets/{p['sheet']}")
+        print("\n  A '?' marks a language with no translation file yet.")
+        return
+
     if not a.sheet:
         raise SystemExit("--sheet is required")
 
