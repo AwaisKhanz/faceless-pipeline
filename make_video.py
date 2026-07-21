@@ -274,6 +274,7 @@ def main() -> None:
         banner("Picture sources")
         print(f"  usable right now: {', '.join(sorted(have)) or 'none'}\n")
 
+        failed: list[str] = []
         probes = [("nasa", "moon surface", "IMAGE"),
                   ("nasa", "rocket launch", "VIDEO"),
                   ("smithsonian", "butterfly specimen", "IMAGE"),
@@ -290,6 +291,7 @@ def main() -> None:
                 hits = SRC.search(name, q, media, 3, cfg)
             except Exception as e:
                 print(f"  !! {name:<12} {media:<6} {type(e).__name__}: {str(e)[:56]}")
+                failed.append(name)
                 continue
             if not hits:
                 print(f"  !! {name:<12} {media:<6} reachable, but 0 results for {q!r}")
@@ -297,6 +299,20 @@ def main() -> None:
             print(f"  ok {name:<12} {media:<6} {len(hits)} hit(s) for {q!r}")
             print(f"       {hits[0].license}")
             print(f"       {hits[0].url[:82]}")
+
+        if failed:
+            banner("Why those failed")
+            print("  A reset looks the same whatever caused it, so this tries the")
+            print("  same host several ways. Read the cause off the results.\n")
+            for name in sorted(set(failed)):
+                print(f"  {name}:")
+                for label, ok, detail in SRC.diagnose(name, cfg):
+                    print(f"    {'ok' if ok else '!!'}  {label:<26}{detail}")
+                print()
+            print("  homepage fails too       -> your network cannot reach this host")
+            print("  homepage ok, api resets  -> the API is refusing this client")
+            print("  browser agent works      -> our User-Agent is the problem")
+            print("  everything resets        -> TLS, proxy, or something in between")
 
         banner("Routing")
         print(f"  {len(SRC.TOPICS)} topics, {len(SRC._WORD2TOPIC)} words recognised.")

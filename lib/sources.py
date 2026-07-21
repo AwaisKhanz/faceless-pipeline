@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -591,6 +592,62 @@ def explain(domain: str, media: str, available: set, query: str = "") -> str:
     r = route(domain, media, available, query)
     topic_s = ", ".join(sorted(found)) or "no recognised topic"
     return f"{topic_s} -> {r}"
+
+
+def diagnose(name: str, cfg: dict | None = None) -> list[tuple]:
+    """Work out WHY a source is failing, rather than guessing.
+
+    A connection reset has several possible causes that look identical from the
+    outside, and I have already guessed wrong once here. This tries the same
+    host several ways and reports which combinations work, so the cause can be
+    read off the results instead of theorised:
+
+        homepage fails too      -> the network cannot reach this host at all
+                                   (block, DNS, proxy, VPN, country filter)
+        homepage ok, API resets -> the host is fine and the API is refusing us
+        browser agent works     -> our User-Agent is the problem
+        everything resets       -> TLS, or something between here and there
+    """
+    import ssl
+    cfg = cfg or {}
+    configure(cfg)
+
+    PROBES = {
+        "nasa": ("https://images-api.nasa.gov/",
+                 "https://images-api.nasa.gov/search?q=moon&media_type=image"),
+        "smithsonian": ("https://api.si.edu/",
+                        "https://api.si.edu/openaccess/api/v1.0/search"
+                        "?q=butterfly&rows=1&api_key=DEMO_KEY"),
+        "openverse": ("https://api.openverse.org/",
+                      "https://api.openverse.org/v1/images/?q=test&page_size=1"),
+        "wikimedia": ("https://commons.wikimedia.org/",
+                      "https://commons.wikimedia.org/w/api.php"
+                      "?action=query&format=json&titles=File:Example.jpg&prop=imageinfo"),
+    }
+    if name not in PROBES:
+        return [("unknown source", False, name)]
+
+    home, api = PROBES[name]
+    BROWSER = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
+
+    def attempt(label, url, ua, timeout=12):
+        req = urllib.request.Request(url, headers={"User-Agent": ua})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return (label, True, f"HTTP {r.status}, {len(r.read(2048))} bytes read")
+        except urllib.error.HTTPError as e:
+            # An HTTP error still proves we reached the server and it answered.
+            return (label, True, f"HTTP {e.code} (reached the server)")
+        except Exception as e:
+            return (label, False, f"{type(e).__name__}: {str(e)[:70]}")
+
+    return [
+        attempt("homepage, our agent", home, user_agent()),
+        attempt("homepage, browser agent", home, BROWSER),
+        attempt("api, our agent", api, user_agent()),
+        attempt("api, browser agent", api, BROWSER),
+    ]
 
 
 def usable(cfg: dict) -> set:
