@@ -103,6 +103,16 @@ class Source:
     generalist: bool = False          # shallow on everything, never useless
     note: str = ""
 
+    # Tie-break only, never a substitute for subject match — see route().
+    # How often a hit from here turns out to be a usable 16:9 picture rather
+    # than a 400px thumbnail, a portrait scan, or a link to a viewer page.
+    reliability: float = 1.0
+
+    # A subject this source should definitely be able to answer, used by
+    # `faceless sources` to smoke-test it for real. Declared here rather than
+    # in the command so that adding a source cannot leave it untested.
+    probe: str = ""
+
     def can(self, media: str) -> bool:
         return media in self.media
 
@@ -137,12 +147,21 @@ def _json(url: str, headers: dict | None = None) -> dict:
 
 
 def _https(url: str) -> str:
-    """Upgrade plain http to https.
+    """Normalise a URL to https.
 
-    NASA's asset manifests hand back http:// URLs. Plenty of networks and
-    corporate proxies block that outright, and there is no reason to download
-    a public file in the clear. The hosts all serve https.
+    Two shapes turn up and neither can be downloaded as given:
+
+      http://...   NASA's asset manifests hand these back. Plenty of networks
+                   and corporate proxies block plain http outright, and there
+                   is no reason to fetch a public file in the clear.
+      //host/...   protocol-relative, which the Library of Congress uses. That
+                   is meaningful in a browser, which knows what scheme the page
+                   was served over, and meaningless to urllib.
+
+    Every host involved serves https, so both become https.
     """
+    if url.startswith("//"):
+        return "https:" + url
     return "https://" + url[7:] if url.startswith("http://") else url
 
 
@@ -361,6 +380,156 @@ def wikimedia(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     return out
 
 
+# ──────────────────────────────────────── Library of Congress (no key needed)
+# Historical photography, prints, posters and maps — the strongest free source
+# for 19th and 20th century material, which is exactly the gap between "modern
+# life" (stock) and "antiquity" (Smithsonian).
+#
+# LoC does NOT publish a blanket licence. Each item carries its own rights
+# statement, and the phrase that matters is "No known restrictions on
+# publication" — LoC's way of saying it has researched the item and found no
+# surviving claim. Anything without such a statement is dropped, because absence
+# of a rights note is not evidence of freedom.
+#
+# The generic _NOT_OK regex is deliberately NOT used here. LoC's own boilerplate
+# ends "...see 'Copyright and Other Restrictions'" on items that are perfectly
+# free, so matching the bare word "copyright" would reject almost everything.
+# These two patterns read LoC's actual vocabulary instead.
+
+_LOC_FREE = re.compile(r"no known restrictions|public domain|cc0|pdm", re.I)
+_LOC_BLOCK = re.compile(
+    r"publication\s+(?:may\s+be\s+|is\s+)?restricted|rights[^.]{0,20}restricted|"
+    r"permission\s+(?:is\s+)?required|may\s+be\s+protected|"
+    r"restricted\s+access|not\s+for\s+publication", re.I)
+
+# LoC appends the rendition's real dimensions to each URL as a fragment:
+#   //tile.loc.gov/storage-services/.../foo.jpg#h=1024&w=1536
+# so the largest usable rendition can be chosen without downloading any of them.
+_LOC_DIMS = re.compile(r"[#&]w=(\d+)")
+_LOC_H = re.compile(r"[#&]h=(\d+)")
+
+
+def loc(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media == "VIDEO":
+        raise SourceError("Library of Congress video needs per-item negotiation")
+
+    qs = urllib.parse.urlencode({
+        "q": query, "fo": "json", "c": min(max(want * 4, 20), 40),
+        "at": "results",          # results only: the full response is enormous
+    })
+    data = _json(f"https://www.loc.gov/photos/?{qs}")
+    out: list[Hit] = []
+
+    for r in (data.get("results") or [])[: want * 6]:
+        if r.get("access_restricted"):
+            continue
+
+        # The rights note lives under different keys depending on the
+        # collection, so gather them all and read the lot as one blob.
+        blob = " ".join(
+            " ".join(v) if isinstance(v, list) else str(v)
+            for k, v in r.items()
+            if "rights" in k.lower() and v)
+        if _LOC_BLOCK.search(blob) or not _LOC_FREE.search(blob):
+            continue
+
+        urls = [u for u in (r.get("image_url") or []) if isinstance(u, str)]
+        if not urls:
+            continue
+
+        def width_of(u: str) -> int:
+            m = _LOC_DIMS.search(u)
+            return int(m.group(1)) if m else 0
+
+        # Widest first; unmeasured URLs sort last but are still usable, and get
+        # measured after download like every other source that stays quiet.
+        urls.sort(key=width_of, reverse=True)
+        best = urls[0]
+        w = width_of(best)
+        if w and w < MIN_WIDTH:
+            continue              # its own largest rendition is too small
+
+        h = _LOC_H.search(best)
+        out.append(Hit(
+            url=_https(best), ext=_ext(best), src="loc",
+            credit="Library of Congress",
+            page=r.get("id") or r.get("url") or "",
+            width=w, height=int(h.group(1)) if h else 0,
+            license="no known restrictions (Library of Congress)"))
+        if len(out) >= want:
+            break
+    return out
+
+
+# ─────────────────────────────────────── Europeana (free key, `europeana_key`)
+# Aggregates roughly 4,000 European museums, libraries and archives — the one
+# place with real depth on European art, manuscripts and regional history, none
+# of which the American collections hold.
+#
+# Europeana's own `reusability=open` filter is NOT strict enough for us: "open"
+# includes CC BY (credit required) and CC BY-SA (share-alike, which can be read
+# as reaching the whole video). So the query names the two unencumbered rights
+# URIs explicitly, and each item's `rights` field is re-checked afterwards.
+#
+# A key is free from https://pro.europeana.eu/pages/get-api and takes a minute.
+# Without one this source simply is not offered, which is what needs_key does.
+
+_EU_FREE = re.compile(r"publicdomain/(zero|mark)", re.I)
+_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
+
+
+def europeana(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media == "VIDEO":
+        raise SourceError("Europeana video is provider-hosted and rarely usable")
+
+    key = cfg.get("europeana_key") or ""
+    if not key:
+        raise SourceError("no europeana_key in config.json")
+
+    qs = urllib.parse.urlencode({
+        "wskey": key, "query": query,
+        "qf": 'RIGHTS:("http://creativecommons.org/publicdomain/zero/1.0/" OR '
+              '"http://creativecommons.org/publicdomain/mark/1.0/")',
+        "media": "true",           # only records that actually have a file
+        "thumbnail": "true",
+        "profile": "rich",
+        "rows": min(max(want * 4, 20), 50),
+    }, safe=":()/\" ")
+    qs += "&qf=TYPE%3AIMAGE"       # urlencode cannot repeat a key
+    data = _json(f"https://api.europeana.eu/record/v2/search.json?{qs}")
+
+    if not data.get("success", True):
+        raise SourceError(data.get("error") or "Europeana rejected the request")
+
+    out: list[Hit] = []
+    for r in (data.get("items") or []):
+        rights = " ".join(r.get("rights") or [])
+        if not _EU_FREE.search(rights):
+            continue               # belt and braces over the qf filter
+
+        # edmIsShownBy is the real file at the providing institution;
+        # edmPreview is a Europeana-hosted thumbnail. Prefer the file, but only
+        # when it actually looks like a file — a fair number of records point at
+        # a viewer page, and downloading HTML as a .jpg helps nobody.
+        shown = (r.get("edmIsShownBy") or [""])[0]
+        preview = (r.get("edmPreview") or [""])[0]
+        path = urllib.parse.urlparse(shown).path.lower()
+        url = shown if path.endswith(_IMAGE_EXT) else preview
+        if not url:
+            continue
+
+        title = (r.get("title") or [""])[0]
+        out.append(Hit(
+            url=_https(url), ext=_ext(url), src="europeana",
+            credit=(r.get("dataProvider") or ["Europeana"])[0],
+            page=r.get("guid") or (r.get("edmIsShownAt") or [""])[0],
+            license=f"{'CC0' if 'zero' in rights.lower() else 'Public Domain Mark'}"
+                    f" via Europeana" + (f" — {title[:40]}" if title else "")))
+        if len(out) >= want:
+            break
+    return out
+
+
 # ─────────────────────────────────────────────── registry
 
 # ══════════════════════════════════════════════ topics, coverage, routing
@@ -393,12 +562,19 @@ TOPICS: dict[str, frozenset] = {
         orbit orbital spacecraft satellite rocket launch astronaut telescope mars
         jupiter saturn venus mercury comet asteroid meteor eclipse constellation
         blackhole supernova interstellar nasa apollo shuttle""".split()),
+    # NOTE `solar` is deliberately absent. It means solar power far more often
+    # than solar system in a modern script, and listing it here sent "solar
+    # panels on a roof" to NASA. Real astronomy scenes always carry another
+    # word — sun, orbit, planet, eclipse — so nothing is lost.
 
     "geology": frozenset("""geology geological tectonic volcano volcanic
         earthquake seismic mountain mountains canyon glacier ice arctic antarctic
         desert erosion mineral rock rocks crust mantle lava magma fossil
-        continent island landscape terrain sediment strata quarry mine
-        mining excavation drilling""".split()),
+        continent island landscape terrain sediment strata""".split()),
+    # `mine`, `mining`, `quarry` and `drilling` used to be here as well as in
+    # tech. Once a word could belong to both, that pulled every mining scene
+    # towards the archives — but a working mine is industry, photographed by
+    # stock libraries. Rock formations are geology; digging them up is not.
 
     "weather": frozenset("""weather storm rain snow cloud clouds lightning thunder
         hurricane tornado wind fog mist frost drought flood monsoon sky
@@ -417,9 +593,18 @@ TOPICS: dict[str, frozenset] = {
         renaissance victorian empire roman rome greek greece egypt egyptian
         pharaoh viking colonial revolution civilisation civilization archaeology
         archaeological artefact artifact ruin ruins monument castle temple
-        manuscript century dynasty war battle soldier army treaty""".split()),
+        manuscript century dynasty war battle soldier army treaty
+        wartime prewar postwar veteran vintage archival historic bygone
+        pioneer frontier settler immigrant steam telegraph sepia newsreel
+        excavation""".split()),
+    # The era words above matter more than they look. Scene tags are free text
+    # written by a model, and it reaches for "wartime" or "vintage" far more
+    # readily than "history" — so without them a genuinely historical scene
+    # carried no historical signal at all and went to stock.
 
-    "art": frozenset("""art artistic painting paint portrait sculpture statue
+    # `portrait` belongs to people, not here: a painted one always says
+    # painting, whereas "portrait of an older woman" is a photograph.
+    "art": frozenset("""art artistic painting paint sculpture statue
         museum gallery drawing illustration engraving fresco mosaic ceramic
         pottery textile craft design architecture architectural cathedral""".split()),
 
@@ -465,16 +650,42 @@ TOPICS: dict[str, frozenset] = {
         market bank banking currency coin investment stock commerce shop retail
         commercial office meeting corporate""".split()),
 
+    # Europe gets its own topic for one concrete reason: without it Europeana
+    # was strictly dominated — every topic it covers, Smithsonian and Openverse
+    # also cover, with higher reliability, so it would never have led a single
+    # scene and would have been dead weight in the registry. These are the
+    # subjects where the American collections genuinely thin out and the
+    # European institutions do not. Words that also read as general history
+    # (medieval, renaissance, castle) stay in `history` as well, so a scene
+    # only reaches here when it is specifically European.
+    "europe": frozenset("""europe european byzantine gothic monastery abbey
+        tapestry chateau flemish baroque rococo bavarian tuscan habsburg
+        prussian ottoman papal vatican louvre versailles""".split()),
+
     "culture": frozenset("""culture cultural religion religious church mosque
         temple ritual ceremony festival tradition myth mythology legend folklore
         music musical instrument dance theatre theater book library reading
         writing language school education classroom""".split()),
 }
 
-# Reverse index, built once: surface word -> canonical topic.
-_WORD2TOPIC: dict[str, str] = {
-    w: topic for topic, words in TOPICS.items() for w in words
-}
+# Reverse index, built once: surface word -> every topic that claims it.
+#
+# This is a SET per word, not a single topic, and that matters. The obvious
+# version — {w: topic for topic, words in ... for w in words} — silently gives
+# each word to whichever topic happens to be defined last in the file. Eighteen
+# words were claimed twice under that scheme, and the resolution was invisible:
+# `solar` landed in tech rather than space, so "solar system" routed to stock;
+# `doctor`, `nurse` and `patient` landed in people rather than medicine.
+#
+# Words genuinely do mean several things at once — a fish is ocean AND food, a
+# kitchen is people AND food — so the honest representation is all of them, and
+# route() weighs the overlap. The cost is that a word placed carelessly now
+# pulls a scene towards every topic listed, which is why tools/test_routing.py
+# checks the cases that ambiguity would break.
+_WORD2TOPIC: dict[str, frozenset] = {}
+for _topic, _words in TOPICS.items():
+    for _w in _words:
+        _WORD2TOPIC[_w] = _WORD2TOPIC.get(_w, frozenset()) | {_topic}
 
 
 def topics_in(*texts: str) -> set:
@@ -486,9 +697,9 @@ def topics_in(*texts: str) -> set:
     found = set()
     for t in texts:
         for w in re.findall(r"[a-z]+", (t or "").lower()):
-            topic = _WORD2TOPIC.get(w) or _WORD2TOPIC.get(w.rstrip("s"))
-            if topic:
-                found.add(topic)
+            topics = _WORD2TOPIC.get(w) or _WORD2TOPIC.get(w.rstrip("s"))
+            if topics:
+                found |= topics
     return found
 
 
@@ -498,6 +709,7 @@ REGISTRY: dict[str, Source] = {
     "nasa": Source(
         "nasa", nasa, media=("IMAGE", "VIDEO"),
         covers=frozenset({"space"}),
+        reliability=1.8, probe="moon surface",
         note="space, Earth observation, aeronautics. Public domain."),
 
     "smithsonian": Source(
@@ -506,19 +718,46 @@ REGISTRY: dict[str, Source] = {
                           "transport", "geology"}),
         # api.data.gov accepts DEMO_KEY at a low rate limit, so this is usable
         # with no configuration; a free key just raises the ceiling.
+        reliability=1.6, probe="butterfly specimen",
         note="objects, specimens, artefacts, artworks. All CC0."),
 
     "openverse": Source(
         "openverse", openverse, media=("IMAGE",),
         covers=frozenset({"art", "history", "nature", "science", "culture",
                           "geology", "ocean", "transport"}),
+        # The only archive that reports dimensions at search time, so its
+        # rejects cost nothing — a real advantage, not a guess.
+        reliability=1.5, probe="roman aqueduct",
         note="many providers behind one API. CC0 and Public Domain Mark only."),
+
+    "loc": Source(
+        "loc", loc, media=("IMAGE",),
+        covers=frozenset({"history", "art", "culture", "transport", "people"}),
+        # `people` is here for one narrow reason: LoC holds enormous
+        # documentary photography of ordinary life — FSA farm families, factory
+        # floors, street scenes. It will never outscore stock for a MODERN
+        # kitchen, because such a scene carries no history topic, so the
+        # generalist bonus keeps stock ahead. It wins when a scene is about
+        # people AND the past, which is precisely where it should.
+        reliability=1.4, probe="dust bowl farm family",
+        note="19th and 20th century photography, prints, posters, maps."),
 
     "wikimedia": Source(
         "wikimedia", wikimedia, media=("IMAGE",),
         covers=frozenset({"history", "art", "science", "nature", "geology",
                           "culture", "transport", "ocean", "space"}),
+        reliability=1.3, probe="roman aqueduct",
         note="the largest archive. Only its public-domain and CC0 files are used."),
+
+    "europeana": Source(
+        "europeana", europeana, media=("IMAGE",),
+        needs_key="europeana_key",
+        covers=frozenset({"art", "history", "culture", "science", "europe"}),
+        # Lowest of the archives on purpose: its media links point at 4,000
+        # different institutions, so a fair share are viewer pages or small
+        # derivatives. Unmatched for European art when it does land.
+        reliability=1.0, probe="illuminated manuscript",
+        note="4,000 European museums and libraries. CC0 and PDM only."),
 
     # Stock sites are generalists: shallow on everything, and the only place
     # with modern life and modern motion. They are always a valid last resort,
@@ -527,12 +766,14 @@ REGISTRY: dict[str, Source] = {
                      needs_key="pexels_key", generalist=True,
                      covers=frozenset({"people", "food", "sport", "money", "tech",
                                        "transport", "nature", "weather", "medicine"}),
+                     reliability=1.5,
                      note="modern life, modern motion. The only source for either."),
 
     "pixabay": Source("pixabay", None, media=("IMAGE", "VIDEO"),
                       needs_key="pixabay_key", generalist=True,
                       covers=frozenset({"people", "food", "sport", "money", "tech",
                                         "transport", "nature", "weather", "medicine"}),
+                      reliability=1.4,
                       note="second generalist, different catalogue to Pexels."),
 }
 
@@ -540,7 +781,7 @@ REGISTRY: dict[str, Source] = {
 # FIRST. Everything else starts with stock, because for modern subjects the
 # archives simply have nothing and asking them wastes a request.
 ARCHIVE_FIRST = frozenset({"space", "history", "art", "science", "geology",
-                           "culture", "ocean", "nature"})
+                           "culture", "ocean", "nature", "europe"})
 
 # Never ask more than this many sources for one scene. Three ladder rungs times
 # eight sources would be 24 requests per scene; at 115 scenes that is a sourcing
@@ -554,6 +795,13 @@ def route(domain: str, media: str, available: set, query: str = "") -> list[str]
     `available` is the set usable right now, so a source whose key is missing
     is simply not offered and a half-configured install degrades to "fewer
     places to look" rather than an error.
+
+    Subject match dominates: every reliability bonus is smaller than one topic
+    of overlap, so a source that holds the material always beats a source that
+    is merely dependable. The bonus only decides between sources that hold the
+    material equally — which, with five archives sharing `history`, is most
+    scenes. Before it existed those ties were broken by source NAME, so
+    Europeana led every historical scene for no better reason than the letter E.
     """
     found = topics_in(domain, query)
 
@@ -568,21 +816,37 @@ def route(domain: str, media: str, available: set, query: str = "") -> list[str]
         overlap = len(found & src.covers)
         score = overlap * 10.0
 
-        # A generalist is never a strong match but is never useless either,
-        # which is exactly the tie-break behaviour wanted at the bottom.
         if src.generalist:
-            score += 3.0
-            # Modern subjects: stock is not a fallback, it is the right answer.
             if not (found & ARCHIVE_FIRST):
-                score += 8.0
+                # Modern subject: stock is not a fallback, it is the answer.
+                score += 11.0
+            elif overlap == 0:
+                # A period subject stock holds nothing for. Still worth a place
+                # at the bottom, because an archive returning nothing must not
+                # leave the scene with nowhere left to look.
+                score += 3.0
+            # else: a period subject stock ALSO covers — deliberately no bonus.
+            # Stock's strength is modern framing, which is a liability here: a
+            # staged modern photo of a "farm family" is not a 1930s farm family.
+        else:
+            # A specialist leads on the subjects it specialises in. Without
+            # this, a stock library covering two loose topics outscored the one
+            # archive that actually holds the period material, by a margin
+            # thinner than the tie-break — which is far too close for a
+            # decision this clear-cut.
+            score += len(found & ARCHIVE_FIRST & src.covers) * 6.0
 
         # Motion overrides subject entirely. No free archive holds modern 16:9
         # video, so a VIDEO scene starts with stock whatever it is about.
         if media == "VIDEO" and src.generalist:
             score += 20.0
 
+        # Earning a place and being ordered within it are separate questions.
+        # An archive with no topic overlap holds nothing for this scene and is
+        # not asked at all — the bonus must not sneak it back in, which is why
+        # it is added only after the gate.
         if score > 0:
-            scored.append((score, name))
+            scored.append((score + src.reliability, name))
 
     scored.sort(key=lambda t: (-t[0], t[1]))
     return [n for _, n in scored[:MAX_SOURCES]]
@@ -660,6 +924,13 @@ def diagnose(name: str, cfg: dict | None = None) -> list[tuple]:
         "wikimedia": ("https://commons.wikimedia.org/",
                       "https://commons.wikimedia.org/w/api.php"
                       "?action=query&format=json&titles=File:Example.jpg&prop=imageinfo"),
+        "loc": ("https://www.loc.gov/",
+                "https://www.loc.gov/photos/?q=bridge&fo=json&c=1&at=results"),
+        # Deliberately keyless: a 401 still proves the host is reachable, which
+        # is the only thing this function is trying to establish.
+        "europeana": ("https://www.europeana.eu/",
+                      "https://api.europeana.eu/record/v2/search.json"
+                      "?wskey=probe&query=test&rows=1"),
     }
     if name not in PROBES:
         return [("unknown source", False, name)]

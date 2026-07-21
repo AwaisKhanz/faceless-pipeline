@@ -114,13 +114,19 @@ It pulls in PyTorch, so it is a large download and takes a few minutes.
 
 ## 1.4 API keys
 
-Two are required, one is optional. All free.
+Two are required, three are optional. All free.
 
 | Key | Needed for | Get it at |
 |---|---|---|
 | **Pexels** | stock photos and clips | https://www.pexels.com/api/ |
 | **Pixabay** | fallback when Pexels has no match | https://pixabay.com/api/docs/ |
 | **Gemini** | *optional* — turning a script into sheets | https://aistudio.google.com/apikey |
+| **Smithsonian** | *optional* — raises a rate limit that already works without it | https://api.data.gov/signup/ |
+| **Europeana** | *optional* — European art and manuscripts | https://pro.europeana.eu/pages/get-api |
+
+Four archives need no key at all — NASA, Openverse, Wikimedia Commons and the
+Library of Congress — so historical and scientific scenes find pictures even
+with an empty `config.json`. Run `faceless sources` to see which are answering.
 
 Copy the template, then open it:
 
@@ -139,7 +145,8 @@ Paste each key **between the existing quote marks**:
 ```json
 "pexels_key": "your-key-here",
 "pixabay_key": "your-key-here",
-"gemini_key": ""
+"gemini_key": "",
+"europeana_key": ""
 ```
 
 > Use a plain text editor — Notepad on Windows, `open -e` (not a double-click) on macOS.

@@ -275,17 +275,21 @@ def main() -> None:
         print(f"  usable right now: {', '.join(sorted(have)) or 'none'}\n")
 
         failed: list[str] = []
-        probes = [("nasa", "moon surface", "IMAGE"),
-                  ("nasa", "rocket launch", "VIDEO"),
-                  ("smithsonian", "butterfly specimen", "IMAGE"),
-                  ("openverse", "roman aqueduct", "IMAGE"),
-                  ("wikimedia", "roman aqueduct", "IMAGE")]
+        # Built from the registry, not written out here. A hardcoded list means
+        # adding a source and forgetting to test it — and an untested adapter
+        # looks exactly like a working one until a real run needs it. Each
+        # source declares its own probe subject, so registering it is enough.
+        probes = [(name, src.probe, media)
+                  for name, src in sorted(SRC.REGISTRY.items())
+                  if src.probe and src.search
+                  for media in src.media]
         for name, q, media in probes:
             src = SRC.REGISTRY.get(name)
             if not src or not src.can(media):
                 continue
             if name not in have:
-                print(f"  -- {name:<12} {media:<6} not configured")
+                need = src.needs_key or "no key needed"
+                print(f"  -- {name:<12} {media:<6} not configured ({need})")
                 continue
             try:
                 hits = SRC.search(name, q, media, 3, cfg)

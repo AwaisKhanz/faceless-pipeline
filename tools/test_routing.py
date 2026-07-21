@@ -69,7 +69,10 @@ def first_of(route: list, want) -> bool:
 
 
 def main() -> int:
-    print(f"\n  vocabulary: {len(S.TOPICS)} topics, {len(S._WORD2TOPIC)} words\n")
+    print(f"\n  vocabulary: {len(S.TOPICS)} topics, {len(S._WORD2TOPIC)} words")
+    multi = {w: t for w, t in S._WORD2TOPIC.items() if len(t) > 1}
+    print(f"  {len(multi)} word(s) mean more than one thing, and now count "
+          f"for all of them\n")
     bad = 0
 
     for domain, query, want, why in CASES:
@@ -127,6 +130,48 @@ def main() -> int:
         bad += bool(problems)
         detail = "; ".join(problems) or f"{len(src.covers)} topics, {'/'.join(src.media)}"
         print(f"    {'ok' if not problems else '!!'}  {name:<14}{detail}")
+
+    # ── the full archive set ───────────────────────────────────────────────
+    # The cases above run against four sources, which is what a bare install
+    # has. With every archive configured, five of them share the `history`
+    # topic and tie on subject — so these check the tie-break puts the right
+    # one first, and that adding archives never displaces stock for modern
+    # subjects. Before source.reliability existed the winner of those ties was
+    # whichever name sorted first, which is not a reason.
+    print("\n  with every archive configured:")
+    S.reset_failures()
+    WIDE = {"nasa", "smithsonian", "openverse", "loc", "wikimedia",
+            "europeana", "pexels", "pixabay"}
+    WIDE_CASES = [
+        ("history", "roman stone aqueduct arches", "smithsonian",
+         "the museum still leads on antiquity, not whoever sorts first"),
+        ("space", "spiral galaxy in deep space", "nasa",
+         "a source that holds the subject beats one that is merely reliable"),
+        ("wartime", "farm family outside a wooden shack", "loc",
+         "history + people is exactly what LoC documentary photography is"),
+        ("medieval europe", "illuminated manuscript page", "europeana",
+         "the European institutions lead where the American ones thin out"),
+        ("people", "older woman making tea in a bright kitchen", STOCK,
+         "LoC covering `people` must NOT pull modern domestic life away"),
+        ("sport", "marathon runners crossing a finish line", STOCK,
+         "six archives configured still cannot beat stock at modern life"),
+    ]
+    for domain, query, want, why in WIDE_CASES:
+        route = S.route(domain, "IMAGE", WIDE, query)
+        ok = first_of(route, want)
+        bad += not ok
+        print(f"    {'ok' if ok else '!!'}  {domain:<16}{str(route):<46}{why}")
+        if not ok:
+            print(f"        wanted {want} first, topics: "
+                  f"{sorted(S.topics_in(domain, query))}")
+
+    every_source_reachable = all(
+        any(n in S.route(d, "IMAGE", WIDE, q) for d, q, _, _ in WIDE_CASES + CASES)
+        for n in WIDE)
+    bad += not every_source_reachable
+    print(f"    {'ok' if every_source_reachable else '!!'}  "
+          f"every configured source wins some scene "
+          f"(a source nothing ever routes to is dead weight)")
 
     print("\n  circuit breaker (a source the network cannot reach):")
     S.reset_failures()
