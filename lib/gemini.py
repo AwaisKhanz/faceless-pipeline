@@ -100,12 +100,16 @@ def resolve_model(key: str, preferred: str = "") -> str:
 def call(prompt: str, schema: dict, key: str, model: str = DEFAULT_MODEL,
          system: str = "", temperature: float = 0.35, retries: int = 3,
          _redirected: bool = False) -> dict:
-    # A local model? Route to Ollama and skip everything Gemini-specific. The
-    # target (host + name) is carried in `model`, so every generator in this file
-    # works against a local model with no change. Lazy import avoids a cycle.
+    # Another provider? The whole target is carried in `model`, so every
+    # generator in this file works against a local model (Ollama) or an
+    # OpenAI-compatible API (Grok, …) with no change. Lazy import avoids a cycle.
     if str(model).startswith("ollama:"):
         from . import llm
         return llm.ollama_complete(model, prompt, schema, system=system,
+                                   temperature=temperature)
+    if str(model).startswith("openai:"):
+        from . import llm
+        return llm.openai_complete(model, key, prompt, schema, system=system,
                                    temperature=temperature)
     model = resolve_model(key, model)
     body = {

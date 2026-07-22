@@ -1487,12 +1487,11 @@ async function viewSettings() {
     })(),
     (() => {
       const l = d.llm || {};
-      // Which model writes the sheets/queries/descriptions — cloud Gemini or a
-      // free local model via Ollama.
+      // Which model writes the sheets/queries/descriptions — Gemini, a free
+      // local model via Ollama, or Grok. Reads whatever provider is configured.
+      const pretty = { gemini: 'Gemini', ollama: 'Ollama (local)', grok: 'Grok' }[l.provider] || l.provider;
       return line(l.ok, 'Language model',
-        l.provider === 'ollama'
-          ? (l.ok ? `local · ${l.model} (Ollama)` : 'Ollama — ' + (l.reason || 'not ready'))
-          : (l.ok ? `Gemini · ${l.model}` : 'no Gemini key'),
+        l.ok ? `${pretty} · ${l.model}` : `${pretty} — ${l.reason || 'not ready'}`,
         l.ok ? '' : (l.reason || ''));
     })()))));
 

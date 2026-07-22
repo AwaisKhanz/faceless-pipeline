@@ -81,12 +81,44 @@ def main() -> int:
           captured["body"]["messages"][0], {"role": "system", "content": "be terse"})
     check("parsed the model's JSON", out, {"scenes": [{"scene": 1}]})
 
-    print("\n  gemini.call routes an ollama model to the local backend:")
+    print("\n  Grok (OpenAI-compatible) selection + routing:")
+    grok = {"llm": "grok", "grok_key": "xai-abc", "grok_model": "grok-4"}
+    check("llm=grok selects grok", LLM.provider(grok), "grok")
+    check("grok model_for encodes the xAI base url", LLM.model_for(grok),
+          "openai:https://api.x.ai/v1|grok-4")
+    check("grok key_for returns the grok key", LLM.key_for(grok), "xai-abc")
+    check("grok available needs key+model", LLM.available(grok), True)
+    check("grok without a key is unavailable",
+          LLM.available({"llm": "grok", "grok_model": "grok-4"}), False)
+    check("is_openai detects the routed string", LLM.is_openai(LLM.model_for(grok)), True)
+
+    print("\n  the OpenAI-compatible call posts a json_schema and parses the reply:")
+    cap = {}
+
+    def fake_oai(req, timeout=0):
+        cap["url"] = req.full_url
+        cap["auth"] = req.headers.get("Authorization")
+        cap["body"] = json.loads(req.data)
+        return _Resp({"choices": [{"message": {"content": json.dumps({"tags": ["a"]})}}]})
+    LLM.urllib.request.urlopen = fake_oai
+    out = LLM.openai_complete("openai:https://api.x.ai/v1|grok-4", "xai-abc",
+                              "prompt", {"type": "object"}, system="sys", temperature=0.3)
+    check("hit /chat/completions", cap["url"], "https://api.x.ai/v1/chat/completions")
+    check("bearer auth set", cap["auth"], "Bearer xai-abc")
+    check("used json_schema response_format",
+          cap["body"]["response_format"]["type"], "json_schema")
+    check("parsed the reply", out, {"tags": ["a"]})
+
+    print("\n  gemini.call routes each foreign model to its backend:")
     G.resolve_model = lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("resolve_model must NOT run for a local model"))
-    LLM.ollama_complete = lambda model, prompt, schema, system="", temperature=0.4: {"ok": model}
-    r = G.call("p", {}, "KEY", "ollama:http://h|m", system="s", temperature=0.3)
-    check("routed to Ollama, Gemini path untouched", r, {"ok": "ollama:http://h|m"})
+        AssertionError("resolve_model must NOT run for a non-Gemini model"))
+    LLM.ollama_complete = lambda model, prompt, schema, system="", temperature=0.4: {"ok": "ollama"}
+    LLM.openai_complete = lambda model, key, prompt, schema, system="", temperature=0.4: {"ok": "openai", "key": key}
+    check("ollama model -> local backend",
+          G.call("p", {}, "K", "ollama:http://h|m")["ok"], "ollama")
+    r = G.call("p", {}, "xai-abc", "openai:https://api.x.ai/v1|grok-4")
+    check("openai model -> openai backend, key threaded", (r["ok"], r["key"]),
+          ("openai", "xai-abc"))
 
     print("\n  capability reporting:")
     check("gemini without key -> not ok", LLM.capability({})["ok"], False)
@@ -99,6 +131,11 @@ def main() -> int:
     check("model-not-pulled is caught", LLM.capability(oll)["ok"], False)
     LLM.list_ollama = lambda h: ["qwen3:14b", "llama3:8b"]
     check("ready when the model is installed", LLM.capability(oll)["ok"], True)
+    check("grok ready with key+model", LLM.capability(grok)["ok"], True)
+    check("grok missing key is reported",
+          LLM.capability({"llm": "grok", "grok_model": "grok-4"})["ok"], False)
+    check("grok capability names the provider",
+          LLM.capability(grok)["provider"], "grok")
 
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
