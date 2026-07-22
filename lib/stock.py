@@ -70,12 +70,16 @@ def _pexels(query: str, media: str, key: str, want: int) -> list[dict]:
             best = min(files, key=lambda f: abs(f["width"] - 1920))
             out.append({"url": best["link"], "ext": ".mp4",
                         "credit": v.get("user", {}).get("name", ""),
-                        "page": v.get("url", ""), "src": "pexels"})
+                        "page": v.get("url", ""), "src": "pexels",
+                        "width": int(best.get("width") or 0),
+                        "height": int(best.get("height") or 0)})
     else:
         for p in data.get("photos", []):
             out.append({"url": p["src"]["large2x"], "ext": ".jpg",
                         "credit": p.get("photographer", ""),
-                        "page": p.get("url", ""), "src": "pexels"})
+                        "page": p.get("url", ""), "src": "pexels",
+                        "width": int(p.get("width") or 0),
+                        "height": int(p.get("height") or 0)})
     return out
 
 
@@ -97,14 +101,52 @@ def _pixabay(query: str, media: str, key: str, want: int) -> list[dict]:
                 continue
             out.append({"url": pick["url"], "ext": ".mp4",
                         "credit": h.get("user", ""),
-                        "page": h.get("pageURL", ""), "src": "pixabay"})
+                        "page": h.get("pageURL", ""), "src": "pixabay",
+                        "width": int(pick.get("width") or 0),
+                        "height": int(pick.get("height") or 0)})
         else:
             url = h.get("largeImageURL") or h.get("webformatURL")
             if not url:
                 continue
             out.append({"url": url, "ext": ".jpg", "credit": h.get("user", ""),
-                        "page": h.get("pageURL", ""), "src": "pixabay"})
+                        "page": h.get("pageURL", ""), "src": "pixabay",
+                        "width": int(h.get("imageWidth") or 0),
+                        "height": int(h.get("imageHeight") or 0)})
     return out
+
+
+# ---------------------------------------------------------------- scoring
+
+# The frame is 16:9. A candidate that fills it at 1080p or better is ideal;
+# portrait scans and small images are what make a video look cheap.
+_IDEAL_AR = 16 / 9
+
+# How many candidates to pull per source so there is a real choice to rank.
+# It costs one request whatever the number — only the winner is downloaded — so
+# a wider net is close to free and turns "take the first hit" into "take the
+# best of several".
+POOL = 8
+
+
+def _score(hit: dict) -> float:
+    """Rank a candidate by how well it fits a 16:9 1080p frame.
+
+    Uses only the dimensions the search API already returned — nothing is
+    downloaded to score. A source that reports no dimensions (NASA, Smithsonian)
+    scores 0: neutral, so it keeps the order routing gave it and is judged for
+    size after download, exactly as before. Sorting is stable, so equal scores
+    never disturb that routed order.
+    """
+    w = int(hit.get("width") or 0)
+    h = int(hit.get("height") or 0)
+    if not w or not h:
+        return 0.0
+    ar = w / h
+    ar_score = max(0.0, 1.0 - abs(ar - _IDEAL_AR) / _IDEAL_AR)   # 1.0 at 16:9
+    if ar < 1.0:
+        ar_score -= 0.6                 # portrait wastes most of a 16:9 frame
+    res_score = min(w, 2560) / 1920.0   # rewards 1080p+, flattens past ~1440p
+    return round(3.0 * ar_score + res_score, 4)
 
 
 # ---------------------------------------------------------------------- fetch
@@ -148,19 +190,21 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     # `sources` is the routed order for this scene. Without it we behave
     # exactly as before, so every existing caller is unaffected.
     order = sources or ["pexels", "pixabay"]
+    want = index + POOL          # a pool to rank, not just enough to index
     for name in order:
         if len(results) > index:
             break
         try:
             if name == "pexels" and pexels_key:
-                results += _pexels(query, media, pexels_key, index + 3)
+                results += _pexels(query, media, pexels_key, want)
             elif name == "pixabay" and pixabay_key:
-                results += _pixabay(query, media, pixabay_key, index + 3)
+                results += _pixabay(query, media, pixabay_key, want)
             elif name in _SRC.REGISTRY:
                 results += [
                     {"url": h.url, "ext": h.ext, "credit": h.credit,
-                     "page": h.page, "src": h.src, "license": h.license}
-                    for h in _SRC.search(name, query, media, index + 3, cfg or {})]
+                     "page": h.page, "src": h.src, "license": h.license,
+                     "width": h.width, "height": h.height}
+                    for h in _SRC.search(name, query, media, want, cfg or {})]
         except Exception as e:
             errors.append(f"{name}: {e}")
 
@@ -169,6 +213,13 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
             f"No {media.lower()} result #{index + 1} for '{query}'. "
             + ("; ".join(errors) if errors else "Try a simpler, more literal query.")
         )
+
+    # Rank the pool so index 0 is the best-fitting candidate, not the first one
+    # the API happened to return. Stable sort keeps the routed order for ties,
+    # so a source that reports no dimensions is never pushed below one that does
+    # purely for being un-measured. Bumping the index (a swap on the review
+    # sheet) then walks down to the next-best.
+    results.sort(key=_score, reverse=True)
 
     hit = results[index]
     dest = cache / f"{slug}{hit['ext']}"
