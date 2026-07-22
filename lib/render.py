@@ -46,7 +46,11 @@ def ffmpeg_fix_hint() -> str:
         return ("winget install Gyan.FFmpeg   (use the 'full' build — "
                 "'essentials' has no text support)")
     if sys.platform == "darwin":
-        return "brew reinstall ffmpeg"
+        # Homebrew's core 'ffmpeg' formula was slimmed and no longer bundles
+        # libass (subtitles) or libfreetype (drawtext), so 'brew reinstall
+        # ffmpeg' pours the same caption-less build straight back. 'ffmpeg-full'
+        # is the batteries-included formula that carries both.
+        return "brew install ffmpeg-full   (core 'ffmpeg' dropped libass/freetype)"
     return "sudo apt install --reinstall ffmpeg"
 
 

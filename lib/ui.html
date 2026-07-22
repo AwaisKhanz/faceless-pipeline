@@ -928,7 +928,10 @@ async function viewSettings() {
     line(d.in_venv, 'Environment', d.in_venv ? 'project .venv' : 'system Python',
       'run setup.sh (macOS) or setup.bat (Windows)'),
     line(!!d.ffmpeg, 'ffmpeg', d.ffmpeg ? 'found' : 'NOT FOUND', d.ffmpeg_hint),
-    line(d.captions_ok, 'Captions', d.captions, d.ffmpeg_hint),
+    line(d.captions_ok, 'Captions',
+      ({ ass: 'styled, via libass', subtitles: 'basic, via libass',
+         drawtext: 'plain, no libass', none: 'unavailable — no libass' }[d.captions]
+        || d.captions), d.ffmpeg_hint),
     line(d.chatterbox, 'Voice engine', d.chatterbox ? 'installed' : 'missing',
       'run setup.sh / setup.bat'),
     line(d.chatterbox ? d.gpu_ok : null, 'GPU',
