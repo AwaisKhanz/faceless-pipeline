@@ -75,6 +75,7 @@ from lib import console  # noqa: E402
 # characters. Do this before anything is printed.
 console.setup()
 from lib import gemini as gem  # noqa: E402
+from lib import llm as LLM  # noqa: E402
 from lib import render as R  # noqa: E402
 from lib import tts, voices as vx  # noqa: E402
 from lib import vision as VIS  # noqa: E402
@@ -249,20 +250,20 @@ def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
     try:
         begin_job(pid, langs, "generate")
         cfg = pl.load_config()
-        key = cfg.get("gemini_key", "")
-        if not key:
+        if not LLM.available(cfg):
             raise RuntimeError(
-                "No Gemini API key yet. Get a free one at "
-                "https://aistudio.google.com/apikey and paste it into config.json "
-                "as \"gemini_key\".")
+                "No language model configured. Either add a free Gemini key "
+                "(https://aistudio.google.com/apikey) as \"gemini_key\", or set "
+                "\"llm\": \"ollama\" with an \"ollama_model\" to run locally.")
         pid = re.sub(r"[^A-Za-z0-9_-]", "", pid).strip() or "video"
         set_job(stage="generate", label="reading the script", done=0, total=1,
                 error="", outputs=[], project=pid)
-        log(f"Generating sheets for '{pid}' — {', '.join(langs)}")
+        log(f"Generating sheets for '{pid}' via {LLM.capability(cfg)['provider']} "
+            f"— {', '.join(langs)}")
 
         res = compose.generate(
-            scripts, pid, key,
-            model=cfg.get("gemini_model", gem.DEFAULT_MODEL),
+            scripts, pid, LLM.key_for(cfg),
+            model=LLM.model_for(cfg),
             on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
             on_warn=lambda m: log(f"  ⚠ {m}"))
 
@@ -295,9 +296,10 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
     try:
         begin_job(pid, [lang], "generate")
         cfg = pl.load_config()
-        key = cfg.get("gemini_key", "")
-        if not key:
-            raise RuntimeError("No Gemini API key yet — add gemini_key to config.json.")
+        if not LLM.available(cfg):
+            raise RuntimeError(
+                "No language model configured — add gemini_key, or set llm=ollama "
+                "with an ollama_model in config.json.")
         proj = pl.find_project(pid)
         sheet = Path(proj["sheet"])
         sdir = sheet.parent
@@ -306,8 +308,8 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
         log(f"Adding {pl.LANG_NAMES.get(lang, lang)} to '{pid}' from your pasted script")
 
         res = compose.add_language(
-            sheet, lang, script, key,
-            model=cfg.get("gemini_model", gem.DEFAULT_MODEL),
+            sheet, lang, script, LLM.key_for(cfg),
+            model=LLM.model_for(cfg),
             on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
             on_warn=lambda m: log(f"  ⚠ {m}"))
 
@@ -769,6 +771,7 @@ class Handler(BaseHTTPRequestHandler):
                 "gpu_ok": dev.get("device") in ("cuda", "mps"),
                 "clip": VIS.capability(cfg),
                 "align": AL.capability(cfg),
+                "llm": LLM.capability(cfg),
                 "audio": {"master": pl._flag(cfg.get("audio_master", "auto")),
                           "lufs": float(cfg.get("lufs_target") or -14.0),
                           "duck": pl._flag(cfg.get("music_duck", True))},

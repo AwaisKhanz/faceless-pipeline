@@ -641,12 +641,11 @@ def save_metadata(sheet: Path, lang: str, data: dict) -> dict:
 
 def build_metadata(sheet: Path, lang: str, cfg: dict) -> dict:
     """Generate metadata from the narration in this language, and save it."""
-    from . import gemini as G, sources as SRC     # heavy-ish; import on demand
-    key = cfg.get("gemini_key")
-    if not key:
+    from . import gemini as G, llm as LLM, sources as SRC   # on demand
+    if not LLM.available(cfg):
         raise RuntimeError(
-            "Writing a description needs a Gemini key. Add gemini_key to "
-            "config.json (a free key from https://aistudio.google.com/apikey).")
+            "Writing a description needs a language model. Add a free Gemini key "
+            "(gemini_key), or set llm=ollama with an ollama_model in config.json.")
 
     pid = project_id(sheet)
     tr = translation_for(sheet.parent, pid, lang)
@@ -661,9 +660,8 @@ def build_metadata(sheet: Path, lang: str, cfg: dict) -> dict:
     # medical or historical video gets the right framing in its description.
     domains = " ".join(getattr(s, "domain", "") for s in scenes)
     topics = sorted(SRC.topics_in(domains, narration))
-    model = cfg.get("gemini_model") or "auto"
     data = G.generate_metadata(narration, LANG_NAMES.get(lang, lang), topics,
-                               pid, key, model)
+                               pid, LLM.key_for(cfg), LLM.model_for(cfg))
     return save_metadata(sheet, lang, data)
 
 
@@ -678,8 +676,8 @@ def _expand_scene_queries(scenes, p, cfg: dict, on_progress=lambda *_: None) -> 
     The extra phrases go to the END of `fallbacks`, keeping the human-written
     query and any existing fallbacks first.
     """
-    key = cfg.get("gemini_key")
-    if not key or not scenes:
+    from . import llm as LLM
+    if not scenes or not LLM.available(cfg):
         return
     if not _flag(cfg.get("expand_queries", "auto")):
         return
@@ -699,7 +697,7 @@ def _expand_scene_queries(scenes, p, cfg: dict, on_progress=lambda *_: None) -> 
         from . import gemini as G
         got = G.expand_queries(
             [{"n": s.n, "query": s.query, "narration": s.narration} for s in need],
-            key, cfg.get("gemini_model") or "auto")
+            LLM.key_for(cfg), LLM.model_for(cfg))
         for s in need:
             cache[str(s.n)] = {"query": s.query or "", "extra": got.get(s.n, [])}
         try:

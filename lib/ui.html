@@ -1484,6 +1484,16 @@ async function viewSettings() {
         au.master ? `on · ${au.lufs} LUFS` + (au.duck ? ' · music ducking' : '')
           : 'off — raw mix',
         au.master ? '' : 'turn on with audio_master in config.json');
+    })(),
+    (() => {
+      const l = d.llm || {};
+      // Which model writes the sheets/queries/descriptions — cloud Gemini or a
+      // free local model via Ollama.
+      return line(l.ok, 'Language model',
+        l.provider === 'ollama'
+          ? (l.ok ? `local · ${l.model} (Ollama)` : 'Ollama — ' + (l.reason || 'not ready'))
+          : (l.ok ? `Gemini · ${l.model}` : 'no Gemini key'),
+        l.ok ? '' : (l.reason || ''));
     })()))));
 
   v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'API keys')));

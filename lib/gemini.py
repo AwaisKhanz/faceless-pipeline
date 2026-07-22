@@ -100,6 +100,13 @@ def resolve_model(key: str, preferred: str = "") -> str:
 def call(prompt: str, schema: dict, key: str, model: str = DEFAULT_MODEL,
          system: str = "", temperature: float = 0.35, retries: int = 3,
          _redirected: bool = False) -> dict:
+    # A local model? Route to Ollama and skip everything Gemini-specific. The
+    # target (host + name) is carried in `model`, so every generator in this file
+    # works against a local model with no change. Lazy import avoids a cycle.
+    if str(model).startswith("ollama:"):
+        from . import llm
+        return llm.ollama_complete(model, prompt, schema, system=system,
+                                   temperature=temperature)
     model = resolve_model(key, model)
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -703,30 +710,6 @@ SECTION TO SPLIT (reproduce every word exactly, in order):
 {section}"""
     out = call(p, SCENES_SCHEMA, key, model, system=SYSTEM, temperature=0.25)
     return out.get("scenes", [])
-
-
-def translate_section(lines: list[str], lang_name: str, ctx: dict, key: str,
-                      model: str, feedback: str = "") -> list[str]:
-    extra = f"\n\nPREVIOUS ATTEMPT WAS REJECTED: {feedback}\n" if feedback else ""
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(lines))
-    p = f"""Translate these {len(lines)} narration lines into {lang_name}.
-
-Rules:
-- Return EXACTLY {len(lines)} lines, in the same order, one translation per input line.
-- Never merge or split lines. Line 7 in must be line 7 out.
-- This is spoken narration for listeners aged 60+. Warm, calm, natural to the ear —
-  not literal, not stiff, not machine-sounding. Use the polite/formal register
-  ("Sie" in German, "usted" in Spanish) throughout.
-- The spine phrase of this video is "{ctx.get('spine_phrase', '')}". Translate it once,
-  then reuse that exact wording every time it appears. Same for any running metaphor.
-- Keep sentence fragments as fragments — many lines are half a sentence continuing
-  from the previous line. Do not "fix" them into complete sentences.
-- Numbers, names and medical terms must survive intact.
-{extra}
-LINES:
-{numbered}"""
-    out = call(p, TRANSLATE_SCHEMA, key, model, system=SYSTEM, temperature=0.35)
-    return out.get("lines", [])
 
 
 def segment_script(en_lines: list[str], script: str, lang_name: str, key: str,

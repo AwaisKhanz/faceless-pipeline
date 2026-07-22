@@ -196,27 +196,29 @@ def step_generate(a) -> None:
         raise SystemExit(f"Script not found: {src}")
     pid = a.id or src.stem
     cfg = pl.load_config()
-    if not cfg.get("gemini_key"):
+    from lib import llm as LLM
+    if not LLM.available(cfg):
         raise SystemExit(
-            "No Gemini key. Get a free one at https://aistudio.google.com/apikey "
-            "and add it to config.json as \"gemini_key\".")
+            "No language model configured. Add a free Gemini key "
+            "(https://aistudio.google.com/apikey) as \"gemini_key\", or set "
+            "\"llm\": \"ollama\" with an \"ollama_model\" to run locally.")
 
     # One script file = one language now (no translation). --lang says which.
     # If the project already has a master in another language, this ADDS the new
     # language onto its shared scenes; otherwise it creates the master.
     lang = (a.lang or (a.langs or "en").split(",")[0]).strip() or "en"
     text = src.read_text(encoding="utf-8")
-    model = cfg.get("gemini_model", "gemini-2.5-flash")
+    key, model = LLM.key_for(cfg), LLM.model_for(cfg)
     sdir = pl.sheets_dir(pid)
     master = sdir / f"{pid}_MASTER_production_sheet.md"
     if master.exists() and pl.master_lang(master) != lang:
         banner(f"Adding {pl.LANG_NAMES.get(lang, lang)} to '{pid}'")
-        res = compose.add_language(master, lang, text, cfg["gemini_key"],
+        res = compose.add_language(master, lang, text, key,
                                    model=model, on_progress=bar,
                                    on_warn=lambda m: print(f"\n  ⚠ {m}"))
     else:
         banner(f"Generating the {pl.LANG_NAMES.get(lang, lang)} sheet for '{pid}'")
-        res = compose.generate({lang: text}, pid, cfg["gemini_key"],
+        res = compose.generate({lang: text}, pid, key,
                                model=model, on_progress=bar,
                                on_warn=lambda m: print(f"\n  ⚠ {m}"))
     written = compose.write_files(res, sdir, overwrite=a.overwrite)
