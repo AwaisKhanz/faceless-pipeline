@@ -137,6 +137,21 @@ def main() -> int:
     check("grok capability names the provider",
           LLM.capability(grok)["provider"], "grok")
 
+    print("\n  OpenRouter is a one-row addition on the same backend:")
+    orc = {"llm": "openrouter", "openrouter_key": "or-1",
+           "openrouter_model": "deepseek/deepseek-r1:free"}
+    check("llm=openrouter selects it", LLM.provider(orc), "openrouter")
+    check("routes to the openrouter base url", LLM.model_for(orc),
+          "openai:https://openrouter.ai/api/v1|deepseek/deepseek-r1:free")
+    check("available with key+model", LLM.available(orc), True)
+    check("capability ready", LLM.capability(orc)["ok"], True)
+
+    print("\n  the parser tolerates fenced / prefixed JSON (free models):")
+    check("plain JSON", LLM._json_loads('{"a": 1}'), {"a": 1})
+    check("```json fenced", LLM._json_loads('```json\n{"a": 1}\n```'), {"a": 1})
+    check("prose then object",
+          LLM._json_loads('Sure! Here you go:\n{"a": [1, 2]}'), {"a": [1, 2]})
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

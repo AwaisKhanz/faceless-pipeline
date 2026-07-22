@@ -39,8 +39,8 @@ _TIMEOUT = 600          # a big local model on a long prompt is slow; be patient
 # Groq or OpenRouter, add a row — that is the whole change.
 _OPENAI = {
     "grok": ("https://api.x.ai/v1", "grok_key", "grok_model"),
+    "openrouter": ("https://openrouter.ai/api/v1", "openrouter_key", "openrouter_model"),
     # "groq": ("https://api.groq.com/openai/v1", "groq_key", "groq_model"),
-    # "openrouter": ("https://openrouter.ai/api/v1", "openrouter_key", "openrouter_model"),
 }
 
 
@@ -51,6 +51,38 @@ class LLMError(RuntimeError):
 def _s(cfg: dict | None, key: str, default: str = "") -> str:
     v = (cfg or {}).get(key)
     return default if v in (None, "") else str(v)
+
+
+def _json_loads(content: str):
+    """Parse JSON a model returned, tolerating the mess weaker/free models add.
+
+    Some models wrap the object in ```json fences, or prepend a sentence. Try the
+    clean parse first, then strip fences, then fall back to the first {...} / [...]
+    span. Raises ValueError if nothing parses, so callers can retry.
+    """
+    if not content:
+        raise ValueError("empty response")
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+    t = content.strip()
+    if t.startswith("```"):                       # ```json … ```  or  ``` … ```
+        t = t.split("```", 2)[1] if t.count("```") >= 2 else t.lstrip("`")
+        if t.lower().startswith("json"):
+            t = t[4:]
+        try:
+            return json.loads(t.strip())
+        except Exception:
+            pass
+    for open_c, close_c in (("{", "}"), ("[", "]")):    # first balanced-ish span
+        i, j = content.find(open_c), content.rfind(close_c)
+        if 0 <= i < j:
+            try:
+                return json.loads(content[i:j + 1])
+            except Exception:
+                continue
+    raise ValueError("no JSON found in the response")
 
 
 # ─────────────────────────────────────────────────────── provider selection
@@ -156,7 +188,7 @@ def ollama_complete(model: str, prompt: str, schema: dict, system: str = "",
             continue
         content = (payload.get("message") or {}).get("content", "")
         try:
-            return json.loads(content)
+            return _json_loads(content)
         except Exception:
             last = "the model did not return valid JSON"
             continue
@@ -239,7 +271,7 @@ def openai_complete(model: str, key: str, prompt: str, schema: dict,
             continue
         try:
             content = payload["choices"][0]["message"]["content"]
-            return json.loads(content)
+            return _json_loads(content)
         except Exception:
             last = "the model did not return valid JSON"
             continue
