@@ -523,6 +523,16 @@ def main() -> None:
         else:
             print("  !! chatterbox  missing — run: bash setup.sh")
 
+        from lib import vision as VIS
+        cap = VIS.capability(pl.load_config())
+        if cap["ok"]:
+            where = cap["device"] + (f" {cap['vram_gb']}GB" if cap["vram_gb"] else "")
+            print(f"  ok visual match {cap['model'].split('/')[-1]} on {where} "
+                  f"(scores pictures against the scene)")
+        else:
+            print(f"  -- visual match off ({cap['reason']}) "
+                  f"— ranking by size and aspect only")
+
         # perth (Chatterbox's watermarker) imports pkg_resources, which
         # setuptools 81 removed. When it is gone the watermarker class is
         # silently None and Chatterbox dies with a useless TypeError.

@@ -15,12 +15,37 @@ import time
 import urllib.parse
 import urllib.request
 import subprocess
+from collections import OrderedDict
 from pathlib import Path
 
 from . import sources as _SRC
+from . import vision
 
 UA = {"User-Agent": "faceless-pipeline/1.0"}
 TIMEOUT = 30
+
+# Below this relevance a candidate is judged not really about the scene, and
+# sourcing searches harder before settling. Softmax probability over the scene
+# concept vs a list of junk concepts, so 0.45 means "more likely the subject
+# than any kind of junk". Tunable in config.json as clip_min.
+DEFAULT_CLIP_MIN = 0.45
+
+# A small pool of raw image bytes, so walking the query ladder and stepping over
+# duplicates does not re-download the same candidate. Bounded so memory stays
+# flat over a 115-scene run.
+_BYTES: "OrderedDict[str, bytes]" = OrderedDict()
+_BYTES_CAP = 64
+
+
+def _fetch_bytes(url: str) -> bytes:
+    if url in _BYTES:
+        _BYTES.move_to_end(url)
+        return _BYTES[url]
+    b = _get(url)
+    _BYTES[url] = b
+    while len(_BYTES) > _BYTES_CAP:
+        _BYTES.popitem(last=False)
+    return b
 
 
 class StockError(RuntimeError):
@@ -71,6 +96,7 @@ def _pexels(query: str, media: str, key: str, want: int) -> list[dict]:
             out.append({"url": best["link"], "ext": ".mp4",
                         "credit": v.get("user", {}).get("name", ""),
                         "page": v.get("url", ""), "src": "pexels",
+                        "thumb": v.get("image", ""),      # poster frame, for scoring
                         "width": int(best.get("width") or 0),
                         "height": int(best.get("height") or 0)})
     else:
@@ -78,6 +104,7 @@ def _pexels(query: str, media: str, key: str, want: int) -> list[dict]:
             out.append({"url": p["src"]["large2x"], "ext": ".jpg",
                         "credit": p.get("photographer", ""),
                         "page": p.get("url", ""), "src": "pexels",
+                        "thumb": p.get("src", {}).get("medium", ""),
                         "width": int(p.get("width") or 0),
                         "height": int(p.get("height") or 0)})
     return out
@@ -110,6 +137,7 @@ def _pixabay(query: str, media: str, key: str, want: int) -> list[dict]:
                 continue
             out.append({"url": url, "ext": ".jpg", "credit": h.get("user", ""),
                         "page": h.get("pageURL", ""), "src": "pixabay",
+                        "thumb": h.get("webformatURL", ""),   # 640px, for scoring
                         "width": int(h.get("imageWidth") or 0),
                         "height": int(h.get("imageHeight") or 0)})
     return out
@@ -203,7 +231,7 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
                 results += [
                     {"url": h.url, "ext": h.ext, "credit": h.credit,
                      "page": h.page, "src": h.src, "license": h.license,
-                     "width": h.width, "height": h.height}
+                     "thumb": "", "width": h.width, "height": h.height}
                     for h in _SRC.search(name, query, media, want, cfg or {})]
         except Exception as e:
             errors.append(f"{name}: {e}")
@@ -221,9 +249,30 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     # sheet) then walks down to the next-best.
     results.sort(key=_score, reverse=True)
 
+    # Then, if this machine can run it, re-rank by what the picture is actually
+    # OF. Relevance (0..1, whether the image matches the scene) dominates; the
+    # technical score is a small tiebreak between equally-relevant candidates.
+    # rel stays None when scoring is unavailable or a candidate could not be
+    # scored, and those fall to the bottom in technical order — never above a
+    # candidate we actually verified.
+    rel = _relevance(results[:POOL], query, media, cfg)
+    if rel:
+        for h in results[:POOL]:
+            h["rel"] = rel.get(h["url"])
+
+        def _combined(h):
+            r = h.get("rel")
+            tech = min(_score(h), 4.5) / 4.5          # 0..1
+            if r is None:
+                return -1.0 + tech * 0.001            # unverified: below all scored
+            return r + tech * 0.12                    # relevance leads, quality breaks ties
+
+        head = sorted(results[:POOL], key=_combined, reverse=True)
+        results[:len(head)] = head
+
     hit = results[index]
     dest = cache / f"{slug}{hit['ext']}"
-    dest.write_bytes(_get(hit["url"]))
+    dest.write_bytes(_fetch_bytes(hit["url"]))         # reuses the scored bytes
 
     # Measure what actually arrived. Archives happily return a 400px scan of a
     # postcard, which looks like a mistake at 1080p — and no search API reports
@@ -237,9 +286,34 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
             f"{floor}px floor for {media.lower()}")
     meta = {"path": str(dest), "credit": hit["credit"], "page": hit["page"],
             "src": hit["src"], "license": hit.get("license", ""),
-            "query": query, "media": media, "index": index}
+            "query": query, "media": media, "index": index,
+            "score": hit.get("rel")}      # relevance, or None if not scored
     meta_p.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
+
+
+def _relevance(pool: list[dict], query: str, media: str,
+               cfg: dict | None) -> dict[str, float]:
+    """CLIP relevance for the candidates that have something cheap to look at.
+
+    Downloads each candidate's thumbnail (a small poster or web-size image, not
+    the full asset) and scores it. Returns url -> relevance. Empty when scoring
+    is off or nothing was scorable, in which case the caller keeps the technical
+    order. Never raises.
+    """
+    scorer = vision.get_scorer(cfg or {})
+    if scorer is None:
+        return {}
+    items: list[tuple[str, bytes]] = []
+    for h in pool:
+        look = h.get("thumb") or (h["url"] if media == "IMAGE" else "")
+        if not look:
+            continue                       # e.g. a video with no poster: skip
+        try:
+            items.append((h["url"], _fetch_bytes(look)))
+        except StockError:
+            continue
+    return scorer.relevance(query, items) if items else {}
 
 
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
@@ -263,11 +337,17 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     picks = picks or {}
     cfg = cfg or {}
     have = _SRC.usable({**cfg, "pexels_key": pexels_key, "pixabay_key": pixabay_key})
-    out, failed = {}, []
+    out, failed, weak = {}, [], []
     # Assets already assigned on a previous run count as used too, or a
     # re-source of three scenes would happily pick something on screen
     # elsewhere in the same video.
     used: set[str] = {a.get("path") for a in (already or {}).values() if a.get("path")}
+
+    # Bring the relevance scorer up once (it logs on/off and the chosen tier a
+    # single time), and read the "good enough" bar. When scoring is off both are
+    # inert and the ladder behaves exactly as it always did.
+    scorer_on = vision.get_scorer(cfg, log) is not None
+    clip_min = float(cfg.get("clip_min") or DEFAULT_CLIP_MIN)
 
     for i, s in enumerate(scenes):
         if on_progress:
@@ -279,11 +359,13 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         route = _SRC.route(getattr(s, "domain", ""), s.media, have,
                            query=" ".join(ladder))
         got = None
+        got_rel = -1.0
         notes: list[str] = []
 
         for rung, query in enumerate(ladder):
             # Walk a few matches deep so a duplicate can be stepped over
             # without giving up on this query.
+            pick = None
             for bump in range(4):
                 try:
                     hit = fetch(query, s.media, cache, pexels_key, pixabay_key,
@@ -294,24 +376,46 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                     break                       # this query is exhausted
                 if hit["path"] in used:
                     continue                    # already on screen elsewhere
-                got = hit
+                pick = hit
+                break
+            if pick is None:
+                continue                        # nothing usable from this query
+
+            rel = pick.get("score")
+            if not scorer_on or rel is None:
+                # No relevance signal (scoring off, or an unscorable video):
+                # first usable match wins, exactly as before.
+                got, got_rel = pick, None
                 if rung:
                     notes.append(f"fell back to {query[:38]!r}")
                 break
-            if got:
-                break
+
+            # Scoring is on: keep the most relevant candidate across the rungs,
+            # and only stop searching once one clears the bar.
+            if rel > got_rel:
+                got, got_rel = pick, rel
+                if rung:
+                    notes.append(f"fell back to {query[:34]!r} (match {rel:.2f})")
+            if got_rel >= clip_min:
+                break                           # good enough — stop here
 
         if got is None:
             failed.append((s.n, "; ".join(notes) or "no match"))
             log(f"  S{s.n:>3} FAILED  {notes[0] if notes else 'no match'}")
             continue
 
+        # Searched the whole ladder and nothing really matched: use the best we
+        # found, but flag it so the scene can be fixed by hand rather than left
+        # empty (an empty scene breaks the video).
+        if scorer_on and got_rel is not None and got_rel < clip_min:
+            notes.append(f"weak visual match ({got_rel:.2f})")
+            weak.append(s.n)
+
         used.add(got["path"])
         out[s.n] = got
-        # The last note is the useful one ("fell back to ..."); earlier
-        # entries are just the queries that missed on the way down.
         tail = f"  ({notes[-1]})" if notes else ""
-        log(f"  S{s.n:>3} {s.media:<5} {got['src']:<11} {got['query'][:40]}{tail}")
+        rtag = f" [{got_rel:.2f}]" if (scorer_on and got_rel is not None) else ""
+        log(f"  S{s.n:>3} {s.media:<5} {got['src']:<11} {got['query'][:40]}{rtag}{tail}")
 
     down = _SRC.down_sources()
     if down:
@@ -323,6 +427,11 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         log(f"\n{len(failed)} scene(s) had no usable match: "
             f"{[n for n, _ in failed]}")
         log("Edit those 'ALT / search' lines in the master sheet and re-run 'stock'.")
+
+    if weak:
+        log(f"\n{len(weak)} scene(s) matched only weakly: {weak}")
+        log("Nothing free fit them well. Review & swap those, or reword their "
+            "'ALT / search' line for a shot that exists.")
     return out
 
 

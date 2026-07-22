@@ -1015,7 +1015,17 @@ async function viewSettings() {
       dev.name ? dev.name + (dev.vram_gb ? ' · ' + dev.vram_gb + ' GB' : '') : 'none',
       'PyTorch has no CUDA build — see README section 6'),
     dev.note ? el('tr', {}, el('td', {}),
-      el('td', { class: 'sub', colspan: '2' }, dev.note)) : null))));
+      el('td', { class: 'sub', colspan: '2' }, dev.note)) : null,
+    (() => {
+      const c = d.clip || {};
+      // A neutral state, not a failure: without it, sourcing simply ranks by
+      // size and aspect instead of by what the picture is actually of.
+      return line(c.ok ? true : null, 'Visual matching',
+        c.ok ? (c.model || '').split('/').pop() + ' · ' + c.device
+             + (c.vram_gb ? ' ' + c.vram_gb + ' GB' : '')
+          : 'off — ranking by size only',
+        c.ok ? '' : (c.reason || ''));
+    })()))));
 
   v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'API keys')));
   v.append(el('div', { class: 'card' }, el('table', {}, el('tbody', {},

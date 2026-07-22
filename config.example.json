@@ -13,5 +13,11 @@
   "_gemini": "Optional. Free key at https://aistudio.google.com/apikey \u2014 only needed if you want to generate sheets from a script.",
   "gemini_key": "",
   "gemini_model": "auto",
-  "_gemini_model": "\"auto\" asks your key which models it can call and picks the best Flash one. Only pin a name here if you want a specific model."
+  "_gemini_model": "\"auto\" asks your key which models it can call and picks the best Flash one. Only pin a name here if you want a specific model.",
+  "_clip": "Visual matching: scores each candidate picture for how well it actually matches the scene, not just its size. Free and local (open CLIP weights on your own GPU/CPU, one-time download). \"auto\" turns it on wherever it can run; set \"off\" to rank by size and aspect only.",
+  "clip": "auto",
+  "_clip_model": "Optional override, e.g. openai/clip-vit-base-patch32. Empty lets it pick a model to fit the machine (large on a big GPU, base on a Mac, small on a plain laptop).",
+  "clip_model": "",
+  "_clip_min": "How good a match must be before sourcing stops searching (0-1). Lower accepts looser matches; higher searches harder and flags more scenes. 0.45 is a sensible start.",
+  "clip_min": 0.45
 }

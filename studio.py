@@ -77,6 +77,7 @@ console.setup()
 from lib import gemini as gem  # noqa: E402
 from lib import render as R  # noqa: E402
 from lib import tts, voices as vx  # noqa: E402
+from lib import vision as VIS  # noqa: E402
 
 PORT = 8765
 UI = ROOT / "lib" / "ui.html"
@@ -691,6 +692,8 @@ class Handler(BaseHTTPRequestHandler):
                 "chatterbox": CB.installed(),
                 "device": dev,
                 "gpu_ok": dev.get("device") in ("cuda", "mps"),
+                "clip": VIS.capability(cfg),
+
                 "references": CB.list_references() if CB.installed() else [],
                 "voices": langs,
                 "keys": {"pexels": bool(cfg.get("pexels_key")),
