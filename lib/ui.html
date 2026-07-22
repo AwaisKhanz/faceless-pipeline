@@ -214,7 +214,10 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
 .empty{text-align:center;padding:60px 20px;color:var(--ink2)}
 .empty b{display:block;font-size:16px;color:var(--ink);margin-bottom:6px}
 .hr{height:1px;background:var(--line);margin:22px 0}
-.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:11px}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.tcell{display:flex;flex-direction:column;gap:5px}
+.tcap{font-size:11px;color:var(--ink3);font-family:var(--mono);line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .thumb{position:relative;aspect-ratio:16/9;border-radius:8px;overflow:hidden;
   background:var(--surface3);border:2px solid transparent;cursor:pointer}
 .thumb img,.thumb video{width:100%;height:100%;object-fit:cover;display:block}
@@ -1142,7 +1145,8 @@ async function viewReview(id) {
     const low = p != null && s.score < min;
     const t = el('div', {
       class: 'thumb' + (s.hero ? ' hero' : '') + (low ? ' low' : ''),
-      title: `S${s.n}${p != null ? ` · match ${p}%` : ''} · ${s.narration || ''}`,
+      title: `S${s.n}${p != null ? ` · match ${p}%` : ''}`
+        + `\nmatched against: "${s.query || ''}"\n${s.narration || ''}`,
       onclick: e => {
         const n = e.currentTarget;
         if (rejected.has(s.n)) { rejected.delete(s.n); n.classList.remove('rej'); }
@@ -1158,7 +1162,11 @@ async function viewReview(id) {
         onmouseleave: e => e.target.pause()
       })
       : el('img', { src: s.url, loading: 'lazy', alt: s.query || '' }));
-    return t;
+    // Under each picture: the media kind and the phrase it was scored against,
+    // so it is obvious what was compared to what.
+    return el('div', { class: 'tcell' }, t,
+      el('div', { class: 'tcap', title: s.query || '' },
+        (s.video ? '▶ ' : '') + (s.query || '—')));
   })));
 }
 

@@ -50,6 +50,21 @@ JUNK = [
 # Text templates. Averaging a couple of phrasings is steadier than one.
 TEMPLATES = ("a photo of {}", "{}")
 
+# Relevance is a cosine similarity between the picture and the scene, mapped to
+# 0..1 over the band a CLIP image-text pair actually occupies: a strong,
+# on-subject match sits around 0.30, something unrelated around 0.17. The band
+# is fixed so a percentage means the same thing on every scene. (An earlier
+# softmax against junk concepts saturated — any real photograph scored ~100%,
+# because it only measured "photo vs junk", not "matches THIS line".)
+_COS_LOW = 0.17
+_COS_HIGH = 0.30
+
+# Bumped whenever the scoring maths change. A cached pick tagged with an older
+# version is re-scored from the file already on disk — no re-download — so a
+# calibration fix takes effect on the next source without clearing the cache.
+#   1: softmax vs junk (saturated to ~100%)   2: normalised cosine
+SCORE_VERSION = 2
+
 
 def _cfg_get(cfg: dict, key: str, default):
     v = (cfg or {}).get(key)
@@ -125,18 +140,26 @@ class Scorer:
         if self._model is not None:
             return
         import torch
+        import transformers
         from transformers import CLIPModel, CLIPProcessor
+        transformers.logging.set_verbosity_error()   # skip the load-report noise
         self._torch = torch
-        self._model = CLIPModel.from_pretrained(self.model_id).to(self.device).eval()
+        # use_safetensors avoids also pulling the legacy pytorch_model.bin — the
+        # repo ships both, and fetching each is a needless second ~600 MB.
+        self._model = CLIPModel.from_pretrained(
+            self.model_id, use_safetensors=True).to(self.device).eval()
         self._proc = CLIPProcessor.from_pretrained(self.model_id)
 
     def relevance(self, query: str, items: list[tuple[str, bytes]]) -> dict[str, float]:
-        """Score each (key, image-bytes) for how well it matches `query`.
+        """Score each (key, image-bytes) for how well it matches `query`, 0..1.
 
-        Returns key -> relevance in 0..1 (probability it is the scene concept
-        rather than junk). Undecodable images score 0. Never raises: on any
-        failure it returns 0 for everything, so the caller degrades to size/
-        aspect ranking rather than losing the scene.
+        The number is the picture's cosine similarity to the scene, normalised
+        over _COS_LOW.._COS_HIGH, so it spreads across candidates and means the
+        same thing on every scene. A picture that looks more like junk (text, a
+        chart, a watermark) than like the subject is knocked down, which keeps
+        clip-art and screenshots out. Undecodable images score 0. Never raises:
+        on any failure it returns 0 for everything and the caller falls back to
+        size/aspect ranking.
         """
         if not items:
             return {}
@@ -145,8 +168,9 @@ class Scorer:
             from PIL import Image
             torch = self._torch
 
-            texts = [t.format(query) for t in TEMPLATES] + JUNK
-            n_pos = len(TEMPLATES)
+            pos_texts = [t.format(query) for t in TEMPLATES]
+            texts = pos_texts + JUNK
+            n_pos = len(pos_texts)
 
             out: dict[str, float] = {}
             todo: list[tuple[str, tuple, "Image.Image"]] = []
@@ -165,20 +189,24 @@ class Scorer:
                 inputs = self._proc(text=texts, images=[im for _, _, im in todo],
                                     return_tensors="pt", padding=True).to(self.device)
                 with torch.no_grad():
-                    probs = self.model_logits(inputs).softmax(dim=1)  # image x text
-                    # Probability the image is ANY positive phrasing of the scene.
-                    pos = probs[:, :n_pos].sum(dim=1).tolist()
-                for (key, ck, _img), p in zip(todo, pos):
-                    p = float(max(0.0, min(1.0, p)))
-                    out[key] = p
-                    self._cache[ck] = p
+                    m = self._model(**inputs)
+                    ie = m.image_embeds / m.image_embeds.norm(dim=-1, keepdim=True)
+                    te = m.text_embeds / m.text_embeds.norm(dim=-1, keepdim=True)
+                    cos = (ie @ te.t()).tolist()          # images x texts, -1..1
+                span = _COS_HIGH - _COS_LOW
+                for (key, ck, _img), row in zip(todo, cos):
+                    pos = sum(row[:n_pos]) / n_pos          # match to the subject
+                    junk = max(row[n_pos:]) if len(row) > n_pos else 0.0
+                    rel = max(0.0, min(1.0, (pos - _COS_LOW) / span))
+                    if junk > pos:                          # more junk than subject
+                        rel *= 0.35
+                    rel = round(rel, 4)
+                    out[key] = rel
+                    self._cache[ck] = rel
             return out
         except Exception:
             # Model failed at runtime (OOM, corrupt download, …). Degrade.
             return {k: 0.0 for k, _ in items}
-
-    def model_logits(self, inputs):
-        return self._model(**inputs).logits_per_image
 
 
 # ───────────────────────────────────────────────── process-wide singleton

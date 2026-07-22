@@ -210,6 +210,7 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     if meta_p.exists():
         meta = json.loads(meta_p.read_text(encoding="utf-8"))
         if Path(meta["path"]).exists():
+            _rescore_if_stale(meta, meta_p, query, media, cfg)
             return meta
 
     results: list[dict] = []
@@ -287,9 +288,37 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     meta = {"path": str(dest), "credit": hit["credit"], "page": hit["page"],
             "src": hit["src"], "license": hit.get("license", ""),
             "query": query, "media": media, "index": index,
-            "score": hit.get("rel")}      # relevance, or None if not scored
+            "score": hit.get("rel"),            # relevance, or None if not scored
+            "score_v": vision.SCORE_VERSION if rel else None}
     meta_p.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
+
+
+def _rescore_if_stale(meta: dict, meta_p: Path, query: str, media: str,
+                      cfg: dict | None) -> None:
+    """Refresh a cached pick's match score in place when the scorer has moved on.
+
+    Re-scores the file already on disk — a frame for a video, the image itself
+    otherwise — so a calibration change is picked up on the next source without
+    re-downloading anything or clearing the cache. Silent on any failure; a
+    missing score just means the old ranking stands until a real re-source.
+    """
+    scorer = vision.get_scorer(cfg or {})
+    if scorer is None or meta.get("score_v") == vision.SCORE_VERSION:
+        return
+    path = meta.get("path", "")
+    try:
+        if (meta.get("media") or media) == "VIDEO":
+            raw = _video_frame(path)            # ffmpeg reads the local file too
+        else:
+            raw = Path(path).read_bytes()
+        if raw:
+            r = scorer.relevance(query, [(path, raw)])
+            meta["score"] = r.get(path)
+        meta["score_v"] = vision.SCORE_VERSION
+        meta_p.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _relevance(pool: list[dict], query: str, media: str,
