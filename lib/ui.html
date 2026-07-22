@@ -222,9 +222,19 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
 .thumb.hero{border-color:var(--accent)}
 .thumb .n{position:absolute;left:0;top:0;background:rgba(0,0,0,.72);color:#fff;
   font-family:var(--mono);font-size:11.5px;padding:2px 7px;border-radius:0 0 6px 0;font-weight:600}
+/* match score, top-right corner */
+.thumb .m{position:absolute;right:0;top:0;font-family:var(--mono);font-size:11px;
+  font-weight:700;padding:2px 6px;border-radius:0 0 0 6px;color:#08120a}
+.thumb .m.good{background:var(--ok)}
+.thumb .m.weak{background:var(--warn)}
+.thumb.low{border-color:color-mix(in srgb,var(--warn) 60%,var(--line))}
 .thumb .rep{position:absolute;inset:0;display:grid;place-items:center;
   background:color-mix(in srgb,var(--bad) 28%,transparent)}
 .thumb .rep span{background:var(--bad);color:#fff;font-size:11px;font-weight:600;padding:3px 9px;border-radius:99px}
+/* the scoring legend / key */
+.legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
+.legend .k{display:inline-flex;align-items:center;gap:6px}
+.legend .sw{width:11px;height:11px;border-radius:3px;flex:none}
 
 /* ─── running banner ─────────────────────────────────────────────────────── */
 #banner{display:flex;align-items:center;gap:14px;margin-bottom:26px;padding:12px 16px;
@@ -499,6 +509,11 @@ async function viewProject(id) {
       st.assets ? el('button', { class: 'btn', onclick: () => go('/review/' + p.id) },
         'Review & swap pictures') : null,
       el('div', { style: 'flex:1' }),
+      // Match quality, when visuals were scored. A quiet read that the pictures
+      // actually fit, with a nudge when some don't.
+      st.match != null ? el('span', { class: 'sub', style: 'margin-right:4px' },
+        `avg match ${Math.round(st.match * 100)}%`) : null,
+      st.weak ? el('span', { class: 'pill part' }, `${st.weak} weak`) : null,
       el('span', { class: 'pill ' + (sourced ? 'ok' : st.assets ? 'part' : 'none') },
         `${st.assets} / ${st.scenes}`))));
 
@@ -1074,11 +1089,44 @@ async function viewReview(id) {
       'Run "Find visuals" first.'));
     return;
   }
+
+  // Match scoring, if it was on when these were sourced. score is 0..1, or null
+  // (scored on a machine that could not run it). The bar below which a match is
+  // called weak comes from the server so the UI and the pipeline always agree.
+  const min = d.clip_min ?? 0.45;
+  const pct = s => s.score == null ? null : Math.round(s.score * 100);
+  const scored = items.filter(s => s.score != null);
+  const weak = scored.filter(s => s.score < min);
+  const avg = scored.length
+    ? Math.round(scored.reduce((a, s) => a + s.score, 0) / scored.length * 100) : null;
+  const scoringOn = d.clip_on && scored.length > 0;
+
   const rejected = new Set();
   const count = el('span', { class: 'sub' }, '0 marked for replacement');
 
+  // Explain the scoring in plain words, and give an at-a-glance quality read.
+  if (scoringOn) {
+    v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
+      el('div', { class: 'row', style: 'margin-bottom:12px' },
+        el('b', {}, `Average match ${avg}%`),
+        el('span', { class: 'sub' },
+          `${scored.length - weak.length} good · ${weak.length} weak`
+          + (d.missing?.length ? ` · ${d.missing.length} with no picture` : '')),
+        el('div', { style: 'flex:1' })),
+      el('div', { class: 'legend' },
+        el('span', {}, 'Each picture is scored for how well it matches its line:'),
+        el('span', { class: 'k' },
+          el('span', { class: 'sw', style: 'background:var(--ok)' }), `good (≥${Math.round(min * 100)}%)`),
+        el('span', { class: 'k' },
+          el('span', { class: 'sw', style: 'background:var(--warn)' }),
+          'weak — the best found; a swap searches harder'),
+        el('span', { class: 'k' },
+          el('span', { class: 'sw', style: 'background:var(--surface3)' }), 'no score'))));
+  }
+
   v.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, el('div', { class: 'row' },
     count, el('div', { style: 'flex:1' }),
+    weak.length ? el('span', { class: 'pill part' }, `${weak.length} weak`) : null,
     d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no match`) : null,
     el('button', {
       class: 'btn primary', onclick: async e => {
@@ -1090,16 +1138,19 @@ async function viewReview(id) {
     }, 'Get new pictures for these'))));
 
   v.append(el('div', { class: 'thumbs' }, items.map(s => {
+    const p = pct(s);
+    const low = p != null && s.score < min;
     const t = el('div', {
-      class: 'thumb' + (s.hero ? ' hero' : ''),
-      title: `S${s.n} · ${s.narration || ''}`,
+      class: 'thumb' + (s.hero ? ' hero' : '') + (low ? ' low' : ''),
+      title: `S${s.n}${p != null ? ` · match ${p}%` : ''} · ${s.narration || ''}`,
       onclick: e => {
         const n = e.currentTarget;
         if (rejected.has(s.n)) { rejected.delete(s.n); n.classList.remove('rej'); }
         else { rejected.add(s.n); n.classList.add('rej'); }
         count.textContent = `${rejected.size} marked for replacement`;
       }
-    }, el('span', { class: 'n' }, 'S' + s.n));
+    }, el('span', { class: 'n' }, 'S' + s.n),
+      p != null ? el('span', { class: 'm ' + (low ? 'weak' : 'good') }, p + '%') : null);
     if (s.url) t.append(s.video
       ? el('video', {
         src: s.url, muted: true, loop: true, playsinline: true, preload: 'metadata',

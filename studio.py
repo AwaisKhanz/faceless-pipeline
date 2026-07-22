@@ -507,10 +507,16 @@ def approval_data(pid: str) -> dict:
             "narration": s.narration, "query": s.query,
             "take": picks.get(s.n, 0) + 1,
             "src": (a or {}).get("src", ""),
+            # How well this picture matched the line (0..1), or null if visual
+            # matching was off when it was sourced.
+            "score": (a or {}).get("score"),
             "url": f"/media/{Path(a['path']).name}" if a else "",
             "video": bool(a and Path(a["path"]).suffix.lower() in (".mp4", ".mov", ".webm")),
         })
+    cfg = pl.load_config()
     return {"id": pid, "label": proj["label"], "items": items,
+            "clip_min": float(cfg.get("clip_min") or 0.45),
+            "clip_on": VIS.capability(cfg)["ok"],
             "missing": [i["n"] for i in items if not i["url"]]}
 
 

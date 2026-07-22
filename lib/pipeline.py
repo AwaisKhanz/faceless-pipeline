@@ -111,14 +111,23 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
 
     # Visuals are shared across languages — sourced once, reused everywhere.
     assets_n = 0
+    match_avg = None            # mean relevance across scored assets, 0..1
+    weak_n = 0                  # how many matched only weakly
     if p_shared["assets"].exists():
         try:
-            assets_n = len(json.loads(
-                p_shared["assets"].read_text(encoding="utf-8")))
+            assets = json.loads(p_shared["assets"].read_text(encoding="utf-8"))
+            assets_n = len(assets)
+            clip_min = float(load_config().get("clip_min") or 0.45)
+            scores = [a["score"] for a in assets.values()
+                      if isinstance(a, dict) and a.get("score") is not None]
+            if scores:
+                match_avg = round(sum(scores) / len(scores), 3)
+                weak_n = sum(1 for s in scores if s < clip_min)
         except Exception:
             assets_n = 0
 
-    out = {"scenes": n_scenes, "assets": assets_n, "languages": {}}
+    out = {"scenes": n_scenes, "assets": assets_n,
+           "match": match_avg, "weak": weak_n, "languages": {}}
     for lg in langs:
         code = lg["code"]
         pl_ = paths_for(sheet, code)

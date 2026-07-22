@@ -306,14 +306,38 @@ def _relevance(pool: list[dict], query: str, media: str,
         return {}
     items: list[tuple[str, bytes]] = []
     for h in pool:
-        look = h.get("thumb") or (h["url"] if media == "IMAGE" else "")
-        if not look:
-            continue                       # e.g. a video with no poster: skip
         try:
-            items.append((h["url"], _fetch_bytes(look)))
+            if media == "IMAGE":
+                # A small web-size copy is plenty for CLIP (it works at 224px).
+                raw = _fetch_bytes(h.get("thumb") or h["url"])
+            elif h.get("thumb"):
+                raw = _fetch_bytes(h["thumb"])         # a poster frame, if given
+            else:
+                raw = _video_frame(h["url"])           # else pull one frame
+            if raw:
+                items.append((h["url"], raw))
         except StockError:
             continue
     return scorer.relevance(query, items) if items else {}
+
+
+def _video_frame(url: str) -> bytes:
+    """One representative frame from a video URL, as JPEG bytes, for scoring.
+
+    ffmpeg streams over http and stops after the first frame it needs, so this
+    reads only the opening of the clip — it does NOT download the whole file to
+    look at it. A second in avoids a black or fade-in opening frame. Returns b""
+    on any failure, and the candidate simply goes unscored.
+    """
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-nostdin", "-ss", "1", "-i", url,
+             "-frames:v", "1", "-vf", "scale=384:-1",
+             "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
+            capture_output=True, timeout=45)
+        return r.stdout if r.returncode == 0 and r.stdout else b""
+    except Exception:
+        return b""
 
 
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
