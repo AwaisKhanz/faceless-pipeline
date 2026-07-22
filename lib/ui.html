@@ -594,6 +594,83 @@ async function viewProject(id) {
           : 'Every language needs a voice first',
         onclick: () => run(codes, ['voice', 'render'], false)
       }, 'Build every language'))));
+
+  // publish ---------------------------------------------------------------
+  // Title, description and tags for a finished video, per language. Generated
+  // on demand from the narration, then freely editable and saved to the project.
+  const rendered = codes.filter(c => (st.languages[c] || {}).render);
+  v.append(el('div', { class: 'sec mt' }, el('h2', {}, 'Publish'),
+    el('span', { class: 'note' }, 'description and tags for each finished video')));
+  const pubCard = el('div', { class: 'card' });
+  v.append(pubCard);
+
+  if (!rendered.length) {
+    pubCard.append(el('div', { class: 'sub' },
+      'Finish a video for a language, then write its description and tags here.'));
+  } else {
+    let plang = rendered[0];
+    const body = el('div', { style: 'margin-top:14px' });
+    const tabs = el('div', { class: 'row' }, rendered.map(code =>
+      el('button', {
+        class: 'btn sm' + (code === plang ? ' primary' : ''), 'data-plang': code,
+        onclick: () => { plang = code; markPubTabs(); loadPub(code); }
+      }, st.languages[code].name || code)));
+    pubCard.append(tabs, body);
+
+    const markPubTabs = () => tabs.querySelectorAll('[data-plang]').forEach(b =>
+      b.className = 'btn sm' + (b.dataset.plang === plang ? ' primary' : ''));
+
+    const loadPub = async (code) => {
+      body.innerHTML = '';
+      body.append(el('div', { class: 'sub' }, el('span', { class: 'spin' }), ' Loading…'));
+      const saved = await api('/api/metadata?id=' + encodeURIComponent(p.id) + '&lang=' + code);
+      editPub(code, (saved && saved.title !== undefined) ? saved : null);
+    };
+
+    const editPub = (code, data) => {
+      body.innerHTML = '';
+      const title = el('input', { type: 'text', value: (data && data.title) || '',
+        placeholder: 'Video title', style: 'margin-bottom:12px' });
+      const desc = el('textarea', { rows: 9, placeholder: 'Description',
+        style: 'margin-bottom:12px' }, (data && data.description) || '');
+      const tags = el('input', { type: 'text',
+        value: (data && (data.tags || []).join(', ')) || '',
+        placeholder: 'tag one, tag two, tag three' });
+
+      const gen = el('button', { class: 'btn' + (data ? '' : ' primary'),
+        onclick: async () => {
+          gen.disabled = true; const was = gen.textContent; gen.textContent = 'Writing…';
+          const r = await api('/api/metadata', { id: p.id, lang: code });
+          gen.disabled = false; gen.textContent = was;
+          if (!r.error) editPub(code, r);
+        } }, data ? 'Regenerate' : 'Write with AI');
+
+      const save = el('button', { class: 'btn primary', onclick: async () => {
+          const tg = tags.value.split(',').map(t => t.trim()).filter(Boolean);
+          const r = await api('/api/metadata_save',
+            { id: p.id, lang: code, title: title.value, description: desc.value, tags: tg });
+          if (r.saved) toast('Saved.');
+        } }, 'Save');
+
+      const copy = el('button', { class: 'btn', onclick: () => {
+          const blob = `${title.value}\n\n${desc.value}\n\n${tags.value}`;
+          navigator.clipboard && navigator.clipboard.writeText(blob);
+          toast('Copied title, description and tags.');
+        } }, 'Copy all');
+
+      const field = (label, node) => el('div', { style: 'margin-bottom:2px' },
+        el('label', { class: 'sub', style: 'display:block;margin-bottom:5px' }, label), node);
+
+      body.append(
+        el('div', { class: 'row', style: 'margin-bottom:14px' },
+          gen, el('div', { style: 'flex:1' }), copy, save),
+        field('Title', title),
+        field('Description', desc),
+        field('Tags (comma-separated)', tags));
+    };
+
+    loadPub(plang);
+  }
 }
 
 // ═══ activity / live run ══════════════════════════════════════════════════

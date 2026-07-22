@@ -286,6 +286,7 @@ def paths_for(sheet: Path, lang: str) -> dict:
         "approval": ROOT / "out" / f"{pid}_approval.html",
         "out": ROOT / "out" / f"{pid}_{lang}.mp4",
         "srt": ROOT / "out" / f"{pid}_{lang}.srt",
+        "meta": ROOT / "out" / f"{pid}_{lang}_meta.json",   # title/desc/tags
         "ass": base / "captions.ass",
     }
 
@@ -314,6 +315,64 @@ def load_config() -> dict:
 
 def load_scenes(sheet: Path, lang: str, translation: Path | None):
     return sheetlib.load(sheet, lang, translation)
+
+
+# --------------------------------------------------------- publish metadata
+# Title, description and tags for a finished video, generated on demand and
+# saved next to the render so they survive edits and reloads. One file per
+# language, because each video is its own upload.
+
+def load_metadata(sheet: Path, lang: str) -> dict | None:
+    p = paths_for(sheet, lang)["meta"]
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def save_metadata(sheet: Path, lang: str, data: dict) -> dict:
+    p = paths_for(sheet, lang)["meta"]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    clean = {
+        "title": (data.get("title") or "").strip(),
+        "description": (data.get("description") or "").strip(),
+        "tags": [str(t).strip().lstrip("#").strip()
+                 for t in (data.get("tags") or []) if str(t).strip()],
+        "lang": lang,
+    }
+    # ensure_ascii=False so German and Spanish read correctly in the file.
+    p.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
+    return clean
+
+
+def build_metadata(sheet: Path, lang: str, cfg: dict) -> dict:
+    """Generate metadata from the narration in this language, and save it."""
+    from . import gemini as G, sources as SRC     # heavy-ish; import on demand
+    key = cfg.get("gemini_key")
+    if not key:
+        raise RuntimeError(
+            "Writing a description needs a Gemini key. Add gemini_key to "
+            "config.json (a free key from https://aistudio.google.com/apikey).")
+
+    pid = project_id(sheet)
+    tr = translation_for(sheet.parent, pid, lang)
+    scenes = load_scenes(sheet, lang, tr)
+    narration = " ".join(s.narration for s in scenes if s.narration).strip()
+    if not narration:
+        raise RuntimeError(
+            f"No {LANG_NAMES.get(lang, lang)} narration to describe yet — "
+            f"generate the sheets (and translation) for this language first.")
+
+    # Canonical subjects, from the scene domains and the narration itself, so a
+    # medical or historical video gets the right framing in its description.
+    domains = " ".join(getattr(s, "domain", "") for s in scenes)
+    topics = sorted(SRC.topics_in(domains, narration))
+    model = cfg.get("gemini_model") or "auto"
+    data = G.generate_metadata(narration, LANG_NAMES.get(lang, lang), topics,
+                               pid, key, model)
+    return save_metadata(sheet, lang, data)
 
 
 # ------------------------------------------------------------------ steps

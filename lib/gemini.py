@@ -173,6 +173,84 @@ def call(prompt: str, schema: dict, key: str, model: str = DEFAULT_MODEL,
     raise GeminiError(f"Gemini failed after {retries} attempts — {last}")
 
 
+# -------------------------------------------------------- publish metadata
+
+_META_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["title", "description", "tags"],
+}
+
+_META_SYSTEM = """\
+You write YouTube metadata for a faceless narration channel. The audience is
+general and skews older, so everything is clear and inviting — never clickbait,
+never ALL CAPS, never emoji spam. It should read like a thoughtful person wrote
+it about THIS specific video, not a template. Write everything in the language
+you are told to use, and nothing else.
+
+Return JSON with three fields: title, description, tags.
+
+TITLE
+- One line, honest and compelling, about 60 characters or fewer.
+- No emoji, no ALL CAPS, no clickbait ("You won't believe…"), no year unless the
+  script is genuinely about a specific year.
+
+DESCRIPTION
+- Open with a 1-2 sentence hook, drawn from what the video actually says, that
+  makes someone want to watch.
+- Then a short paragraph (2-4 sentences) on what the video covers — mention the
+  real things it discusses, in plain, warm language.
+- If, and only if, the subject calls for it, add ONE sentence of appropriate
+  framing on its own line:
+    * health, medicine, symptoms, treatment, nutrition, fitness, the body ->
+      say plainly it is for general information and is not a substitute for
+      professional or medical advice.
+    * history, science, nature, space, "how/why" explainers, education ->
+      say it is an informative, educational overview.
+    * money, finance, law -> say it is general information, not professional advice.
+  Skip this note entirely for light, purely entertaining, or everyday topics.
+- Keep it human. No hashtag walls, no keyword stuffing, no fake urgency, no
+  invented facts or links.
+
+TAGS
+- 10 to 18 short, lowercase phrases a real viewer might actually search, all
+  relevant to the true content. No leading '#', no duplicates.
+"""
+
+
+def generate_metadata(narration: str, lang_name: str, topics: list[str],
+                      title_hint: str, key: str, model: str = DEFAULT_MODEL) -> dict:
+    """Write a YouTube title, description and tags for a finished video.
+
+    Works from the narration in the target language, so the wording matches what
+    the video actually says. `topics` is a hint (canonical subjects such as
+    'medicine' or 'history') the model uses to decide whether a disclaimer or an
+    'informative overview' note belongs — it still reads the narration itself.
+    """
+    subjects = ", ".join(topics) if topics else "general interest"
+    prompt = (
+        f"Language: {lang_name}\n"
+        f"Subjects detected in this video: {subjects}\n"
+        f"Project reference (not necessarily a good title): {title_hint}\n\n"
+        f"This is the full spoken narration of the video:\n"
+        f'"""\n{normalise(narration)[:6000]}\n"""\n\n'
+        f"Write the title, description and tags in {lang_name}."
+    )
+    data = call(prompt, _META_SCHEMA, key, model, system=_META_SYSTEM,
+                temperature=0.6)
+    # Normalise the shape so callers never have to guard it.
+    return {
+        "title": (data.get("title") or "").strip(),
+        "description": (data.get("description") or "").strip(),
+        "tags": [t.strip().lstrip("#").strip()
+                 for t in (data.get("tags") or []) if t and t.strip()],
+    }
+
+
 # ------------------------------------------------------------- text handling
 
 SMART = {"’": "'", "‘": "'", "“": '"', "”": '"',

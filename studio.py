@@ -751,6 +751,19 @@ class Handler(BaseHTTPRequestHandler):
             except StopIteration:
                 return self._json({"error": "project not found"}, 404)
 
+        if path == "/api/metadata":
+            # Load whatever description/tags were last generated or edited for a
+            # language. Empty is a valid answer (nothing generated yet).
+            pid = (q.get("id") or [""])[0]
+            lang = (q.get("lang") or ["en"])[0]
+            try:
+                sheets = ROOT / "sheets"
+                proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
+                data = pl.load_metadata(sheets / proj["sheet"], lang)
+                return self._json(data or {})
+            except StopIteration:
+                return self._json({"error": "project not found"}, 404)
+
         if path.startswith("/media/"):
             # Stock footage and photos, straight from the cache.
             name = unquote(path[len("/media/"):])
@@ -866,6 +879,38 @@ class Handler(BaseHTTPRequestHandler):
             log(f"Deleted {res['count']} file(s) from {pid} "
                 f"({res['freed_mb']} MB freed)")
             return self._json(res)
+
+        if path == "/api/metadata":
+            # Generate title/description/tags for one language. Synchronous — it
+            # is a single Gemini call, not a long job — so the UI just waits.
+            pid = b.get("id")
+            lang = b.get("lang") or "en"
+            try:
+                sheets = ROOT / "sheets"
+                proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
+                data = pl.build_metadata(sheets / proj["sheet"], lang, pl.load_config())
+                log(f"Wrote {lang} description for {pid}")
+                return self._json(data)
+            except StopIteration:
+                return self._json({"error": "project not found"}, 404)
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
+
+        if path == "/api/metadata_save":
+            # Persist the user's edits to the description/tags.
+            pid = b.get("id")
+            lang = b.get("lang") or "en"
+            try:
+                sheets = ROOT / "sheets"
+                proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
+                saved = pl.save_metadata(sheets / proj["sheet"], lang, {
+                    "title": b.get("title"), "description": b.get("description"),
+                    "tags": b.get("tags") or []})
+                return self._json({"saved": True, **saved})
+            except StopIteration:
+                return self._json({"error": "project not found"}, 404)
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
 
         if path == "/api/organise_voices":
             moved = vx.organise()
