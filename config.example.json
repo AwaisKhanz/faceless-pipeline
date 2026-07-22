@@ -36,7 +36,7 @@
   "clip_min": 0.45,
   "_expand_queries": "Uses your Gemini key to generate a few concrete alternative image searches per scene, so a weak or abstract line (e.g. a 'hypnogram') still finds a real photo. \"auto\" is on when a Gemini key is set; \"off\" uses only the queries in the sheet. Cached per project, so a re-source costs nothing.",
   "expand_queries": "auto",
-  "_align": "Word-by-word caption timing. \"auto\" uses WhisperX forced alignment where it's installed (free, local, uses your GPU) so each spoken word lights up in time; \"off\" (or no install) falls back to estimated timing from word length. Captions still render either way.",
+  "_align": "Word-by-word caption timing. \"auto\" uses torchaudio's built-in forced alignment (free, local, on your GPU, NO extra install — it rides the same torchaudio the voice engine uses) so each spoken word lights up in time; \"off\" falls back to estimated timing from word length. Captions render either way.",
   "align": "auto",
   "_audio_master": "Loudness mastering. \"auto\" brings every finished video to YouTube's -14 LUFS standard so it plays back at the same volume as everything else; \"off\" leaves the raw mix.",
   "audio_master": "auto",

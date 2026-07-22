@@ -110,6 +110,18 @@ def main() -> int:
 
     pip("--upgrade", "pip", quiet=True)
 
+    # SELF-HEAL. An earlier version installed WhisperX for caption timing, which
+    # dragged in pyannote-audio + torchvision and their torch>=2.8 / numpy>=2
+    # pins — directly at odds with Chatterbox (torch 2.6, numpy<2, transformers
+    # 5.2). That combination left the voice engine unable to import. Alignment now
+    # runs on torchaudio (already present, zero extra deps), so these are pure
+    # dead weight: remove them up front, and any machine that ran the bad setup
+    # heals itself simply by running setup again. Absent packages are a no-op.
+    stale = ["whisperx", "pyannote-audio", "pyannote-core", "pyannote-database",
+             "pyannote-metrics", "pyannote-pipeline", "torchvision"]
+    say("\n  [0/6] removing packages that conflict with the voice engine")
+    pip("uninstall", "-y", *stale, quiet=True)      # returns nonzero if none present; fine
+
     # resemble-perth (Chatterbox's watermarker) still calls
     #     from pkg_resources import resource_filename
     # and setuptools 81 removed pkg_resources. Without this pin the install
@@ -143,30 +155,20 @@ def main() -> int:
     # `pip install transformers` by hand, and, crucially, it happens BEFORE the
     # CUDA torch is re-asserted below, so that re-assert is always the last word
     # on which torch wins.
-    say("\n  [3/7] installing the visual-matching libraries")
-    # A recent transformers unlocks SigLIP 2 (the stronger matcher on a real GPU);
-    # if that version can't be resolved here, plain transformers still gives the
-    # dependable CLIP path, so this never blocks the install.
+    say("\n  [3/6] installing the visual-matching libraries")
+    # A recent transformers unlocks SigLIP 2 (the stronger matcher on a real GPU)
+    # and is compatible with Chatterbox's pin; if it can't resolve, plain
+    # transformers still gives the dependable CLIP path, so this never blocks.
+    # (Caption word-timing needs NO install — it runs on torchaudio, which
+    # Chatterbox already brings in.)
     if pip("transformers>=4.49", "pillow", quiet=True) != 0 \
             and pip("transformers", "pillow", quiet=True) != 0:
         say("     could not install them — visual matching stays off and sourcing")
         say("     ranks by size and aspect. Everything else is unaffected.")
 
-    # Word-by-word caption timing uses WhisperX (wav2vec2 forced alignment).
-    # Installed here, BEFORE the CUDA torch is re-asserted below, for the same
-    # reason as transformers: whatever torch whisperx drags in gets overwritten
-    # by the cu128 build at the next step, so the GPU build stays the last word.
-    # Entirely optional — if it fails, captions still render with estimated
-    # word timing instead of exact.
-    say("\n  [4/7] installing caption word-timing (WhisperX, optional)")
-    if pip("whisperx", quiet=True) != 0:
-        say("     could not install it — captions will use estimated word timing.")
-        say("     Everything else is unaffected; you can retry later with:")
-        say("       pip install whisperx")
-
     want_cuda = not a.cpu_only and platform.system() in ("Windows", "Linux")
     if want_cuda:
-        say("\n  [5/7] looking for an NVIDIA GPU")
+        say("\n  [4/6] looking for an NVIDIA GPU")
         if have_nvidia_gpu():
             say("     replacing Chatterbox's CPU-only PyTorch with the CUDA 12.8 build")
             say("     (pip will warn about a version conflict — that is expected")
@@ -182,14 +184,14 @@ def main() -> int:
             say("     https://www.nvidia.com/drivers , then run setup again.")
             want_cuda = False
     else:
-        say("\n  [5/7] skipping CUDA (no NVIDIA GPU expected on this machine)")
+        say("\n  [4/6] skipping CUDA (no NVIDIA GPU expected on this machine)")
 
     pip("setuptools<81", quiet=True)      # put it back if anything moved it
 
     # The `faceless` command. --no-deps is essential: this project declares no
     # dependencies precisely so pip cannot re-resolve the environment here and
     # undo the CUDA build we just installed.
-    say("\n  [6/7] installing the 'faceless' command")
+    say("\n  [5/6] installing the 'faceless' command")
     # This console entry point only appears on PATH once the .venv is activated,
     # which most people never do. The ./faceless launcher in the repo root needs
     # no activation and is the path we point people at, so a failure here is not
@@ -200,7 +202,7 @@ def main() -> int:
     else:
         say(f"     skipped — no harm done, the launcher still works:  {launch}")
 
-    say("\n  [7/7] checking the install actually works")
+    say("\n  [6/6] checking the install actually works")
     t = torch_report()
     if t.get("error") and not t.get("works"):
         say(f"     !! {t['error']}")

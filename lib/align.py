@@ -1,29 +1,34 @@
 """Word-level forced alignment: *when* is each word spoken.
 
-Captions need to know the start of every word to light it up in time. We already
-have each scene's audio and its exact text, so this is forced alignment (fit
-known words to the audio), which is far more accurate than transcribing blind.
+Captions light up each word as it's said, which needs the start time of every
+word. We already have each scene's audio and its exact text, so this is forced
+alignment (fit known words to the audio) — tighter than transcribing blind.
+
+IT ADDS NOTHING TO INSTALL. Alignment runs on torchaudio, which the voice engine
+(Chatterbox) already pulls in, using torchaudio's built-in multilingual
+forced-alignment model (MMS_FA). No extra package, so it can never fight the
+carefully-pinned voice/vision stack — an earlier WhisperX-based version dragged
+in conflicting torch/numpy/transformers pins and broke Chatterbox; this cannot.
 
 Adaptive, like lib/vision.py:
   - uses the GPU only if a real kernel launches on it (a Blackwell card with the
-    wrong torch says "available" and then can't run — we test for real);
-  - loads a per-language alignment model once and reuses it;
-  - ALWAYS degrades to a proportional estimate (lib/captions.heuristic_words) so
-    a machine without the model still gets word-by-word captions, just looser.
-
-The real engine is WhisperX (wav2vec2 forced alignment, ~50 ms, the precision
-CapCut/Submagic use), which reuses the torch already installed for the voice
-engine. Nothing here is imported at module load, so importing this file is free
-and safe even where torch/whisperx are absent.
+    wrong torch says "available", then fails — we test for real);
+  - loads the alignment model once and reuses it;
+  - ALWAYS degrades to a proportional estimate (lib/captions.heuristic_words), so
+    a machine that can't load the model still gets word-by-word captions, just
+    with looser sync. Nothing here is imported at module load, so importing this
+    file is free and safe even where torch/torchaudio are absent.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from pathlib import Path
 
 from . import captions as _cap
 
 _OFF = ("off", "false", "no", "0", "none")
-_SR = 16000                     # whisperx.load_audio resamples to 16 kHz
+_SR = 16000                     # MMS_FA works at 16 kHz
 
 
 def _cfg_get(cfg: dict | None, key: str, default=None):
@@ -35,35 +40,34 @@ def capability(cfg: dict | None = None) -> dict:
     """What alignment can do here, without loading anything.
 
     {ok, engine, device, reason}. ok False means the caller uses estimated
-    timing; engine is still 'heuristic' in that case so the UI can say so.
+    timing; engine is 'heuristic' in that case so the UI can say so plainly.
     """
     cfg = cfg or {}
     if str(_cfg_get(cfg, "align", "auto")).lower() in _OFF:
         return {"ok": False, "engine": "heuristic", "device": "-",
                 "reason": "turned off in config (align: off) — estimated timing"}
     try:
-        import torch  # noqa: F401
+        import torch          # noqa: F401
+        import torchaudio
     except Exception:
         return {"ok": False, "engine": "heuristic", "device": "cpu",
-                "reason": "torch not installed — estimated word timing"}
-    try:
-        import whisperx  # noqa: F401
-    except Exception:
+                "reason": "torch/torchaudio not installed — estimated word timing"}
+    # The forced-alignment bundle arrived in torchaudio 2.1. Older builds simply
+    # fall back to estimated timing rather than erroring.
+    if not hasattr(getattr(torchaudio, "pipelines", None), "MMS_FA"):
         return {"ok": False, "engine": "heuristic", "device": "cpu",
-                "reason": "whisperx not installed — estimated word timing "
-                          "(pip install whisperx)"}
+                "reason": "torchaudio too old for forced alignment — estimated timing"}
     device, vram = _probe_device()
-    return {"ok": True, "engine": "whisperx", "device": device, "vram_gb": vram,
-            "model": "wav2vec2 (per language)", "reason": "ready"}
+    return {"ok": True, "engine": "torchaudio MMS", "device": device,
+            "vram_gb": vram, "model": "MMS_FA (multilingual)", "reason": "ready"}
 
 
 _HW: tuple | None = None
 
 
 def _device_runs(torch, dev: str) -> bool:
-    """Does a real kernel actually launch? Same trap as the voice/vision code:
-    a Blackwell GPU on the wrong torch reports available, then fails the first
-    op. Test for real, or we claim a GPU we can't use."""
+    """Does a real kernel actually launch? Same trap as the voice/vision code: a
+    Blackwell GPU on the wrong torch reports available, then fails the first op."""
     try:
         x = torch.randn(16, 16, device=dev)
         _ = (x @ x).sum().item()
@@ -73,8 +77,8 @@ def _device_runs(torch, dev: str) -> bool:
 
 
 def _probe_device() -> tuple:
-    """cuda if it genuinely computes, else cpu. WhisperX has no MPS path, so a
-    Mac aligns on CPU (fine for a few minutes of narration). Cached."""
+    """cuda if it genuinely computes, else cpu (a Mac aligns on CPU — fine for a
+    few minutes of narration). Cached for the process."""
     global _HW
     if _HW is not None:
         return _HW
@@ -90,17 +94,24 @@ def _probe_device() -> tuple:
     return _HW
 
 
-def _fill_gaps(words: list[dict], dur: float) -> list[dict]:
-    """Backfill any word the aligner left without a timestamp.
+def _norm_token(word: str) -> str:
+    """A word reduced to what the MMS alignment dictionary understands: lower
+    case, diacritics folded to ASCII (ä→a, ñ→n), ß→ss, letters only. Used ONLY to
+    place the word in time — the caption still shows the original spelling."""
+    w = word.replace("ß", "ss")
+    w = unicodedata.normalize("NFKD", w)
+    w = "".join(c for c in w if not unicodedata.combining(c))
+    w = re.sub(r"[^a-z]", "", w.lower())
+    return w
 
-    wav2vec2 occasionally can't place a token (odd punctuation, a number). Rather
-    than drop it — which would desync the highlight — spread the unplaced words
-    evenly between their nearest timed neighbours.
-    """
+
+def _fill_gaps(words: list[dict], dur: float) -> list[dict]:
+    """Backfill any word the aligner left without a timestamp — a number, a token
+    the dictionary doesn't hold. Spread the unplaced words evenly between their
+    nearest timed neighbours so the highlight never desyncs."""
     if not words:
         return words
     n = len(words)
-    # Ensure the ends are anchored.
     if words[0].get("start") is None:
         words[0]["start"] = 0.0
     if words[-1].get("end") is None:
@@ -115,8 +126,7 @@ def _fill_gaps(words: list[dict], dur: float) -> list[dict]:
             j += 1
         left = words[i - 1]["end"] if i > 0 else 0.0
         right = words[j]["start"] if j < n else dur
-        span = max(0.0, right - left)
-        step = span / (j - i + 1)
+        step = max(0.0, right - left) / (j - i + 1)
         for k in range(i, j):
             words[k]["start"] = round(left + step * (k - i), 3)
             words[k]["end"] = round(left + step * (k - i + 1), 3)
@@ -125,35 +135,57 @@ def _fill_gaps(words: list[dict], dur: float) -> list[dict]:
 
 
 class Aligner:
-    """Holds the per-language alignment models for the life of the process."""
+    """Holds torchaudio's forced-alignment model for the life of the process."""
 
     def __init__(self, device: str):
         self.device = device
-        self._models: dict[str, tuple] = {}
+        self._model = None
+        self._tokenizer = None
+        self._aligner = None
 
-    def _model(self, lang: str):
-        import whisperx
-        if lang not in self._models:
-            self._models[lang] = whisperx.load_align_model(
-                language_code=lang, device=self.device)
-        return self._models[lang]
+    def _load(self):
+        if self._model is not None:
+            return
+        import torchaudio
+        bundle = torchaudio.pipelines.MMS_FA
+        self._model = bundle.get_model().to(self.device).eval()
+        self._tokenizer = bundle.get_tokenizer()
+        self._aligner = bundle.get_aligner()
 
     def words(self, wav: Path, text: str, lang: str) -> list[dict]:
-        """Per-word [{word,start,end}] for `text` as spoken in `wav`. Times are
-        relative to the start of the clip."""
-        import whisperx
-        model_a, meta = self._model(lang)
-        audio = whisperx.load_audio(str(wav))
-        dur = len(audio) / float(_SR)
-        segs = [{"start": 0.0, "end": dur, "text": text.strip()}]
-        res = whisperx.align(segs, model_a, meta, audio, self.device,
-                             return_char_alignments=False)
-        out: list[dict] = []
-        for seg in res.get("segments", []):
-            for w in seg.get("words", []):
-                out.append({"word": w.get("word", ""),
-                            "start": w.get("start"), "end": w.get("end")})
-        out = [w for w in out if w["word"]]
+        """Per-word [{word,start,end}] for `text` as spoken in `wav`, relative to
+        the clip start. Words the dictionary can't place are left un-timed for
+        _fill_gaps to interpolate."""
+        import torch
+        import torchaudio
+        self._load()
+
+        wave, sr = torchaudio.load(str(wav))
+        if sr != _SR:
+            wave = torchaudio.functional.resample(wave, sr, _SR)
+        wave = wave.mean(0, keepdim=True)          # mono
+        dur = wave.size(1) / float(_SR)
+
+        display = [w for w in re.split(r"\s+", text.strip()) if w]
+        tokens = [_norm_token(w) for w in display]
+        keep = [i for i, t in enumerate(tokens) if t]     # alignable words only
+        if not keep:
+            return []
+
+        with torch.inference_mode():
+            emission, _ = self._model(wave.to(self.device))
+            spans = self._aligner(emission[0], self._tokenizer([tokens[i] for i in keep]))
+
+        sec = wave.size(1) / emission.size(1) / float(_SR)   # seconds per frame
+        timed = {}
+        for idx, sp in zip(keep, spans):
+            if sp:
+                timed[idx] = (round(sp[0].start * sec, 3), round(sp[-1].end * sec, 3))
+
+        out = []
+        for i, w in enumerate(display):
+            s, e = timed.get(i, (None, None))
+            out.append({"word": w, "start": s, "end": e})
         return _fill_gaps(out, dur)
 
 
@@ -177,7 +209,7 @@ def align_words(wav: Path, text: str, lang: str, cfg: dict | None = None,
     proportional estimate so captions still render word-by-word.
 
     `dur` (clip length in seconds) is only used by the estimate; pass it when you
-    already know it to avoid another probe.
+    already know it to skip a probe.
     """
     aligner = get_aligner(cfg)
     if aligner is not None:
@@ -186,9 +218,8 @@ def align_words(wav: Path, text: str, lang: str, cfg: dict | None = None,
             if got:
                 return got
             log("  alignment returned nothing; using estimated timing")
-        except Exception as e:
+        except Exception as e:                       # noqa: BLE001
             log(f"  alignment failed ({e}); using estimated timing")
-    # Fallback that always works.
     if dur is None:
         try:
             from . import render

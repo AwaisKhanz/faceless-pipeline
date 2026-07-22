@@ -751,6 +751,18 @@ class Handler(BaseHTTPRequestHandler):
             import shutil as _sh
             caps = R.caption_method()
             dev = CB.device_info() if CB.installed() else {}
+            # The GPU is a property of torch, not of the voice engine. If
+            # Chatterbox can't import, don't let that masquerade as "no GPU" —
+            # probe torch directly (the same real-kernel test vision/align use) so
+            # the GPU line stays honest even when the voice engine is broken.
+            if not dev.get("device"):
+                try:
+                    d2, vram = VIS._probe_device()
+                    if d2 in ("cuda", "mps"):
+                        dev = {"device": d2, "vram_gb": vram,
+                               "name": "GPU (voice engine not loaded)"}
+                except Exception:
+                    pass
             langs = {}
             for lg in ("en", "de", "es"):
                 try:
