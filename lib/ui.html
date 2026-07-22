@@ -130,6 +130,20 @@ input:focus,select:focus,textarea:focus{
 label.chk{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;color:var(--ink2)}
 label.chk input{accent-color:var(--accent);width:15px;height:15px}
 input[type=range]{accent-color:var(--accent)}
+/* multi-select toggle chips (language picker) */
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:7px;padding:8px 13px 8px 11px;
+  border-radius:99px;border:1px solid var(--line);background:var(--surface2);
+  color:var(--ink2);cursor:pointer;font:550 13.5px var(--ui);transition:.12s;
+  -webkit-user-select:none;user-select:none;white-space:nowrap}
+.chip:hover{border-color:var(--line2);color:var(--ink)}
+.chip .box{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line2);
+  display:grid;place-items:center;flex:none;transition:.12s}
+.chip .box .tk{font-size:11px;font-weight:800;line-height:1;opacity:0;transform:scale(.6);transition:.12s}
+.chip.on{background:color-mix(in srgb,var(--accent) 15%,var(--surface));
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--ink)}
+.chip.on .box{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chip.on .box .tk{opacity:1;transform:scale(1)}
 
 /* ─── cards ──────────────────────────────────────────────────────────────── */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px}
@@ -851,16 +865,25 @@ function viewNew() {
     });
   };
 
+  // A proper multi-select: tap a language to include it. All pre-selected.
+  const chips = el('div', { class: 'chips' }, LANG_ORDER.map(c => {
+    const chip = el('div', {
+      class: 'chip on', role: 'button', 'aria-pressed': 'true',
+      onclick: () => {
+        sel[c] = !sel[c];
+        chip.classList.toggle('on', sel[c]);
+        chip.setAttribute('aria-pressed', String(sel[c]));
+        paint();
+      }
+    }, el('span', { class: 'box' }, el('span', { class: 'tk' }, '✓')), LANG_NAMES[c]);
+    return chip;
+  }));
+
   v.append(el('div', { class: 'card' },
     el('div', { class: 'grid2' },
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
-      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Languages'),
-        el('div', { class: 'row', style: 'padding-top:6px' },
-          LANG_ORDER.map(c => el('label', { class: 'chk' },
-            el('input', {
-              type: 'checkbox', checked: true,
-              onchange: e => { sel[c] = e.target.checked; paint(); }
-            }), c.toUpperCase()))))),
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Languages'),
+        chips)),
     el('div', { class: 'hr' }),
     scriptsWrap,
     el('div', { class: 'row', style: 'margin-top:8px' },
