@@ -117,7 +117,7 @@ def main() -> int:
     # callable", because perth swallows its own ImportError and leaves the
     # class as None. Pinned before AND after, because Chatterbox's own
     # dependency resolution can drag setuptools forward again.
-    say("\n  [1/5] pinning setuptools (perth still needs pkg_resources)")
+    say("\n  [1/6] pinning setuptools (perth still needs pkg_resources)")
     pip("setuptools<81", quiet=True)
 
     # ORDER MATTERS, and it is the opposite of what you would expect.
@@ -131,15 +131,26 @@ def main() -> int:
     # Overriding the pin is not optional on a recent card. torch 2.6 predates
     # Blackwell (RTX 50-series) support, so no build of it can drive one at all.
     # Chatterbox runs fine on newer torch in practice — the pin is over-strict.
-    say("\n  [2/5] installing Chatterbox (the voice engine)")
+    say("\n  [2/6] installing Chatterbox (the voice engine)")
     say("     this pulls in PyTorch — several GB, leave it running")
     if pip("--upgrade", "chatterbox-tts") != 0:
         say("\n  !! Chatterbox failed to install. Nothing can be voiced until it does.")
         return 1
 
+    # Visual matching (CLIP) runs on transformers + Pillow. transformers does
+    # NOT depend on torch — it is an optional extra — so installing it here
+    # cannot disturb the CUDA build. Doing it in setup means nobody ever runs
+    # `pip install transformers` by hand, and, crucially, it happens BEFORE the
+    # CUDA torch is re-asserted below, so that re-assert is always the last word
+    # on which torch wins.
+    say("\n  [3/6] installing the visual-matching libraries")
+    if pip("transformers", "pillow", quiet=True) != 0:
+        say("     could not install them — visual matching stays off and sourcing")
+        say("     ranks by size and aspect. Everything else is unaffected.")
+
     want_cuda = not a.cpu_only and platform.system() in ("Windows", "Linux")
     if want_cuda:
-        say("\n  [3/5] looking for an NVIDIA GPU")
+        say("\n  [4/6] looking for an NVIDIA GPU")
         if have_nvidia_gpu():
             say("     replacing Chatterbox's CPU-only PyTorch with the CUDA 12.8 build")
             say("     (pip will warn about a version conflict — that is expected")
@@ -155,14 +166,14 @@ def main() -> int:
             say("     https://www.nvidia.com/drivers , then run setup again.")
             want_cuda = False
     else:
-        say("\n  [3/5] skipping CUDA (no NVIDIA GPU expected on this machine)")
+        say("\n  [4/6] skipping CUDA (no NVIDIA GPU expected on this machine)")
 
     pip("setuptools<81", quiet=True)      # put it back if anything moved it
 
     # The `faceless` command. --no-deps is essential: this project declares no
     # dependencies precisely so pip cannot re-resolve the environment here and
     # undo the CUDA build we just installed.
-    say("\n  [4/5] installing the 'faceless' command")
+    say("\n  [5/6] installing the 'faceless' command")
     # This console entry point only appears on PATH once the .venv is activated,
     # which most people never do. The ./faceless launcher in the repo root needs
     # no activation and is the path we point people at, so a failure here is not
@@ -173,7 +184,7 @@ def main() -> int:
     else:
         say(f"     skipped — no harm done, the launcher still works:  {launch}")
 
-    say("\n  [5/5] checking the install actually works")
+    say("\n  [6/6] checking the install actually works")
     t = torch_report()
     if t.get("error") and not t.get("works"):
         say(f"     !! {t['error']}")
@@ -213,6 +224,23 @@ def main() -> int:
     else:
         ok = False
         say("     !! pkg_resources missing — run: pip install \"setuptools<81\"")
+
+    # Report what visual matching will do, WITHOUT downloading the model — that
+    # happens once, lazily, on the first source. Uses the same real-kernel probe
+    # the pipeline does, so this line agrees with the Settings page.
+    try:
+        sys.path.insert(0, str(ROOT))
+        from lib import vision as _V
+        cap = _V.capability({})
+        if cap["ok"]:
+            where = cap["device"] + (f" {cap['vram_gb']}GB" if cap["vram_gb"] else "")
+            say(f"     visual match   {cap['model'].split('/')[-1]} on {where} "
+                f"(model downloads once on first source)")
+        else:
+            say(f"     visual match   off — {cap['reason']} "
+                f"(sourcing will rank by size and aspect)")
+    except Exception:
+        pass
 
     say()
     say("  " + "-" * 38)
