@@ -93,21 +93,53 @@ def capability(cfg: dict | None = None) -> dict:
                 "(pip install transformers)", "device": "-", "vram_gb": None,
                 "model": "-"}
 
-    import torch
-    device, vram = "cpu", None
-    try:
-        if torch.cuda.is_available():
-            device = "cuda"
-            vram = round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1)
-        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-            device = "mps"
-    except Exception:
-        device, vram = "cpu", None
-
+    device, vram = _probe_device()
     override = _cfg_get(cfg, "clip_model", "")
     model = override or _pick_model(device, vram)
     return {"ok": True, "device": device, "vram_gb": vram, "model": model,
             "reason": "ready"}
+
+
+_HW: tuple | None = None       # (device, vram_gb), probed once per process
+
+
+def _device_runs(torch, dev: str) -> bool:
+    """Does a real kernel actually launch on this device?
+
+    torch.cuda.is_available() returns True on a driver the installed torch may
+    not be able to run a kernel on — a Blackwell card (RTX 50-series, sm_120)
+    with a torch built for older architectures is the case that bit us: the
+    flag says yes, the first matmul says "no kernel image". The voice engine
+    already tests for real; relevance must too, or it claims a GPU it cannot use
+    and then silently scores every picture 0. On failure the caller drops to CPU.
+    """
+    try:
+        x = torch.randn(16, 16, device=dev)
+        _ = (x @ x).sum().item()          # forces an actual launch
+        return True
+    except Exception:
+        return False
+
+
+def _probe_device() -> tuple:
+    """Pick the best device that genuinely computes. Cached — hardware is fixed
+    for the life of the process, and the probe is not free."""
+    global _HW
+    if _HW is not None:
+        return _HW
+    import torch
+    device, vram = "cpu", None
+    try:
+        if torch.cuda.is_available() and _device_runs(torch, "cuda"):
+            device = "cuda"
+            vram = round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1)
+        elif (getattr(torch.backends, "mps", None)
+                and torch.backends.mps.is_available() and _device_runs(torch, "mps")):
+            device = "mps"
+    except Exception:
+        device, vram = "cpu", None
+    _HW = (device, vram)
+    return _HW
 
 
 def _pick_model(device: str, vram_gb: float | None) -> str:
