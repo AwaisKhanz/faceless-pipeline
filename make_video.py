@@ -196,13 +196,23 @@ def step_generate(a) -> None:
             "No Gemini key. Get a free one at https://aistudio.google.com/apikey "
             "and add it to config.json as \"gemini_key\".")
 
-    langs = [x.strip() for x in (a.langs or "en,de,es").split(",") if x.strip()]
-    banner(f"Generating sheets for '{pid}' — {', '.join(langs)}")
-    res = compose.generate(src.read_text(encoding="utf-8"), pid, langs,
-                           cfg["gemini_key"],
-                           model=cfg.get("gemini_model", "gemini-2.5-flash"),
-                           on_progress=bar,
-                           on_warn=lambda m: print(f"\n  ⚠ {m}"))
+    # One script file = one language now (no translation). --lang says which.
+    # If the project already has a master in another language, this ADDS the new
+    # language onto its shared scenes; otherwise it creates the master.
+    lang = (a.lang or (a.langs or "en").split(",")[0]).strip() or "en"
+    text = src.read_text(encoding="utf-8")
+    model = cfg.get("gemini_model", "gemini-2.5-flash")
+    master = ROOT / "sheets" / f"{pid}_MASTER_production_sheet.md"
+    if master.exists() and pl.master_lang(master) != lang:
+        banner(f"Adding {pl.LANG_NAMES.get(lang, lang)} to '{pid}'")
+        res = compose.add_language(master, lang, text, cfg["gemini_key"],
+                                   model=model, on_progress=bar,
+                                   on_warn=lambda m: print(f"\n  ⚠ {m}"))
+    else:
+        banner(f"Generating the {pl.LANG_NAMES.get(lang, lang)} sheet for '{pid}'")
+        res = compose.generate({lang: text}, pid, cfg["gemini_key"],
+                               model=model, on_progress=bar,
+                               on_warn=lambda m: print(f"\n  ⚠ {m}"))
     written = compose.write_files(res, ROOT / "sheets", overwrite=a.overwrite)
     banner("Written")
     for w in written:

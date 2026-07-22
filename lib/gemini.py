@@ -660,6 +660,44 @@ LINES:
     return out.get("lines", [])
 
 
+def segment_script(en_lines: list[str], script: str, lang_name: str, key: str,
+                   model: str, feedback: str = "") -> list[str]:
+    """Cut a pasted script into scene-sized narration aligned to the master.
+
+    The visuals are shared across languages, so line i in every language must
+    describe the same moment as English line i. This does NOT translate: the
+    caller has pasted this language's own words, and the only job here is to
+    decide where each scene's words end. Concatenating the parts must reproduce
+    the pasted script exactly — the caller verifies that word for word and
+    retries with feedback if it drifts.
+    """
+    extra = f"\n\nPREVIOUS ATTEMPT WAS REJECTED: {feedback}\n" if feedback else ""
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(en_lines))
+    p = f"""A video is already cut into {len(en_lines)} scenes, shown below by their
+English narration. You are given the SAME video's script in {lang_name}. Split
+the {lang_name} script into EXACTLY {len(en_lines)} parts, so part i is the
+narration for scene i and covers the same moment as English scene i.
+
+HARD RULES:
+- Return EXACTLY {len(en_lines)} parts, in order.
+- DO NOT translate, rewrite, correct, reorder, add or drop a single word. Use
+  the pasted {lang_name} text verbatim. You are ONLY choosing where each scene's
+  words end.
+- Every word of the pasted script must appear once, in order. Concatenating the
+  parts back together must reproduce the pasted script exactly.
+- A scene may end mid-sentence — English scenes do. Keep fragments as fragments.
+- Match the English scene boundaries as closely as the {lang_name} wording allows,
+  so each scene's words fit the picture chosen for it.
+{extra}
+ENGLISH SCENES (for alignment only — never output these):
+{numbered}
+
+{lang_name} SCRIPT TO SPLIT:
+{script}"""
+    out = call(p, TRANSLATE_SCHEMA, key, model, system=SYSTEM, temperature=0.2)
+    return out.get("lines", [])
+
+
 def youtube_package(narration: list[str], lang_name: str, ctx: dict, key: str,
                     model: str) -> dict:
     joined = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(narration))

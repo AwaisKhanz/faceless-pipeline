@@ -613,6 +613,35 @@ async function viewProject(id) {
         onclick: () => run(codes, ['voice', 'render'], false)
       }, 'Build every language'))));
 
+  // add a language --------------------------------------------------------
+  // Paste a script for a language this project does not have yet. It is
+  // segmented onto the existing scenes and reuses the visuals already sourced —
+  // no re-sourcing, no translation.
+  const missing = LANG_ORDER.filter(c => !codes.includes(c));
+  if (missing.length) {
+    v.append(el('div', { class: 'sec mt' }, el('h2', {}, 'Add a language'),
+      el('span', { class: 'note' }, 'paste its script — reuses these same pictures')));
+    const pick = el('select', { style: 'width:auto;min-width:130px' },
+      missing.map(c => el('option', { value: c }, LANG_NAMES[c] || c)));
+    const addScript = el('textarea', {
+      rows: 6, placeholder: 'Paste the script for this language…',
+      style: MONO + ';margin-top:10px' });
+    v.append(el('div', { class: 'card' },
+      el('div', { class: 'row' },
+        el('span', { class: 'sub' }, 'Language'), pick,
+        el('div', { style: 'flex:1' }),
+        el('button', {
+          class: 'btn primary', onclick: async e => {
+            if (!addScript.value.trim()) return toast('Paste the script first.', true);
+            e.target.disabled = true;
+            const r = await api('/api/add_language',
+              { id: p.id, lang: pick.value, script: addScript.value });
+            if (r.started) go('/activity'); else e.target.disabled = false;
+          }
+        }, 'Generate this language')),
+      addScript));
+  }
+
   // publish ---------------------------------------------------------------
   // Title, description and tags for a finished video, per language. Generated
   // on demand from the narration, then freely editable and saved to the project.
@@ -791,45 +820,68 @@ function paintRun() {
 }
 
 // ═══ new from script ══════════════════════════════════════════════════════
+const LANG_NAMES = { en: 'English', de: 'German', es: 'Spanish' };
+const LANG_ORDER = ['en', 'de', 'es'];
+const MONO = 'font-family:ui-mono,Menlo,Consolas,monospace;font-size:14.5px';
+
 function viewNew() {
   const v = $('#view'); v.innerHTML = '';
   v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
     el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
     el('h1', { style: 'margin-top:4px' }, 'New video from a script'),
-    el('p', {}, 'Gemini decides only where to cut. Your words are checked back against '
-      + 'what you paste, word by word — nothing is rewritten silently.'))));
+    el('p', {}, 'Paste your own script for each language — nothing is translated. '
+      + 'The first language defines the scenes and the pictures; the rest reuse them.'))));
+
   const id = el('input', { type: 'text', placeholder: 'video06' });
-  const script = el('textarea', {
-    rows: 16, placeholder: 'Paste the whole script here…',
-    style: 'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14.8px'
-  });
-  const langs = { en: true, de: true, es: true };
+  const sel = { en: true, de: true, es: true };
+  const boxes = {};                       // lang -> textarea (kept across toggles)
+  const scriptsWrap = el('div', {});
+
+  const paint = () => {
+    scriptsWrap.innerHTML = '';
+    const chosen = LANG_ORDER.filter(c => sel[c]);
+    chosen.forEach((c, i) => {
+      if (!boxes[c]) boxes[c] = el('textarea', {
+        rows: 9, placeholder: `Paste the ${LANG_NAMES[c]} script here…`, style: MONO });
+      scriptsWrap.append(el('div', { style: 'margin-bottom:16px' },
+        el('div', { class: 'sub', style: 'margin-bottom:5px' },
+          `${LANG_NAMES[c]} script`
+          + (i === 0 ? '  ·  defines the scenes & visuals' : '  ·  segmented onto the same scenes')),
+        boxes[c]));
+    });
+  };
+
   v.append(el('div', { class: 'card' },
     el('div', { class: 'grid2' },
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Languages'),
         el('div', { class: 'row', style: 'padding-top:6px' },
-          Object.keys(langs).map(k => el('label', { class: 'chk' },
-            el('input', { type: 'checkbox', checked: true, onchange: e => langs[k] = e.target.checked }),
-            k.toUpperCase()))))),
-    el('div', { class: 'sub', style: 'margin:14px 0 5px' }, 'Script'), script,
-    el('div', { class: 'row', style: 'margin-top:14px' },
+          LANG_ORDER.map(c => el('label', { class: 'chk' },
+            el('input', {
+              type: 'checkbox', checked: true,
+              onchange: e => { sel[c] = e.target.checked; paint(); }
+            }), c.toUpperCase()))))),
+    el('div', { class: 'hr' }),
+    scriptsWrap,
+    el('div', { class: 'row', style: 'margin-top:8px' },
       el('button', {
         class: 'btn primary', onclick: async e => {
           if (!id.value.trim()) return toast('Give it a name first.', true);
-          // No minimum length. A short script is a legitimate thing to want —
-          // a test, a 60-second clip — and guessing at what is 'too short'
-          // just blocks work. Empty is the only thing that cannot proceed.
-          if (!script.value.trim()) return toast('Paste a script first.', true);
-          e.target.disabled = true;
-          const r = await api('/api/generate', {
-            id: id.value.trim(), script: script.value,
-            langs: Object.keys(langs).filter(k => langs[k]), overwrite: false
+          const scripts = {};
+          LANG_ORDER.filter(c => sel[c]).forEach(c => {
+            const t = (boxes[c] && boxes[c].value || '').trim();
+            if (t) scripts[c] = t;
           });
+          if (!Object.keys(scripts).length)
+            return toast('Paste a script for at least one language.', true);
+          e.target.disabled = true;
+          const r = await api('/api/generate', { id: id.value.trim(), scripts });
           if (r.started) go('/activity'); else e.target.disabled = false;
         }
       }, 'Generate the sheets'),
-      el('span', { class: 'sub' }, 'Roughly 15–25 Gemini requests; the free allowance is about 250/day.'))));
+      el('span', { class: 'sub' },
+        'Every language shares one set of pictures. ~15–25 Gemini requests.'))));
+  paint();
 }
 
 // ═══ voices ═══════════════════════════════════════════════════════════════

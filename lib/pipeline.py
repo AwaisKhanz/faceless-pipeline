@@ -20,10 +20,28 @@ DISSOLVE = 0.6    # crossfade length between scenes
 
 LANG_NAMES = {"en": "English", "de": "German", "es": "Spanish",
               "fr": "French", "it": "Italian", "pt": "Portuguese"}
-# How translation files are named, e.g. video04_GERMAN_narration.md
-LANG_FILE_WORDS = {"de": ("GERMAN", "DE"), "es": ("SPANISH", "ES"),
-                   "fr": ("FRENCH", "FR"), "it": ("ITALIAN", "IT"),
-                   "pt": ("PORTUGUESE", "PT")}
+# How per-language narration files are named, e.g. video04_GERMAN_narration.md.
+# English is included now that any language can be the master: when English is
+# NOT the structure language it gets its own narration file like the others.
+LANG_FILE_WORDS = {"en": ("ENGLISH", "EN"), "de": ("GERMAN", "DE"),
+                   "es": ("SPANISH", "ES"), "fr": ("FRENCH", "FR"),
+                   "it": ("ITALIAN", "IT"), "pt": ("PORTUGUESE", "PT")}
+
+
+def master_lang(sheet: Path) -> str:
+    """Which language the master sheet's narration is in.
+
+    Recorded as an HTML comment at the top of the sheet. Older sheets, written
+    before projects could start in another language, have no marker and are
+    English by definition — which is why "en" is the default.
+    """
+    try:
+        head = sheet.read_text(encoding="utf-8", errors="ignore")[:400]
+        import re as _re
+        m = _re.search(r"master-lang:\s*([a-z]{2})", head)
+        return m.group(1) if m else "en"
+    except Exception:
+        return "en"
 
 
 class CaptionsSkipped(Exception):
@@ -70,14 +88,18 @@ def find_projects(sheets_dir: Path) -> list[dict]:
         if "- Narration:" not in txt:
             continue  # a translation file, not a master sheet
         pid = project_id(f)
-        langs = [{"code": "en", "name": "English", "file": None}]
+        mlang = master_lang(f)
+        # The structure language reads from the master; it has no side file.
+        langs = [{"code": mlang, "name": LANG_NAMES.get(mlang, mlang), "file": None}]
+        narr = sorted(sheets_dir.glob(f"{pid}_*_narration.md"))
         for code, words in LANG_FILE_WORDS.items():
-            for w in words:
-                hits = [g for g in sheets_dir.glob(f"{pid}*{w}*.md")]
-                if hits:
-                    langs.append({"code": code, "name": LANG_NAMES.get(code, code),
-                                  "file": hits[0].name})
-                    break
+            if code == mlang:
+                continue
+            hit = next((nf for nf in narr
+                        if words[0] in nf.stem.upper()), None)
+            if hit:
+                langs.append({"code": code, "name": LANG_NAMES.get(code, code),
+                              "file": hit.name})
         try:
             n = len(sheetlib.parse_master(f))
         except SystemExit:
@@ -272,14 +294,27 @@ def delete_project(sheet: Path, langs: list[dict], what: list[str]) -> dict:
             "freed_mb": round(freed / 1e6, 1), "refused": refused}
 
 
-def translation_for(sheets_dir: Path, pid: str, lang: str) -> Path | None:
-    if lang == "en":
+def narration_file(sheets_dir: Path, pid: str, lang: str) -> Path | None:
+    """The per-language narration sheet for `lang`, or None if that language is
+    the master's own (it reads from the master) or has no sheet yet."""
+    master = sheets_dir / f"{pid}_MASTER_production_sheet.md"
+    if master.exists() and master_lang(master) == lang:
         return None
-    for w in LANG_FILE_WORDS.get(lang, ()):
-        hits = list(sheets_dir.glob(f"{pid}*{w}*.md"))
-        if hits:
-            return hits[0]
+    words = LANG_FILE_WORDS.get(lang, ())
+    if not words:
+        return None
+    for nf in sorted(sheets_dir.glob(f"{pid}_*_narration.md")):
+        if words[0] in nf.stem.upper():
+            return nf
     return None
+
+
+# Kept as the historical name; callers pass a language and get its sheet (or
+# None for the master's own language). "Translation" is a misnomer now — the
+# words are the user's, segmented, not machine-translated — but renaming every
+# caller is churn for no behaviour change.
+def translation_for(sheets_dir: Path, pid: str, lang: str) -> Path | None:
+    return narration_file(sheets_dir, pid, lang)
 
 
 # ------------------------------------------------------------------ paths

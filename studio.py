@@ -237,9 +237,14 @@ class Cancelled(Exception):
 
 # ------------------------------------------------------------------ the work
 
-def run_generate(script: str, pid: str, langs: list[str], overwrite: bool) -> None:
-    """Script in → production sheets out. Gemini returns structured data only;
-    the file format is written by compose.py, so it cannot come out malformed."""
+def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
+    """Per-language scripts in → production sheets out. No translation: the
+    structure language defines the scenes and visuals, and each other language's
+    pasted script is segmented onto them. compose.py writes the file format, so
+    it cannot come out malformed."""
+    langs = [l for l in ("en", "de", "es") if (scripts.get(l) or "").strip()]
+    langs += [l for l in scripts if l not in ("en", "de", "es")
+              and (scripts.get(l) or "").strip()]
     try:
         begin_job(pid, langs, "generate")
         cfg = pl.load_config()
@@ -255,7 +260,7 @@ def run_generate(script: str, pid: str, langs: list[str], overwrite: bool) -> No
         log(f"Generating sheets for '{pid}' — {', '.join(langs)}")
 
         res = compose.generate(
-            script, pid, langs, key,
+            scripts, pid, key,
             model=cfg.get("gemini_model", gem.DEFAULT_MODEL),
             on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
             on_warn=lambda m: log(f"  ⚠ {m}"))
@@ -275,6 +280,42 @@ def run_generate(script: str, pid: str, langs: list[str], overwrite: bool) -> No
 
         set_job(stage="generated", label="sheets written",
                 outputs=[{"lang": "-", "name": n, "path": str(ROOT / "sheets" / n),
+                          "size_mb": 0} for n in written],
+                warnings=res.warnings)
+    except Exception as e:
+        set_job(stage="error", error=str(e))
+        log(f"ERROR: {e}")
+        traceback.print_exc()
+
+
+def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
+    """Compose one more language onto an existing project's shared scenes."""
+    try:
+        begin_job(pid, [lang], "generate")
+        cfg = pl.load_config()
+        key = cfg.get("gemini_key", "")
+        if not key:
+            raise RuntimeError("No Gemini API key yet — add gemini_key to config.json.")
+        sheets = ROOT / "sheets"
+        proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
+        sheet = sheets / proj["sheet"]
+        set_job(stage="generate", label=f"adding {pl.LANG_NAMES.get(lang, lang)}",
+                done=0, total=3, error="", outputs=[], project=pid)
+        log(f"Adding {pl.LANG_NAMES.get(lang, lang)} to '{pid}' from your pasted script")
+
+        res = compose.add_language(
+            sheet, lang, script, key,
+            model=cfg.get("gemini_model", gem.DEFAULT_MODEL),
+            on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
+            on_warn=lambda m: log(f"  ⚠ {m}"))
+
+        written = compose.write_files(res, sheets, overwrite=overwrite)
+        log(f"Wrote {', '.join(written) or '(nothing — file exists; use overwrite)'}")
+        for w in res.warnings:
+            for line in w.splitlines():
+                log(f"    {line}")
+        set_job(stage="generated", label=f"{pl.LANG_NAMES.get(lang, lang)} added",
+                outputs=[{"lang": lang, "name": n, "path": str(sheets / n),
                           "size_mb": 0} for n in written],
                 warnings=res.warnings)
     except Exception as e:
@@ -818,14 +859,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"saved": saved})
 
         if path == "/api/generate":
+            # `scripts` maps language -> that language's pasted script. A legacy
+            # {script, langs} body is still accepted (all languages get the same
+            # text), so nothing breaks mid-upgrade.
+            scripts = b.get("scripts")
+            if not isinstance(scripts, dict):
+                one = (b.get("script") or "").strip()
+                scripts = {l: one for l in (b.get("langs") or ["en"])} if one else {}
+            scripts = {k: v for k, v in scripts.items() if (v or "").strip()}
+            if not scripts:
+                return self._json({"error": "Paste a script for at least one language."}, 400)
+            ok = start_thread(run_generate, scripts, b.get("id") or "video",
+                              bool(b.get("overwrite")))
+            return self._json({"started": ok})
+
+        if path == "/api/add_language":
+            pid = b.get("id")
+            lang = b.get("lang") or ""
             script = (b.get("script") or "").strip()
-            # Only reject nothing at all. There is no sensible lower bound on a
-            # script — a 12-scene test is as valid as a 115-scene one — and a
-            # guessed threshold only gets in the way.
-            if not script:
-                return self._json({"error": "Paste a script first."}, 400)
-            ok = start_thread(run_generate, script, b.get("id") or "video",
-                              b.get("langs") or ["en"], bool(b.get("overwrite")))
+            if not (pid and lang and script):
+                return self._json(
+                    {"error": "Need a project, a language and a pasted script."}, 400)
+            ok = start_thread(run_add_language, pid, lang, script,
+                              bool(b.get("overwrite")))
+            if not ok:
+                return self._json({"error": "something is already running"}, 409)
             return self._json({"started": ok})
 
         if path == "/api/source":

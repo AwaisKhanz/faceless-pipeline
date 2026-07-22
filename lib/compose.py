@@ -97,7 +97,7 @@ def act_ranges(scenes: list[Scene], acts: list[dict]) -> list[tuple[dict, int, i
 
 # ---------------------------------------------------------------- rendering
 
-def render_master(plan: dict, scenes: list[Scene], pid: str) -> str:
+def render_master(plan: dict, scenes: list[Scene], pid: str, lang: str = "en") -> str:
     vids = [s.n for s in scenes if s.media == "VIDEO"]
     heroes = sum(1 for s in scenes if s.hero)
     ranges = act_ranges(scenes, plan.get("acts", []))
@@ -107,6 +107,10 @@ def render_master(plan: dict, scenes: list[Scene], pid: str) -> str:
     L: list[str] = []
     add = L.append
 
+    # The master carries the structure language's own narration. Record which
+    # language that is so the rest of the app never has to assume English — a
+    # project can start in German or Spanish and still read correctly.
+    add(f"<!-- master-lang: {lang} -->")
     add(f"# 🎬 MASTER PRODUCTION SHEET — {pid}")
     add(f"## \"{plan.get('title_en', pid)}\"")
     add("")
@@ -314,27 +318,15 @@ def _flag_repeats(scenes, res) -> None:
             seen[key] = s.n
 
 
-def generate(script: str, pid: str, langs: list[str], key: str,
-             model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
-             on_warn=lambda *_: None) -> Result:
-    res = Result()
+STRUCT_ORDER = ["en", "de", "es"]     # who defines the scenes when several arrive
+
+
+def split_into_scenes(script: str, plan: dict, key: str, model: str,
+                      res: Result, tick, on_warn) -> list[Scene]:
+    """Split ONE script into verified scenes. This is where the visuals come
+    from, so it runs on the structure language's script only."""
     sections = G.split_sections(script, SECTION_WORDS)
-    total_steps = 1 + len(sections) + len(langs) * (len(sections) + 1) + 1
-
-    step = [0]
-
-    def tick(msg: str) -> None:
-        step[0] += 1
-        on_progress(step[0], total_steps, msg)
-
-    # 1 — plan
-    tick("reading the script")
-    plan = G.plan(script, key, model)
-    res.plan = plan
-
-    # 2 — scenes, section by section, each verified against the source
     all_scenes: list[dict] = []
-    section_sizes: list[int] = []
     for i, sec in enumerate(sections, start=1):
         tick(f"splitting section {i} of {len(sections)}")
         got, feedback = None, ""
@@ -350,9 +342,7 @@ def generate(script: str, pid: str, langs: list[str], key: str,
                     f"Section {i}: narration still differs from the script after "
                     f"3 attempts.\n{G.diff_words(sec, joined)}")
                 on_warn(f"Section {i} did not match the script — see warnings")
-        got = got or []
-        all_scenes.extend(got)
-        section_sizes.append(len(got))
+        all_scenes.extend(got or [])
 
     scenes = [Scene(n=i, narration=s.get("narration", ""),
                     media=(s.get("media") or "IMAGE").upper(),
@@ -369,68 +359,139 @@ def generate(script: str, pid: str, langs: list[str], key: str,
         if s.media not in ("IMAGE", "VIDEO"):
             s.media = "IMAGE"
         if not s.query.strip():
-            # Promote a fallback rather than inventing a placeholder: a looser
-            # query about the right subject beats a generic one about none.
             if s.fallbacks:
                 s.query, s.fallbacks = s.fallbacks[0], s.fallbacks[1:]
-                res.warnings.append(
-                    f"S{s.n}: no primary query — used the fallback instead.")
+                res.warnings.append(f"S{s.n}: no primary query — used the fallback.")
             else:
                 s.query = "calm natural scene, soft daylight"
                 res.warnings.append(
                     f"S{s.n}: no search query at all — placeholder used, fix by hand.")
 
     _flag_repeats(scenes, res)
+    return scenes
+
+
+def segment_language(scenes: list[Scene], script: str, lang: str, key: str,
+                     model: str, res: Result, on_warn) -> list[str]:
+    """Cut a pasted script onto the shared scenes, verified word for word.
+
+    Not a translation — the words are the user's own. Concatenating the parts
+    must reproduce the pasted script; on failure it retries with feedback, and
+    only pads (keeping scene numbering aligned) as a last resort.
+    """
+    name = LANG_NAMES.get(lang, lang.upper())
+    en_lines = [s.narration for s in scenes]
+    fb, seg = "", []
+    for attempt in range(1, 4):
+        seg = G.segment_script(en_lines, script, name, key, model, fb)
+        same_words = G.words(" ".join(seg)) == G.words(script)
+        if len(seg) == len(en_lines) and same_words:
+            return seg
+        if len(seg) != len(en_lines):
+            fb = (f"You returned {len(seg)} parts but exactly {len(en_lines)} "
+                  f"are required, one per scene.")
+        else:
+            fb = ("Concatenating the parts did not reproduce the pasted script "
+                  "exactly. Do not translate or change any word.\n"
+                  + G.diff_words(script, " ".join(seg)))
+        if attempt == 3:
+            res.warnings.append(
+                f"{name}: could not split the script cleanly onto "
+                f"{len(en_lines)} scenes — padded to keep numbering aligned. "
+                f"Check the narration sheet.")
+            on_warn(f"{name} split imperfectly — review its narration sheet")
+    return (seg + [""] * len(en_lines))[:len(en_lines)]
+
+
+def _language_sheet(scenes: list[Scene], plan: dict, pid: str, lang: str,
+                    lines: list[str], key: str, model: str) -> tuple[str, str]:
+    """The narration + YouTube package file for one language."""
+    name = LANG_NAMES.get(lang, lang.upper())
+    yt = G.youtube_package(lines, name, plan, key, model)
+    return (f"{pid}_{name.upper()}_narration.md",
+            render_translation(plan, scenes, lang, lines, yt, pid))
+
+
+def generate(scripts: dict[str, str], pid: str, key: str,
+             model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
+             on_warn=lambda *_: None) -> Result:
+    """Per-language scripts in → production sheets out. No translation.
+
+    `scripts` maps language code -> that language's pasted script. The first
+    present language (English by preference) is the STRUCTURE language: its
+    script is split into scenes, which define the shared visuals. Every other
+    language's pasted script is segmented onto those same scenes, so all
+    languages share one set of pictures and one scene numbering.
+    """
+    res = Result()
+    present = ([l for l in STRUCT_ORDER if scripts.get(l, "").strip()]
+               + [l for l in scripts if l not in STRUCT_ORDER and scripts.get(l, "").strip()])
+    if not present:
+        raise ValueError("No script was given for any language.")
+    struct, others = present[0], present[1:]
+    struct_script = scripts[struct].strip()
+    struct_name = LANG_NAMES.get(struct, struct.upper())
+
+    n_sections = len(G.split_sections(struct_script, SECTION_WORDS))
+    total = 1 + n_sections + 1 + len(others) + 1
+    step = [0]
+
+    def tick(msg: str) -> None:
+        step[0] += 1
+        on_progress(step[0], total, msg)
+
+    tick("reading the script")
+    plan = G.plan(struct_script, key, model)
+    res.plan = plan
+
+    scenes = split_into_scenes(struct_script, plan, key, model, res, tick, on_warn)
     res.scenes = scenes
 
-    # 3 — English YouTube package
-    tick("writing the English YouTube package")
-    yt_en = G.youtube_package([s.narration for s in scenes], "English", plan, key, model)
-    plan["thumbnail_line1"] = yt_en.get("thumbnail_line1") or plan.get("thumbnail_line1", "")
-    plan["thumbnail_line2"] = yt_en.get("thumbnail_line2") or plan.get("thumbnail_line2", "")
+    # The structure language's narration IS the master — no separate sheet for
+    # it. One YouTube call enriches the plan (thumbnail lines) before rendering.
+    tick(f"writing the {struct_name} master sheet")
+    yt0 = G.youtube_package([s.narration for s in scenes], struct_name, plan, key, model)
+    plan["thumbnail_line1"] = yt0.get("thumbnail_line1") or plan.get("thumbnail_line1", "")
+    plan["thumbnail_line2"] = yt0.get("thumbnail_line2") or plan.get("thumbnail_line2", "")
+    res.files[f"{pid}_MASTER_production_sheet.md"] = render_master(plan, scenes, pid, struct)
 
-    res.files[f"{pid}_MASTER_production_sheet.md"] = render_master(plan, scenes, pid)
-    res.files[f"{pid}_ENGLISH_youtube.md"] = render_translation(
-        plan, scenes, "en", [s.narration for s in scenes], yt_en, pid)
-
-    # 4 — translations, sent in the same chunks the scenes were split in, so a
-    #     scene can never end up under the wrong number
-    per_section: list[list[str]] = []
-    cursor = 0
-    for size in section_sizes:
-        per_section.append([s.narration for s in scenes[cursor:cursor + size]])
-        cursor += size
-    if cursor != len(scenes):        # should not happen; belt and braces
-        per_section = [[s.narration for s in scenes[i:i + 25]]
-                       for i in range(0, len(scenes), 25)]
-
-    for lang in langs:
-        if lang == "en":
-            continue
+    # Every other language: segment its pasted script onto the shared scenes.
+    for lang in others:
         name = LANG_NAMES.get(lang, lang.upper())
-        out: list[str] = []
-        for i, chunk in enumerate(per_section, start=1):
-            tick(f"translating into {name} — part {i} of {len(per_section)}")
-            fb, lines = "", []
-            for attempt in range(1, 4):
-                lines = G.translate_section(chunk, name, plan, key, model, fb)
-                if len(lines) == len(chunk):
-                    break
-                fb = (f"You returned {len(lines)} lines but exactly "
-                      f"{len(chunk)} were required.")
-                if attempt == 3:
-                    res.warnings.append(
-                        f"{name} part {i}: expected {len(chunk)} lines, got "
-                        f"{len(lines)}. Padded to keep scene numbering aligned.")
-                    on_warn(f"{name} part {i} returned the wrong number of lines")
-                    lines = (lines + chunk[len(lines):])[:len(chunk)]
-            out.extend(lines)
+        tick(f"splitting the {name} script onto {len(scenes)} scenes")
+        lines = segment_language(scenes, scripts[lang].strip(), lang, key, model,
+                                 res, on_warn)
+        fn, c = _language_sheet(scenes, plan, pid, lang, lines, key, model)
+        res.files[fn] = c
 
-        tick(f"writing the {name} YouTube package")
-        yt = G.youtube_package(out, name, plan, key, model)
-        res.files[f"{pid}_{name.upper()}_narration.md"] = render_translation(
-            plan, scenes, lang, out, yt, pid)
+    return res
 
+
+def add_language(sheet: Path, lang: str, script: str, key: str,
+                 model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
+                 on_warn=lambda *_: None) -> Result:
+    """Compose ONE more language onto an existing project's shared scenes.
+
+    Reads the finished master (its scenes and visuals are fixed), segments the
+    pasted script onto them, and returns just that language's narration sheet.
+    Nothing about the master or the other languages is touched.
+    """
+    import lib.sheet as sheetlib
+    res = Result()
+    pid = sheet.stem.replace("_MASTER_production_sheet", "").replace("_MASTER", "")
+    scenes = [Scene(n=s.n, narration=s.narration, media=s.media, query=s.query,
+                    domain=getattr(s, "domain", ""), hero=getattr(s, "hero", False))
+              for s in sheetlib.parse_master(sheet)]
+    res.scenes = scenes
+    plan = {"title_en": pid, "spine_phrase": ""}
+
+    name = LANG_NAMES.get(lang, lang.upper())
+    on_progress(1, 3, f"reading {pid}")
+    on_progress(2, 3, f"splitting the {name} script onto {len(scenes)} scenes")
+    lines = segment_language(scenes, script.strip(), lang, key, model, res, on_warn)
+    on_progress(3, 3, f"writing the {name} package")
+    fn, c = _language_sheet(scenes, plan, pid, lang, lines, key, model)
+    res.files[fn] = c
     return res
 
 
