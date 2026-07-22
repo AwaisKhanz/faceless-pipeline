@@ -78,6 +78,7 @@ from lib import gemini as gem  # noqa: E402
 from lib import render as R  # noqa: E402
 from lib import tts, voices as vx  # noqa: E402
 from lib import vision as VIS  # noqa: E402
+from lib import captions as CAP, align as AL  # noqa: E402
 
 PORT = 8765
 UI = ROOT / "lib" / "ui.html"
@@ -265,7 +266,8 @@ def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
             on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
             on_warn=lambda m: log(f"  ⚠ {m}"))
 
-        written = compose.write_files(res, ROOT / "sheets", overwrite=overwrite)
+        sdir = pl.sheets_dir(pid)
+        written = compose.write_files(res, sdir, overwrite=overwrite)
         log(f"Wrote {len(written)} file(s): {', '.join(written)}")
         log(f"{len(res.scenes)} scenes · "
             f"{sum(1 for s in res.scenes if s.media == 'VIDEO')} video · "
@@ -279,7 +281,7 @@ def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
                     log(f"    {line}")
 
         set_job(stage="generated", label="sheets written",
-                outputs=[{"lang": "-", "name": n, "path": str(ROOT / "sheets" / n),
+                outputs=[{"lang": "-", "name": n, "path": str(sdir / n),
                           "size_mb": 0} for n in written],
                 warnings=res.warnings)
     except Exception as e:
@@ -296,9 +298,9 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
         key = cfg.get("gemini_key", "")
         if not key:
             raise RuntimeError("No Gemini API key yet — add gemini_key to config.json.")
-        sheets = ROOT / "sheets"
-        proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-        sheet = sheets / proj["sheet"]
+        proj = pl.find_project(pid)
+        sheet = Path(proj["sheet"])
+        sdir = sheet.parent
         set_job(stage="generate", label=f"adding {pl.LANG_NAMES.get(lang, lang)}",
                 done=0, total=3, error="", outputs=[], project=pid)
         log(f"Adding {pl.LANG_NAMES.get(lang, lang)} to '{pid}' from your pasted script")
@@ -309,13 +311,13 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
             on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
             on_warn=lambda m: log(f"  ⚠ {m}"))
 
-        written = compose.write_files(res, sheets, overwrite=overwrite)
+        written = compose.write_files(res, sdir, overwrite=overwrite)
         log(f"Wrote {', '.join(written) or '(nothing — file exists; use overwrite)'}")
         for w in res.warnings:
             for line in w.splitlines():
                 log(f"    {line}")
         set_job(stage="generated", label=f"{pl.LANG_NAMES.get(lang, lang)} added",
-                outputs=[{"lang": lang, "name": n, "path": str(sheets / n),
+                outputs=[{"lang": lang, "name": n, "path": str(sdir / n),
                           "size_mb": 0} for n in written],
                 warnings=res.warnings)
     except Exception as e:
@@ -326,9 +328,8 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
 
 def run_sourcing(pid: str, redo: list[int] | None) -> None:
     try:
-        sheets = ROOT / "sheets"
-        proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-        sheet = sheets / proj["sheet"]
+        proj = pl.find_project(pid)
+        sheet = Path(proj["sheet"])
         cfg = pl.load_config()
         if not cfg.get("pexels_key") and not cfg.get("pixabay_key"):
             raise RuntimeError(
@@ -343,10 +344,29 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
             progress(d, t, m)
             log(f"  {m}")
 
-        pl.source_stock(scenes, sheet, cfg, redo=redo, on_progress=onp)
+        assets = pl.source_stock(scenes, sheet, cfg, redo=redo, on_progress=onp)
         end_step()
-        set_job(stage="approve", label="ready for review")
-        log("Visuals ready — review them below.")
+
+        # Be honest about the outcome. A scene with no asset at all breaks the
+        # render; a placeholder builds but carries a generic background. Either
+        # way the user needs to know before they hit render, not after it fails.
+        missing = [s.n for s in scenes if s.n not in assets]
+        placeheld = sorted(n for n, a in assets.items()
+                           if isinstance(a, dict) and a.get("placeholder"))
+        if missing:
+            set_job(stage="approve", label=f"ready — {len(missing)} scene(s) still empty")
+            log(f"⚠ {len(missing)} scene(s) still have NO picture: {missing}")
+            log("  Reword their search line in the sheet, or swap them in review, "
+                "before rendering.")
+        elif placeheld:
+            set_job(stage="approve",
+                    label=f"ready — {len(placeheld)} placeholder(s)")
+            log(f"⚠ {len(placeheld)} scene(s) got a neutral placeholder (no real "
+                f"match found): {placeheld}")
+            log("  The video will build. Swap these in review for a better shot.")
+        else:
+            set_job(stage="approve", label="ready for review")
+            log("Visuals ready — review them below.")
     except Exception as e:
         set_job(stage="error", error=str(e))
         log(f"ERROR: {e}")
@@ -356,9 +376,9 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
 def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
               zoom: bool, voices: dict[str, str]) -> None:
     try:
-        sheets = ROOT / "sheets"
-        proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-        sheet = sheets / proj["sheet"]
+        proj = pl.find_project(pid)
+        sheet = Path(proj["sheet"])
+        sdir = sheet.parent
         assets_f = pl.paths_for(sheet, "en")["assets"]
         assets = {int(k): v for k, v in json.loads(assets_f.read_text(encoding="utf-8")).items()}
         outputs = []
@@ -366,7 +386,7 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
 
         for li, lang in enumerate(langs):
             tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
-            tr = pl.translation_for(sheets, pid, lang)
+            tr = pl.translation_for(sdir, pid, lang)
             scenes = pl.load_scenes(sheet, lang, tr)
 
             begin_step("voice", lang)
@@ -388,6 +408,7 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
                 out = pl.render_video(
                     scenes, assets, vs, sheet, lang, captions=captions,
                     music=Path(music) if music else None, zoom=zoom,
+                    style=pl.effective_caption_style(pid),
                     on_progress=lambda d, t, m: progress(d, t, f"{tag} — {m}"))
             except pl.CaptionsSkipped as cs:
                 out = cs.video
@@ -425,9 +446,9 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
     would otherwise be reused.
     """
     try:
-        sheets = ROOT / "sheets"
-        proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-        sheet = sheets / proj["sheet"]
+        proj = pl.find_project(pid)
+        sheet = Path(proj["sheet"])
+        sdir = sheet.parent
         begin_job(pid, langs, steps[0] if steps else "voice")
 
         assets = {}
@@ -457,7 +478,7 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
             if cancelled():
                 raise Cancelled()
             tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
-            tr = pl.translation_for(sheets, pid, lang)
+            tr = pl.translation_for(sdir, pid, lang)
             scenes = pl.load_scenes(sheet, lang, tr)
             vs = []
 
@@ -500,6 +521,7 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
                     out = pl.render_video(
                         scenes, assets, vs, sheet, lang, captions=captions,
                         music=Path(music) if music else None, zoom=zoom,
+                        style=pl.effective_caption_style(pid),
                         on_progress=lambda d, t, m: progress(d, t, f"{tag} — {m}"))
                 except pl.CaptionsSkipped as cs:
                     out = cs.video
@@ -528,9 +550,8 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
 # ---------------------------------------------------------------- approval data
 
 def approval_data(pid: str) -> dict:
-    sheets = ROOT / "sheets"
-    proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-    sheet = sheets / proj["sheet"]
+    proj = pl.find_project(pid)
+    sheet = Path(proj["sheet"])
     p = pl.paths_for(sheet, "en")
     scenes = pl.load_scenes(sheet, "en", None)
     assets = {}
@@ -551,6 +572,9 @@ def approval_data(pid: str) -> dict:
             # How well this picture matched the line (0..1), or null if visual
             # matching was off when it was sourced.
             "score": (a or {}).get("score"),
+            # True when nothing real was found and a neutral background was
+            # dropped in so the render doesn't break — needs a manual swap.
+            "placeholder": bool((a or {}).get("placeholder")),
             "url": f"/media/{Path(a['path']).name}" if a else "",
             "video": bool(a and Path(a["path"]).suffix.lower() in (".mp4", ".mov", ".webm")),
         })
@@ -634,8 +658,14 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(chunk)
                     left -= len(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass        # the browser seeked away or closed the tab; normal
+        except ConnectionError:
+            # The browser seeked away, closed the tab, or navigated to another
+            # page mid-download. On macOS/Linux this is BrokenPipe/ConnectionReset;
+            # on Windows it's ConnectionAbortedError (WinError 10053). All three
+            # share the ConnectionError base and are completely normal here — the
+            # client simply stopped listening. Nothing is wrong with the file or
+            # the render, so swallow it rather than dumping a scary traceback.
+            pass
 
     def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
         self.send_response(code)
@@ -675,7 +705,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, UI.read_bytes(), "text/html; charset=utf-8")
 
         if path == "/api/projects":
-            projects = pl.find_projects(ROOT / "sheets")
+            projects = pl.find_projects()
             cfg = pl.load_config()
             music = sorted(f.name for f in (ROOT / "music").glob("*")
                            if f.suffix.lower() in (".mp3", ".m4a", ".wav", ".aac"))
@@ -684,7 +714,7 @@ class Handler(BaseHTTPRequestHandler):
             for pr in projects:
                 try:
                     pr["status"] = pl.project_status(
-                        ROOT / "sheets" / pr["sheet"], pr["languages"])
+                        Path(pr["sheet"]), pr["languages"])
                 except Exception as e:
                     pr["status"] = {"error": str(e), "scenes": pr.get("scenes", 0),
                                     "assets": 0, "languages": {}}
@@ -696,12 +726,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/deletable":
             pid = (q.get("id") or [""])[0]
-            try:
-                sheets = ROOT / "sheets"
-                proj = next(x for x in pl.find_projects(sheets) if x["id"] == pid)
-            except StopIteration:
+            proj = pl.find_project(pid)
+            if proj is None:
                 return self._json({"error": f"no project called {pid!r}"}, 404)
-            g = pl.deletable(sheets / proj["sheet"], proj["languages"])
+            g = pl.deletable(Path(proj["sheet"]), proj["languages"])
             summary = {}
             for k, files in g.items():
                 size = 0
@@ -740,6 +768,7 @@ class Handler(BaseHTTPRequestHandler):
                 "device": dev,
                 "gpu_ok": dev.get("device") in ("cuda", "mps"),
                 "clip": VIS.capability(cfg),
+                "align": AL.capability(cfg),
 
                 "references": CB.list_references() if CB.installed() else [],
                 "voices": langs,
@@ -750,7 +779,7 @@ class Handler(BaseHTTPRequestHandler):
                     ({"name": f.name,
                       "size_mb": round(f.stat().st_size / 1e6, 1),
                       "built": int(f.stat().st_mtime)}
-                     for f in (ROOT / "out").glob("*.mp4")),
+                     for f in pl.PROJECTS.glob("*/out/*.mp4")),
                     key=lambda d: -d["built"]),
             })
 
@@ -764,10 +793,9 @@ class Handler(BaseHTTPRequestHandler):
             scenes = None
             if pid:
                 try:
-                    sheets = ROOT / "sheets"
-                    proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-                    tr = pl.translation_for(sheets, pid, lang)
-                    scenes = pl.load_scenes(sheets / proj["sheet"], lang, tr)
+                    proj = pl.find_project(pid)
+                    tr = pl.translation_for(pl.sheets_dir(pid), pid, lang)
+                    scenes = pl.load_scenes(Path(proj["sheet"]), lang, tr)
                 except Exception:
                     scenes = None
             vx.ensure_folders()
@@ -806,13 +834,32 @@ class Handler(BaseHTTPRequestHandler):
             # language. Empty is a valid answer (nothing generated yet).
             pid = (q.get("id") or [""])[0]
             lang = (q.get("lang") or ["en"])[0]
-            try:
-                sheets = ROOT / "sheets"
-                proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-                data = pl.load_metadata(sheets / proj["sheet"], lang)
-                return self._json(data or {})
-            except StopIteration:
+            proj = pl.find_project(pid)
+            if proj is None:
                 return self._json({"error": "project not found"}, 404)
+            data = pl.load_metadata(Path(proj["sheet"]), lang)
+            return self._json(data or {})
+
+        if path == "/api/captions":
+            # Everything the subtitle editor needs: presets, the user's saved
+            # templates, the global default, and (if an id is given) this
+            # project's override and what it would actually render with.
+            pid = (q.get("id") or [""])[0] or None
+            cfg = pl.load_config()
+            default_spec = pl.global_caption_style()
+            out = {
+                "presets": CAP.preset_list(),
+                "custom": pl.custom_caption_styles(),
+                "default": default_spec,
+                "default_resolved": CAP.resolve_style(default_spec).to_dict(),
+                "align": AL.capability(cfg),
+                "project": pid,
+                "project_style": pl.load_project_style(pid) if pid else None,
+            }
+            if pid:
+                out["effective_resolved"] = CAP.resolve_style(
+                    pl.effective_caption_style(pid)).to_dict()
+            return self._json(out)
 
         if path.startswith("/media/"):
             # Stock footage and photos, straight from the cache.
@@ -821,11 +868,17 @@ class Handler(BaseHTTPRequestHandler):
                                     ROOT / "cache" / "stock")
 
         if path.startswith("/out/"):
-            # Finished videos and subtitles. Separate from /media/ because they
-            # live in a different folder — routing them through /media/out/ was
-            # a bug that resolved to cache/stock/out/ and always 404'd.
+            # Finished videos and subtitles now live per-project under
+            # projects/<pid>/out/. The filename still carries the pid
+            # (<pid>_<lang>.mp4), so find its folder by matching the name.
             name = unquote(path[len("/out/"):])
-            return self._serve_file(ROOT / "out" / name, ROOT / "out")
+            if "/" in name or "\\" in name or ".." in name:
+                return self._send(404, b"not found", "text/plain")
+            hit = next((f for f in pl.PROJECTS.glob(f"*/out/{name}")
+                        if f.name == name), None)
+            if hit is None:
+                return self._send(404, b"not found", "text/plain")
+            return self._serve_file(hit, hit.parent)
 
         return self._send(404, b"not found", "text/plain")
 
@@ -926,10 +979,8 @@ class Handler(BaseHTTPRequestHandler):
             # The id is never used to build a path directly — it must match a
             # project we already found on disk. That, plus the per-file check
             # inside delete_project, is what keeps a crafted id harmless.
-            sheets = ROOT / "sheets"
-            try:
-                proj = next(x for x in pl.find_projects(sheets) if x["id"] == pid)
-            except StopIteration:
+            proj = pl.find_project(pid)
+            if proj is None:
                 return self._json({"error": f"no project called {pid!r}"}, 404)
 
             # Removing the sheets removes the project itself, so make the caller
@@ -942,7 +993,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(
                     {"error": "something is running — wait for it to finish"}, 409)
 
-            res = pl.delete_project(sheets / proj["sheet"], proj["languages"], what)
+            res = pl.delete_project(Path(proj["sheet"]), proj["languages"], what)
             log(f"Deleted {res['count']} file(s) from {pid} "
                 f"({res['freed_mb']} MB freed)")
             return self._json(res)
@@ -952,14 +1003,13 @@ class Handler(BaseHTTPRequestHandler):
             # is a single Gemini call, not a long job — so the UI just waits.
             pid = b.get("id")
             lang = b.get("lang") or "en"
+            proj = pl.find_project(pid)
+            if proj is None:
+                return self._json({"error": "project not found"}, 404)
             try:
-                sheets = ROOT / "sheets"
-                proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-                data = pl.build_metadata(sheets / proj["sheet"], lang, pl.load_config())
+                data = pl.build_metadata(Path(proj["sheet"]), lang, pl.load_config())
                 log(f"Wrote {lang} description for {pid}")
                 return self._json(data)
-            except StopIteration:
-                return self._json({"error": "project not found"}, 404)
             except Exception as e:
                 return self._json({"error": str(e)}, 500)
 
@@ -967,15 +1017,46 @@ class Handler(BaseHTTPRequestHandler):
             # Persist the user's edits to the description/tags.
             pid = b.get("id")
             lang = b.get("lang") or "en"
+            proj = pl.find_project(pid)
+            if proj is None:
+                return self._json({"error": "project not found"}, 404)
             try:
-                sheets = ROOT / "sheets"
-                proj = next(p for p in pl.find_projects(sheets) if p["id"] == pid)
-                saved = pl.save_metadata(sheets / proj["sheet"], lang, {
+                saved = pl.save_metadata(Path(proj["sheet"]), lang, {
                     "title": b.get("title"), "description": b.get("description"),
                     "tags": b.get("tags") or []})
                 return self._json({"saved": True, **saved})
-            except StopIteration:
-                return self._json({"error": "project not found"}, 404)
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
+
+        if path == "/api/captions":
+            # One endpoint, a few actions, all about the subtitle style:
+            #   set the global default, set/clear a project's override, or save
+            #   and delete the user's own named templates.
+            action = b.get("action") or "set"
+            try:
+                if action == "save":
+                    name = (b.get("name") or "").strip()
+                    if not name:
+                        return self._json({"error": "name required"}, 400)
+                    pl.save_custom_caption_style(name, b.get("style") or {})
+                    return self._json({"saved": True, "custom": pl.custom_caption_styles()})
+                if action == "delete":
+                    pl.delete_custom_caption_style(b.get("name") or "")
+                    return self._json({"deleted": True, "custom": pl.custom_caption_styles()})
+
+                scope = b.get("scope") or "global"
+                spec = b.get("style")           # preset id (str) or style dict, or None
+                if scope == "project":
+                    pid = b.get("id")
+                    if pl.find_project(pid) is None:
+                        return self._json({"error": "project not found"}, 404)
+                    pl.save_project_style(pid, spec)     # None clears the override
+                    return self._json({"saved": True, "scope": "project",
+                                       "effective": CAP.resolve_style(
+                                           pl.effective_caption_style(pid)).to_dict()})
+                pl.set_global_caption_style(spec)
+                return self._json({"saved": True, "scope": "global",
+                                   "default_resolved": CAP.resolve_style(spec).to_dict()})
             except Exception as e:
                 return self._json({"error": str(e)}, 500)
 
@@ -991,7 +1072,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
 
         if path == "/api/reveal":
-            target = ROOT / "out"
+            target = pl.PROJECTS
             p = b.get("path")
             if p and Path(p).exists():
                 target = Path(p)
@@ -1007,15 +1088,39 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "unknown endpoint"}, 404)
 
 
+class QuietServer(ThreadingHTTPServer):
+    """A threading server that doesn't shout when a browser hangs up mid-request.
+
+    Every browser routinely opens and abandons connections — it cancels an image
+    the moment you scroll past it, drops the video socket when you seek, closes
+    the tab. The handler then writes to a socket nobody is reading, which raises
+    a ConnectionError (BrokenPipe / ConnectionReset on macOS/Linux, WinError
+    10053 'connection aborted' on Windows). The stock library prints a full
+    traceback for each, which looks alarming and buries the real log. These are
+    expected and harmless, so we swallow exactly that one family and let every
+    other error surface normally.
+    """
+    def handle_error(self, request, client_address):
+        import sys as _sys
+        if isinstance(_sys.exc_info()[1], ConnectionError):
+            return                      # client hung up; nothing to see here
+        super().handle_error(request, client_address)
+
+
 def main(open_browser: bool = True) -> None:
     vx.ensure_folders()
-    for d in ("sheets", "cache/stock", "cache/voice", "cache/refs",
-              "work", "out", "music"):
+    for d in ("projects", "cache/stock", "cache/voice", "cache/refs", "music"):
         (ROOT / d).mkdir(parents=True, exist_ok=True)
+    # Fold any old flat sheets/work/out into projects/<pid>/… on startup. No-op
+    # once everything has moved, so it is safe to leave in.
+    rep = pl.migrate_layout()
+    if rep["moved"]:
+        log(f"Reorganised {rep['moved']} file(s) into projects/ "
+            f"({len(rep['projects'])} project(s))")
     if not UI.exists():
         sys.exit(f"Missing {UI} — the app files are incomplete.")
 
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv = QuietServer(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}/"
     print()
     print("  ┌────────────────────────────────────────────┐")
@@ -1031,7 +1136,7 @@ def main(open_browser: bool = True) -> None:
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        print("\n  Stopped. Your work is saved in out/ and cache/.\n")
+        print("\n  Stopped. Your work is saved in projects/ and cache/.\n")
 
 
 if __name__ == "__main__":

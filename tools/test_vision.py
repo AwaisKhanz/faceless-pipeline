@@ -55,6 +55,8 @@ def main() -> int:
 
     def fake_fetch(query, media, cache, pk, xk, index=0, sources=None, cfg=None):
         calls.append((query, index))
+        if query == "dry":                       # a query free stock can't fill
+            raise stock.StockError("no result for 'dry'")
         return {"path": f"/fake/{query}", "credit": "", "page": query,
                 "src": "pexels", "query": query, "media": media,
                 "index": index, "score": SCORES.get(query)}
@@ -92,6 +94,20 @@ def main() -> int:
     print("\n  with scoring off (old behaviour, exactly):")
     check("takes the first usable match, no escalation", out[1]["query"], "wb1")
     check("never even tries the fallbacks", ("strongB", 0) in calls, False)
+
+    # ---- safety net: a scene the ladder can't fill is never left empty -------
+    calls.clear()
+    vision.get_scorer = lambda cfg=None, log=lambda *a: None: None
+    out = stock.fetch_all(
+        [scene(1, "dry", ["dry"])],                        # nothing real exists
+        Path("/tmp"), "pk", "xk", log=lambda *a: None)
+
+    print("\n  when a scene finds nothing at all:")
+    check("the scene is still filled, not dropped", 1 in out, True)
+    check("filled from a generic safety query",
+          out[1]["query"] in stock._SAFETY_QUERIES, True)
+    check("flagged as a placeholder", out[1].get("placeholder"), True)
+    check("carries no score (needs a real swap)", out[1].get("score"), None)
 
     stock.fetch, vision.get_scorer = real_fetch, real_get
 

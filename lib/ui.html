@@ -254,7 +254,8 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
 .thumb{position:relative;aspect-ratio:16/9;border-radius:8px;overflow:hidden;
   background:var(--surface3);border:2px solid transparent;cursor:pointer}
 .thumb img,.thumb video{width:100%;height:100%;object-fit:cover;display:block}
-.thumb.rej{border-color:var(--bad);opacity:.5}
+/* marked for replacement — a bold red ring plus an overlay, unmissable */
+.thumb.rej{border-color:var(--bad);box-shadow:inset 0 0 0 3px var(--bad)}
 .thumb.hero{border-color:var(--accent)}
 .thumb .n{position:absolute;left:0;top:0;background:rgba(0,0,0,.72);color:#fff;
   font-family:var(--mono);font-size:11.5px;padding:2px 7px;border-radius:0 0 6px 0;font-weight:600}
@@ -264,13 +265,58 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
 .thumb .m.good{background:var(--ok)}
 .thumb .m.weak{background:var(--warn)}
 .thumb.low{border-color:color-mix(in srgb,var(--warn) 60%,var(--line))}
-.thumb .rep{position:absolute;inset:0;display:grid;place-items:center;
-  background:color-mix(in srgb,var(--bad) 28%,transparent)}
-.thumb .rep span{background:var(--bad);color:#fff;font-size:11px;font-weight:600;padding:3px 9px;border-radius:99px}
+/* replace overlay: hidden until the picture is marked */
+.thumb .rep{position:absolute;inset:0;display:none;place-items:center;
+  background:color-mix(in srgb,var(--bad) 30%,transparent)}
+.thumb.rej .rep{display:grid}
+.thumb .rep span{background:var(--bad);color:#fff;font-size:11.5px;font-weight:700;
+  padding:4px 11px;border-radius:99px;box-shadow:0 1px 6px rgba(0,0,0,.4)}
+/* a scene with no picture at all — dashed red, so it can't be skimmed past */
+.thumb.empty{border-color:color-mix(in srgb,var(--bad) 55%,var(--line));border-style:dashed}
+.thumb .nopic{position:absolute;inset:0;display:grid;place-items:center;text-align:center;
+  color:var(--bad);font:700 11px var(--ui);letter-spacing:.04em;padding:6px}
+/* neutral placeholder fill: built the render, but needs a real shot */
+.thumb .ph{position:absolute;left:0;bottom:0;background:var(--warn);color:#08120a;
+  font:700 10px var(--mono);padding:2px 6px;border-radius:0 6px 0 0}
 /* the scoring legend / key */
 .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
 .legend .k{display:inline-flex;align-items:center;gap:6px}
 .legend .sw{width:11px;height:11px;border-radius:3px;flex:none}
+
+/* ─── subtitle designer ──────────────────────────────────────────────────── */
+.subwrap{display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start}
+@media (max-width:1100px){.subwrap{grid-template-columns:1fr}}
+/* the 16:9 preview stage, mimicking a real frame */
+.substage{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden;
+  background:linear-gradient(150deg,#1a1f2b,#0b0e15 70%);border:1px solid var(--line)}
+.substage .frame{position:absolute;inset:0;background-size:cover;background-position:center;opacity:.85}
+.capbar{position:absolute;left:50%;transform:translateX(-50%);display:inline-flex;
+  flex-wrap:wrap;justify-content:center;gap:.32em;max-width:86%;line-height:1.18;
+  text-align:center;padding:.32em .6em}
+.capbar.pos-bottom{bottom:8%}
+.capbar.pos-center{top:50%;transform:translate(-50%,-50%)}
+.capbar .w{transition:color .12s}
+.subedit .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}
+.subedit label.lbl{display:block;font-size:12px;color:var(--ink2);margin:0 0 5px}
+.subedit .ctl{margin-bottom:13px}
+.subedit input[type=color]{width:100%;height:34px;padding:2px;border-radius:8px;
+  border:1px solid var(--line);background:var(--surface2);cursor:pointer}
+.subedit input[type=range]{width:100%}
+.subedit .val{float:right;color:var(--ink3);font-family:var(--mono);font-size:11.5px}
+/* template gallery */
+.tpl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:11px}
+.tpl{border:1.5px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;
+  background:var(--surface2);transition:border-color .12s,transform .05s}
+.tpl:hover{border-color:var(--line2)}
+.tpl.on{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 34%,transparent)}
+.tpl .mini{position:relative;aspect-ratio:16/9;background:linear-gradient(150deg,#1a1f2b,#0b0e15 70%);
+  display:grid;place-items:center;overflow:hidden}
+.tpl .mini .cb{max-width:88%;text-align:center;line-height:1.1;padding:.28em .5em;
+  font-weight:800;font-size:12px}
+.tpl .nm{padding:7px 9px;font-size:12px;color:var(--ink2);display:flex;
+  justify-content:space-between;align-items:center;gap:6px}
+.tpl .nm .x{color:var(--ink3);cursor:pointer;font-size:14px}
+.tpl .nm .x:hover{color:var(--bad)}
 
 /* ─── running banner ─────────────────────────────────────────────────────── */
 #banner{display:flex;align-items:center;gap:14px;margin-bottom:26px;padding:12px 16px;
@@ -331,6 +377,10 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
     <a class="nav" data-r="/voices">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
       Voices
+    </a>
+    <a class="nav" data-r="/subtitles">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 14h6M15 14h2M7 11h2M11 11h6"/></svg>
+      Subtitles
     </a>
     <a class="nav" data-r="/settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
@@ -696,6 +746,8 @@ async function viewProject(id) {
       el('label', { class: 'chk' },
         el('input', { type: 'checkbox', checked: true, onchange: e => opts.zoom = e.target.checked }),
         'Slow zoom on photos'),
+      el('button', { class: 'btn sm', onclick: () => go('/subtitles/' + id) },
+        'Subtitle style →'),
       el('div', { style: 'flex:1' }),
       el('span', { class: 'sub' }, 'Music'),
       el('select', { style: 'width:auto;min-width:140px', onchange: e => opts.music = e.target.value },
@@ -740,6 +792,10 @@ async function viewProject(id) {
   // publish ---------------------------------------------------------------
   // Title, description and tags for a finished video, per language. Generated
   // on demand from the narration, then freely editable and saved to the project.
+  // Hidden for now at Awais's request — flip SHOW_PUBLISH back to true to
+  // restore the whole panel; nothing else needs to change.
+  const SHOW_PUBLISH = false;
+  if (!SHOW_PUBLISH) return;
   const rendered = codes.filter(c => (st.languages[c] || {}).render);
   v.append(el('div', { class: 'sec mt' }, el('h2', {}, 'Publish'),
     el('span', { class: 'note' }, 'description and tags for each finished video')));
@@ -901,10 +957,15 @@ function paintRun() {
   for (const L of (j.log || [])) {
     const text = typeof L === 'string' ? L : L.text;
     const ts = typeof L === 'string' ? null : L.t;
+    // Status tint is decided on the line MINUS any (narration preview): a scene
+    // whose words happen to contain "warning" or "ready" is not a warning or a
+    // completion, it's just a voiced line. Strip the parenthetical first so the
+    // colour reflects what the pipeline did, never what the script says.
+    const probe = text.replace(/\([^)]*\)/g, '');
     let cls = '';
-    if (/^ERROR|Traceback|failed/i.test(text)) cls = 'e';
-    else if (/WARNING|⚠/i.test(text)) cls = 'w';
-    else if (/done|finished|ready/i.test(text)) cls = 'g';
+    if (/^ERROR|Traceback|failed/i.test(probe)) cls = 'e';
+    else if (/WARNING|⚠/i.test(probe)) cls = 'w';
+    else if (/\b(done|finished|ready)\b/i.test(probe)) cls = 'g';
     else if (/^\s{2,}/.test(text)) cls = 'd';
     t.append(el('div', { class: 'ln' },
       el('span', { class: 'ts' },
@@ -1150,6 +1211,213 @@ async function viewVoices(lang) {
     el('h3', {}, 'Adding a voice'), steps));
 }
 
+// ═══ subtitle designer ════════════════════════════════════════════════════
+// Colour + opacity -> css rgba(), for the live preview.
+function _hexA(hex, op) {
+  const s = (hex || '#000').replace('#', '');
+  const h = s.length === 3 ? s.split('').map(c => c + c).join('') : s;
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r||0},${g||0},${b||0},${op == null ? 1 : op})`;
+}
+function _sameStyle(a, b) {
+  return ['font', 'size', 'bold', 'text_color', 'active_color', 'bar', 'bar_color',
+    'bar_opacity', 'position', 'uppercase'].every(k => String(a[k]) === String(b[k]));
+}
+let _subTimer = null;
+function _stopSubTimer() { if (_subTimer) { clearInterval(_subTimer); _subTimer = null; } }
+
+async function viewSubtitles(pid) {
+  _stopSubTimer();
+  const d = await api('/api/captions' + (pid ? '?id=' + encodeURIComponent(pid) : ''));
+  const v = $('#view'); v.innerHTML = '';
+  let cur = Object.assign({}, pid ? d.effective_resolved : d.default_resolved);
+
+  const SAMPLE = (pid ? 'Und der wahre Dieb ihres Schlafs ist fast unsichtbar'
+    : 'The real thief of your sleep is almost never the alarm').split(' ');
+
+  v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
+    pid ? el('div', { class: 'back', onclick: () => go('/project/' + pid) }, '← ' + pid) : null,
+    el('h1', { style: 'margin-top:4px' }, 'Subtitles'),
+    el('p', {}, pid
+      ? 'The caption style for this project — it overrides your default.'
+      : 'Your default caption style. Every project uses this until it sets its own.'))));
+
+  // Alignment status: precise vs estimated, plainly stated.
+  const al = d.align || {};
+  v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
+    el('div', { class: 'row', style: 'gap:10px;align-items:center' },
+      el('span', { class: 'pill ' + (al.ok ? 'ok' : 'part') },
+        al.ok ? 'Precise timing' : 'Estimated timing'),
+      el('span', { class: 'sub' }, al.ok
+        ? `Each word is aligned to the voice (${al.engine} on ${al.device}).`
+        : (al.reason || 'Install the aligner for exact word timing.')))));
+
+  const stage = el('div', { class: 'substage' });
+  const capbar = el('div', { class: 'capbar' });
+  stage.append(capbar);
+  const gallery = el('div', { class: 'tpl-grid' });
+  const editor = el('div', { class: 'subedit' });
+
+  v.append(el('div', { class: 'subwrap' },
+    el('div', {},
+      el('div', { class: 'card', style: 'margin-bottom:14px' },
+        el('div', { class: 'seclabel', style: 'margin-bottom:10px' }, 'Live preview'), stage),
+      el('div', { class: 'card' },
+        el('div', { class: 'seclabel', style: 'margin-bottom:10px' }, 'Templates'), gallery)),
+    el('div', { class: 'card subedit' }, editor)));
+
+  // ---- live preview + karaoke animation ----
+  let hi = 0;
+  function paint() {
+    capbar.className = 'capbar pos-' + (cur.position === 'center' ? 'center' : 'bottom');
+    capbar.style.fontFamily = `"${cur.font}", Arial, sans-serif`;
+    capbar.style.fontWeight = cur.bold ? '800' : '600';
+    capbar.style.fontSize = Math.max(11, (cur.size || 64) * 0.315) + 'px';
+    capbar.style.borderRadius = ((cur.bar_radius || 0) * 0.5) + 'px';
+    capbar.style.background = cur.bar ? _hexA(cur.bar_color, cur.bar_opacity) : 'transparent';
+    capbar.style.textShadow = cur.outline
+      ? `0 0 ${Math.max(1, (cur.outline || 0) * 0.7)}px ${cur.outline_color},0 1px 2px rgba(0,0,0,.55)`
+      : 'none';
+    capbar.innerHTML = '';
+    SAMPLE.forEach((wd, i) => {
+      const on = cur.karaoke && i === hi;
+      capbar.append(el('span', {
+        class: 'w', style: 'color:' + (on ? cur.active_color : cur.text_color)
+          + (on && cur.active_scale > 1 ? ';display:inline-block;transform:scale(' + cur.active_scale + ')' : '')
+      }, cur.uppercase ? wd.toUpperCase() : wd));
+    });
+  }
+  _subTimer = setInterval(() => { hi = (hi + 1) % SAMPLE.length; paint(); }, 470);
+
+  // ---- template gallery (presets + saved custom) ----
+  function miniCss(s) {
+    return 'font-family:"' + s.font + '",Arial,sans-serif;'
+      + 'border-radius:' + ((s.bar_radius || 0) * 0.25) + 'px;'
+      + (s.bar ? 'background:' + _hexA(s.bar_color, s.bar_opacity) + ';' : '');
+  }
+  function paintGallery() {
+    const tpls = [
+      ...d.presets.map(p => ({ name: p.name, style: p, custom: false })),
+      ...Object.entries(d.custom || {}).map(([nm, st]) =>
+        ({ name: nm, style: Object.assign({}, d.default_resolved, st), custom: true })),
+    ];
+    gallery.innerHTML = '';
+    tpls.forEach(t => {
+      gallery.append(el('div', {
+        class: 'tpl' + (_sameStyle(cur, t.style) ? ' on' : ''),
+        onclick: () => { cur = Object.assign({}, t.style); syncInputs(); paint(); paintGallery(); }
+      },
+        el('div', { class: 'mini' }, el('div', { class: 'cb', style: miniCss(t.style) },
+          el('span', { style: 'color:' + t.style.text_color }, 'the '),
+          el('span', { style: 'color:' + t.style.active_color }, 'word'))),
+        el('div', { class: 'nm' }, el('span', {}, t.name),
+          t.custom ? el('span', {
+            class: 'x', title: 'Delete template',
+            onclick: async e => {
+              e.stopPropagation();
+              await api('/api/captions', { action: 'delete', name: t.name });
+              viewSubtitles(pid);
+            }
+          }, '×') : null)));
+    });
+  }
+
+  // ---- editor controls ----
+  const inputs = {};
+  const readouts = {};
+  const set = (k, val) => { cur[k] = val; paint(); paintGallery(); };
+  const ctl = (label, node) => el('div', { class: 'ctl' },
+    el('label', { class: 'lbl' }, label), node);
+  const colorIn = (k) => inputs[k] = el('input', { type: 'color', value: cur[k] || '#ffffff',
+    oninput: e => set(k, e.target.value) });
+  const rangeIn = (k, min, max, step, fmt) => {
+    const out = el('span', { class: 'val' }, fmt ? fmt(cur[k]) : cur[k]);
+    readouts[k] = { span: out, fmt };
+    const r = inputs[k] = el('input', { type: 'range', min, max, step, value: cur[k],
+      oninput: e => { const n = parseFloat(e.target.value); out.textContent = fmt ? fmt(n) : n; set(k, n); } });
+    return el('div', {}, out, r);
+  };
+  const checkIn = (k, label) => {
+    const c = inputs[k] = el('input', { type: 'checkbox', checked: !!cur[k],
+      onchange: e => set(k, e.target.checked) });
+    return el('label', { class: 'chk' }, c, label);
+  };
+  const selIn = (k, opts) => {
+    const s = inputs[k] = el('select', { onchange: e => set(k, e.target.value) },
+      opts.map(o => el('option', { value: o[0], selected: cur[k] === o[0] }, o[1])));
+    return s;
+  };
+
+  const FONTS = ['Arial', 'Arial Black', 'Impact', 'Verdana', 'Trebuchet MS',
+    'Georgia', 'Times New Roman', 'Courier New'];
+  editor.append(
+    el('div', { class: 'seclabel', style: 'margin-bottom:12px' }, 'Design'),
+    ctl('Font', selIn('font', FONTS.map(f => [f, f]))),
+    ctl('Size', rangeIn('size', 34, 110, 1, x => x + ' px')),
+    el('div', { class: 'row2' },
+      ctl('Text colour', colorIn('text_color')),
+      ctl('Active word', colorIn('active_color'))),
+    el('div', { class: 'row', style: 'gap:16px;margin-bottom:13px' },
+      checkIn('bold', 'Bold'), checkIn('uppercase', 'UPPERCASE'),
+      checkIn('karaoke', 'Word highlight')),
+    el('div', { class: 'seclabel', style: 'margin:6px 0 12px' }, 'Background bar'),
+    checkIn('bar', 'Show the bar behind the text'),
+    el('div', { style: 'height:10px' }),
+    el('div', { class: 'row2' },
+      ctl('Bar colour', colorIn('bar_color')),
+      ctl('Bar opacity', rangeIn('bar_opacity', 0, 1, 0.05, x => Math.round(x * 100) + '%'))),
+    ctl('Corner roundness', rangeIn('bar_radius', 0, 44, 1, x => x + ' px')),
+    el('div', { class: 'seclabel', style: 'margin:6px 0 12px' }, 'Layout'),
+    el('div', { class: 'row2' },
+      ctl('Position', selIn('position', [['bottom', 'Bottom'], ['center', 'Middle']])),
+      ctl('Words per line', rangeIn('max_words', 2, 8, 1))),
+    el('div', { class: 'row2' },
+      ctl('Outline', rangeIn('outline', 0, 8, 1, x => x + ' px')),
+      ctl('Active pop', rangeIn('active_scale', 1, 1.3, 0.02, x => x.toFixed(2) + '×'))),
+    ctl('Outline colour', colorIn('outline_color')));
+
+  function syncInputs() {
+    for (const [k, node] of Object.entries(inputs)) {
+      if (node.type === 'checkbox') node.checked = !!cur[k];
+      else node.value = cur[k];
+    }
+    for (const [k, r] of Object.entries(readouts)) {
+      r.span.textContent = r.fmt ? r.fmt(cur[k]) : cur[k];
+    }
+  }
+
+  // ---- save actions ----
+  const saveLabel = pid ? 'Save for this project' : 'Save as my default';
+  const actions = el('div', { class: 'row', style: 'gap:10px;margin-top:18px;flex-wrap:wrap' },
+    el('button', {
+      class: 'btn primary', onclick: async e => {
+        e.target.disabled = true;
+        const r = await api('/api/captions',
+          pid ? { scope: 'project', id: pid, style: cur } : { scope: 'global', style: cur });
+        e.target.disabled = false;
+        toast(r.error ? r.error : (pid ? 'Saved for this project.' : 'Saved as your default.'), !!r.error);
+      }
+    }, saveLabel),
+    el('button', {
+      class: 'btn', onclick: async () => {
+        const name = prompt('Name this template:');
+        if (!name) return;
+        const r = await api('/api/captions', { action: 'save', name: name.trim(), style: cur });
+        if (!r.error) { d.custom = r.custom; paintGallery(); toast('Template saved.'); }
+        else toast(r.error, true);
+      }
+    }, 'Save as template…'),
+    pid ? el('button', {
+      class: 'btn', onclick: async () => {
+        await api('/api/captions', { scope: 'project', id: pid, style: null });
+        toast('Using your default style.'); viewSubtitles(pid);
+      }
+    }, 'Use my default') : null);
+  editor.append(actions);
+
+  paint(); paintGallery();
+}
+
 // ═══ settings ═════════════════════════════════════════════════════════════
 async function viewSettings() {
   const v = $('#view'); v.innerHTML = '';
@@ -1196,6 +1464,15 @@ async function viewSettings() {
              + (c.vram_gb ? ' ' + c.vram_gb + ' GB' : '')
           : 'off — ranking by size only',
         c.ok ? '' : (c.reason || ''));
+    })(),
+    (() => {
+      const a = d.align || {};
+      // Neutral, like visual matching: without the aligner, captions still
+      // render word-by-word, just with estimated timing instead of exact.
+      return line(a.ok ? true : null, 'Caption timing',
+        a.ok ? 'precise · ' + a.engine + ' on ' + a.device
+          : 'estimated (no aligner)',
+        a.ok ? '' : (a.reason || ''));
     })()))));
 
   v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'API keys')));
@@ -1258,7 +1535,9 @@ async function viewReview(id) {
   const scoringOn = d.clip_on && scored.length > 0;
 
   const rejected = new Set();
-  const count = el('span', { class: 'sub' }, '0 marked for replacement');
+  const placeholders = items.filter(s => s.placeholder);
+  const count = el('span', { class: 'sub' },
+    'Click any weak or wrong picture to mark it for a swap');
 
   // Explain the scoring in plain words, and give an at-a-glance quality read.
   if (scoringOn) {
@@ -1280,34 +1559,55 @@ async function viewReview(id) {
           el('span', { class: 'sw', style: 'background:var(--surface3)' }), 'no score'))));
   }
 
+  const swapBtn = el('button', {
+    class: 'btn primary', disabled: true, onclick: async e => {
+      if (!rejected.size) return;
+      e.target.disabled = true;
+      const r = await api('/api/source', { id, redo: [...rejected] });
+      if (r.started) go('/activity'); else e.target.disabled = false;
+    }
+  }, 'Get new pictures');
+
+  // The button only means something once at least one picture is marked, so it
+  // stays disabled until then — no more "swap" with an empty selection.
+  const syncSwap = () => {
+    swapBtn.disabled = rejected.size === 0;
+    swapBtn.textContent = rejected.size
+      ? `Get new pictures (${rejected.size})` : 'Get new pictures';
+    count.textContent = rejected.size
+      ? `${rejected.size} marked for replacement`
+      : 'Click any weak or wrong picture to mark it for a swap';
+  };
+
   v.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, el('div', { class: 'row' },
     count, el('div', { style: 'flex:1' }),
+    placeholders.length ? el('span', { class: 'pill bad' },
+      `${placeholders.length} placeholder`) : null,
     weak.length ? el('span', { class: 'pill part' }, `${weak.length} weak`) : null,
-    d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no match`) : null,
-    el('button', {
-      class: 'btn primary', onclick: async e => {
-        if (!rejected.size) return toast('Nothing marked yet.');
-        e.target.disabled = true;
-        const r = await api('/api/source', { id, redo: [...rejected] });
-        if (r.started) go('/activity'); else e.target.disabled = false;
-      }
-    }, 'Get new pictures for these'))));
+    d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no picture`) : null,
+    swapBtn)));
 
   v.append(el('div', { class: 'thumbs' }, items.map(s => {
     const p = pct(s);
     const low = p != null && s.score < min;
+    const empty = !s.url;
     const t = el('div', {
-      class: 'thumb' + (s.hero ? ' hero' : '') + (low ? ' low' : ''),
+      class: 'thumb' + (s.hero ? ' hero' : '') + (low ? ' low' : '') + (empty ? ' empty' : ''),
       title: `S${s.n}${p != null ? ` · match ${p}%` : ''}`
+        + (empty ? '\nNO PICTURE — reword this scene\'s search line, then re-source'
+          : s.placeholder ? '\nPLACEHOLDER — generic fill, no real match found' : '')
         + `\nmatched against: "${s.query || ''}"\n${s.narration || ''}`,
       onclick: e => {
         const n = e.currentTarget;
         if (rejected.has(s.n)) { rejected.delete(s.n); n.classList.remove('rej'); }
         else { rejected.add(s.n); n.classList.add('rej'); }
-        count.textContent = `${rejected.size} marked for replacement`;
+        syncSwap();
       }
     }, el('span', { class: 'n' }, 'S' + s.n),
-      p != null ? el('span', { class: 'm ' + (low ? 'weak' : 'good') }, p + '%') : null);
+      p != null ? el('span', { class: 'm ' + (low ? 'weak' : 'good') }, p + '%') : null,
+      s.placeholder ? el('span', { class: 'ph' }, 'PLACEHOLDER') : null,
+      empty ? el('div', { class: 'nopic' }, 'NO PICTURE') : null,
+      el('div', { class: 'rep' }, el('span', {}, 'Replace')));
     if (s.url) t.append(s.video
       ? el('video', {
         src: s.url, muted: true, loop: true, playsinline: true, preload: 'metadata',
@@ -1481,6 +1781,7 @@ const ROUTES = [
   [/^\/activity\/?$/, viewRun],
   [/^\/new\/?$/, viewNew],
   [/^\/voices(?:\/([a-z-]+))?\/?$/, viewVoices],
+  [/^\/subtitles(?:\/([^/]+))?\/?$/, viewSubtitles],
   [/^\/settings\/?$/, viewSettings],
 ];
 
@@ -1493,6 +1794,7 @@ function go(path, replace) {
 
 async function route() {
   const path = location.pathname;
+  if (typeof _stopSubTimer === 'function') _stopSubTimer();   // kill the preview loop
   for (const [re, fn] of ROUTES) {
     const m = path.match(re);
     if (!m) continue;

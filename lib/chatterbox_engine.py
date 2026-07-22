@@ -420,7 +420,7 @@ def benchmark(lines: list[str], ref_wav: Path, lang: str = "en",
     load_s = time.time() - t0
     log(f"  model ready in {load_s:.0f}s on {device_in_use()}")
 
-    tmp = ROOT / "work" / "_bench"
+    tmp = ROOT / "cache" / "_bench"       # shared scratch, not a project folder
     tmp.mkdir(parents=True, exist_ok=True)
     times, chars = [], []
     for i, line in enumerate(lines, start=1):

@@ -6,10 +6,18 @@ config.json
 # ── Generated and downloadable ──────────────────────────────────────────────
 # All of this rebuilds itself from the sheets. Committing it would push the
 # repo into the gigabytes and GitHub rejects any single file over 100 MB.
+#
+# Each project now lives in projects/<id>/{sheets,work,out}/. The sheets are
+# the source of truth and ARE tracked (small text, they sync across machines);
+# work/ and out/ are the heavy, rebuildable parts and are ignored — both in the
+# new per-project location and in the old flat one, until every machine has run
+# the one-time migration.
 .venv/
 cache/
 work/
 out/
+projects/*/work/
+projects/*/out/
 __pycache__/
 *.pyc
 *.pyo

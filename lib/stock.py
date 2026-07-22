@@ -30,6 +30,14 @@ TIMEOUT = 30
 # than any kind of junk". Tunable in config.json as clip_min.
 DEFAULT_CLIP_MIN = 0.45
 
+# Last-resort queries when a scene's own ladder finds nothing at all. Free stock
+# always has neutral, atmospheric backgrounds, so these guarantee a scene can be
+# filled rather than left empty — an empty scene breaks the entire render. What
+# lands here is flagged as a placeholder so it stands out for a manual swap; it
+# is a safety net, not a first choice. Ordered calm → generic.
+_SAFETY_QUERIES = ["dark abstract background", "soft light background",
+                   "blurred bokeh lights", "calm abstract background"]
+
 # A small pool of raw image bytes, so walking the query ladder and stepping over
 # duplicates does not re-download the same candidate. Bounded so memory stays
 # flat over a 115-scene run.
@@ -390,7 +398,7 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     picks = picks or {}
     cfg = cfg or {}
     have = _SRC.usable({**cfg, "pexels_key": pexels_key, "pixabay_key": pixabay_key})
-    out, failed, weak = {}, [], []
+    out, failed, weak, placeholder = {}, [], [], []
     # Assets already assigned on a previous run count as used too, or a
     # re-source of three scenes would happily pick something on screen
     # elsewhere in the same video.
@@ -453,6 +461,36 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                 break                           # good enough — stop here
 
         if got is None:
+            # The scene's own ladder found nothing real. An empty scene breaks
+            # the whole render, so fall back to a neutral background that free
+            # stock always has — always via the general stock providers, never a
+            # specialised source that would have no such thing. Flag it as a
+            # placeholder so it is obvious this one still needs a real picture.
+            for gq in _SAFETY_QUERIES:
+                for bump in range(3):
+                    try:
+                        hit = fetch(gq, s.media, cache, pexels_key, pixabay_key,
+                                    bump, sources=None, cfg=cfg)
+                    except StockError:
+                        break                       # this generic query is dry too
+                    if hit["path"] in used:
+                        continue                    # already on screen; try next
+                    got = hit
+                    break
+                if got is not None:
+                    break
+
+            if got is not None:
+                got = dict(got)
+                got["placeholder"] = True           # a fill, not a real match
+                got["score"] = None
+                used.add(got["path"])
+                out[s.n] = got
+                placeholder.append(s.n)
+                log(f"  S{s.n:>3} PLACEHOLDER  neutral fill — no real match for "
+                    f"{(s.query or '')[:34]!r}")
+                continue
+
             failed.append((s.n, "; ".join(notes) or "no match"))
             log(f"  S{s.n:>3} FAILED  {notes[0] if notes else 'no match'}")
             continue
@@ -485,6 +523,12 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         log(f"\n{len(weak)} scene(s) matched only weakly: {weak}")
         log("Nothing free fit them well. Review & swap those, or reword their "
             "'ALT / search' line for a shot that exists.")
+
+    if placeholder:
+        log(f"\n{len(placeholder)} scene(s) had NO match and got a neutral "
+            f"placeholder: {placeholder}")
+        log("The video will build, but these carry a generic background. Reword "
+            "their 'ALT / search' line for a shot that exists, then re-source.")
     return out
 
 

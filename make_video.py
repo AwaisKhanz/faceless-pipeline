@@ -4,15 +4,17 @@
 automation and troubleshooting.
 
   python3 make_video.py studio                       # open the control panel
-  python3 make_video.py stock  --sheet sheets/video04_MASTER_production_sheet.md
-  python3 make_video.py voice  --sheet sheets/video04_MASTER_production_sheet.md --lang en
-  python3 make_video.py render --sheet sheets/video04_MASTER_production_sheet.md --lang en --captions
-  python3 make_video.py all    --sheet sheets/video04_MASTER_production_sheet.md --lang en --yes
+  python3 make_video.py stock  --sheet projects/video04/sheets/video04_MASTER_production_sheet.md
+  python3 make_video.py voice  --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang en
+  python3 make_video.py render --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang en --captions
+  python3 make_video.py all    --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang en --yes
 
-Non-English needs a translation file (it is found automatically if it sits in
-sheets/ and is named like video04_GERMAN_narration.md):
+Non-English needs a narration file (found automatically if it sits next to the
+master in projects/<id>/sheets/ and is named like video04_GERMAN_narration.md):
 
-  python3 make_video.py all --sheet sheets/video04_MASTER_production_sheet.md --lang de --yes
+  python3 make_video.py all --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang de --yes
+
+Tip: `make_video.py list` prints the exact --sheet path for every project.
 
 Everything is cached, so re-running is cheap and picks up where it stopped.
 """
@@ -166,7 +168,9 @@ def step_render(a) -> None:
                               captions=a.captions,
                               music=Path(a.music) if a.music else None,
                               music_level=a.music_level, zoom=not a.no_zoom,
-                              caption_size=a.caption_size, on_progress=bar)
+                              caption_size=a.caption_size,
+                              style=pl.effective_caption_style(pl.project_id(sheet)),
+                              on_progress=bar)
     except pl.CaptionsSkipped as cs:
         out, warn_caps = cs.video, cs.reason
     from lib import render as R
@@ -202,7 +206,8 @@ def step_generate(a) -> None:
     lang = (a.lang or (a.langs or "en").split(",")[0]).strip() or "en"
     text = src.read_text(encoding="utf-8")
     model = cfg.get("gemini_model", "gemini-2.5-flash")
-    master = ROOT / "sheets" / f"{pid}_MASTER_production_sheet.md"
+    sdir = pl.sheets_dir(pid)
+    master = sdir / f"{pid}_MASTER_production_sheet.md"
     if master.exists() and pl.master_lang(master) != lang:
         banner(f"Adding {pl.LANG_NAMES.get(lang, lang)} to '{pid}'")
         res = compose.add_language(master, lang, text, cfg["gemini_key"],
@@ -213,10 +218,11 @@ def step_generate(a) -> None:
         res = compose.generate({lang: text}, pid, cfg["gemini_key"],
                                model=model, on_progress=bar,
                                on_warn=lambda m: print(f"\n  ⚠ {m}"))
-    written = compose.write_files(res, ROOT / "sheets", overwrite=a.overwrite)
+    written = compose.write_files(res, sdir, overwrite=a.overwrite)
     banner("Written")
+    rel = sdir.relative_to(ROOT)
     for w in written:
-        print(f"  sheets/{w}")
+        print(f"  {rel}/{w}")
     print(f"\n  {len(res.scenes)} scenes · "
           f"{sum(1 for s in res.scenes if s.media == 'VIDEO')} video · "
           f"{sum(1 for s in res.scenes if s.hero)} hero")
@@ -267,6 +273,16 @@ def main() -> None:
     ap.add_argument("--no-zoom", action="store_true")
     ap.add_argument("--yes", action="store_true", help="'all' skips the approval pause")
     a = ap.parse_args()
+
+    # Fold any old flat sheets/work/out into projects/<pid>/… before doing
+    # anything. A no-op once migrated, so it's cheap to leave here for the CLI
+    # too — otherwise a --sheet path from before the move would 404.
+    try:
+        rep = pl.migrate_layout()
+        if rep["moved"]:
+            print(f"  reorganised {rep['moved']} file(s) into projects/")
+    except Exception:
+        pass
 
     if a.step == "studio":
         # Same thing Start.bat / Start.command do, without leaving the terminal.
@@ -398,11 +414,11 @@ def main() -> None:
 
         # Benchmark on real lines from a real sheet, not toy sentences.
         lines = []
-        projs = pl.find_projects(ROOT / "sheets")
+        projs = pl.find_projects()
         if projs:
             p0 = next((p for p in projs if p["scenes"] > 20), projs[0])
-            tr = pl.translation_for(ROOT / "sheets", p0["id"], a.lang)
-            sc = pl.load_scenes(ROOT / "sheets" / p0["sheet"], a.lang, tr)
+            tr = pl.translation_for(pl.sheets_dir(p0["id"]), p0["id"], a.lang)
+            sc = pl.load_scenes(Path(p0["sheet"]), a.lang, tr)
             mid = [s.narration for s in sc if 12 <= len(s.narration.split()) <= 30]
             lines = mid[:5] or [s.narration for s in sc[:5]]
             print(f"  lines:     5 real ones from {p0['id']} ({a.lang})")
@@ -593,7 +609,7 @@ def main() -> None:
                          ("gemini_key", "Gemini")):
             print(f"  {'ok ' if cfg.get(k) else '-- '}{label:<13}"
                   f"{'set' if cfg.get(k) else 'not set'}")
-        print(f"\n  projects: {len(pl.find_projects(ROOT / 'sheets'))} in sheets/")
+        print(f"\n  projects: {len(pl.find_projects())} in projects/")
         return
     if a.step == "models":
         from lib import gemini as gem
@@ -616,20 +632,20 @@ def main() -> None:
     if a.step == "list":
         # Was advertised in the help and the docs but never implemented — it
         # fell through to the --sheet check below and then raised KeyError.
-        projects = pl.find_projects(ROOT / "sheets")
+        projects = pl.find_projects()
         if not projects:
-            print("\n  No projects in sheets/.")
+            print("\n  No projects in projects/.")
             print("  Make one with:  make_video.py generate --script my.txt "
                   "--id video06")
             return
-        banner(f"{len(projects)} project(s) in sheets/")
+        banner(f"{len(projects)} project(s) in projects/")
         for p in projects:
             langs = ", ".join(
                 lg["code"] + ("" if lg["file"] or lg["code"] == "en" else "?")
                 for lg in p["languages"])
             print(f"\n  {p['id']}  ·  {p['scenes']} scenes  ·  {langs}")
             print(f"    {p['label']}")
-            print(f"    --sheet sheets/{p['sheet']}")
+            print(f"    --sheet {Path(p['sheet']).relative_to(ROOT)}")
         print("\n  A '?' marks a language with no translation file yet.")
         return
 

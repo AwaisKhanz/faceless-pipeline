@@ -143,14 +143,26 @@ def main() -> int:
     # `pip install transformers` by hand, and, crucially, it happens BEFORE the
     # CUDA torch is re-asserted below, so that re-assert is always the last word
     # on which torch wins.
-    say("\n  [3/6] installing the visual-matching libraries")
+    say("\n  [3/7] installing the visual-matching libraries")
     if pip("transformers", "pillow", quiet=True) != 0:
         say("     could not install them — visual matching stays off and sourcing")
         say("     ranks by size and aspect. Everything else is unaffected.")
 
+    # Word-by-word caption timing uses WhisperX (wav2vec2 forced alignment).
+    # Installed here, BEFORE the CUDA torch is re-asserted below, for the same
+    # reason as transformers: whatever torch whisperx drags in gets overwritten
+    # by the cu128 build at the next step, so the GPU build stays the last word.
+    # Entirely optional — if it fails, captions still render with estimated
+    # word timing instead of exact.
+    say("\n  [4/7] installing caption word-timing (WhisperX, optional)")
+    if pip("whisperx", quiet=True) != 0:
+        say("     could not install it — captions will use estimated word timing.")
+        say("     Everything else is unaffected; you can retry later with:")
+        say("       pip install whisperx")
+
     want_cuda = not a.cpu_only and platform.system() in ("Windows", "Linux")
     if want_cuda:
-        say("\n  [4/6] looking for an NVIDIA GPU")
+        say("\n  [5/7] looking for an NVIDIA GPU")
         if have_nvidia_gpu():
             say("     replacing Chatterbox's CPU-only PyTorch with the CUDA 12.8 build")
             say("     (pip will warn about a version conflict — that is expected")
@@ -166,14 +178,14 @@ def main() -> int:
             say("     https://www.nvidia.com/drivers , then run setup again.")
             want_cuda = False
     else:
-        say("\n  [4/6] skipping CUDA (no NVIDIA GPU expected on this machine)")
+        say("\n  [5/7] skipping CUDA (no NVIDIA GPU expected on this machine)")
 
     pip("setuptools<81", quiet=True)      # put it back if anything moved it
 
     # The `faceless` command. --no-deps is essential: this project declares no
     # dependencies precisely so pip cannot re-resolve the environment here and
     # undo the CUDA build we just installed.
-    say("\n  [5/6] installing the 'faceless' command")
+    say("\n  [6/7] installing the 'faceless' command")
     # This console entry point only appears on PATH once the .venv is activated,
     # which most people never do. The ./faceless launcher in the repo root needs
     # no activation and is the path we point people at, so a failure here is not
@@ -184,7 +196,7 @@ def main() -> int:
     else:
         say(f"     skipped — no harm done, the launcher still works:  {launch}")
 
-    say("\n  [6/6] checking the install actually works")
+    say("\n  [7/7] checking the install actually works")
     t = torch_report()
     if t.get("error") and not t.get("works"):
         say(f"     !! {t['error']}")
@@ -239,6 +251,18 @@ def main() -> int:
         else:
             say(f"     visual match   off — {cap['reason']} "
                 f"(sourcing will rank by size and aspect)")
+    except Exception:
+        pass
+
+    # Same idea for caption word timing.
+    try:
+        from lib import align as _A
+        acap = _A.capability({})
+        if acap["ok"]:
+            say(f"     caption timing precise — {acap['engine']} on {acap['device']} "
+                f"(aligns each word to the voice)")
+        else:
+            say(f"     caption timing estimated — {acap['reason']}")
     except Exception:
         pass
 

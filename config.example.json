@@ -19,5 +19,7 @@
   "_clip_model": "Optional override, e.g. openai/clip-vit-base-patch32. Empty lets it pick a model to fit the machine (large on a big GPU, base on a Mac, small on a plain laptop).",
   "clip_model": "",
   "_clip_min": "How good a match must be before sourcing stops searching (0-1). Lower accepts looser matches; higher searches harder and flags more scenes. 0.45 is a sensible start.",
-  "clip_min": 0.45
+  "clip_min": 0.45,
+  "_align": "Word-by-word caption timing. \"auto\" uses WhisperX forced alignment where it's installed (free, local, uses your GPU) so each spoken word lights up in time; \"off\" (or no install) falls back to estimated timing from word length. Captions still render either way.",
+  "align": "auto"
 }

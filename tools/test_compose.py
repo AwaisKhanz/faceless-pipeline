@@ -69,12 +69,15 @@ def main() -> int:
                           res.files["vid_GERMAN_narration.md"].splitlines()
                           if l.startswith("DE:"))).__len__() > 0)
 
-    d = Path(tempfile.mkdtemp())
-    for n, c in res.files.items():
-        (d / n).write_text(c, encoding="utf-8")
+    # Point the pipeline at a scratch ROOT so we exercise the real
+    # projects/<pid>/sheets/ layout, not the old flat one.
+    tmp = Path(tempfile.mkdtemp())
+    pl.ROOT, pl.PROJECTS = tmp, tmp / "projects"
+    d = pl.sheets_dir("vid")
+    compose.write_files(res, d)
 
     print("\n  read the project back:")
-    projs = pl.find_projects(d)
+    projs = pl.find_projects()
     check("one project", len(projs), 1)
     check("both languages listed", [l["code"] for l in projs[0]["languages"]], ["en", "de"])
     check("English reads from the master (no side file)",
@@ -86,19 +89,19 @@ def main() -> int:
     r2 = compose.add_language(d / "vid_MASTER_production_sheet.md", "es", ES, "k", "m")
     check("only the Spanish sheet is written", sorted(r2.files),
           ["vid_SPANISH_narration.md"])
-    for n, c in r2.files.items():
-        (d / n).write_text(c, encoding="utf-8")
+    compose.write_files(r2, d)
     check("project now has three languages",
-          [l["code"] for l in pl.find_projects(d)[0]["languages"]], ["en", "de", "es"])
+          [l["code"] for l in pl.find_projects()[0]["languages"]], ["en", "de", "es"])
 
     print("\n  a project can start in another language:")
-    d2 = Path(tempfile.mkdtemp())
+    tmp2 = Path(tempfile.mkdtemp())
+    pl.ROOT, pl.PROJECTS = tmp2, tmp2 / "projects"
     r3 = compose.generate({"de": DE, "es": ES}, "vx", "k", "m")
-    for n, c in r3.files.items():
-        (d2 / n).write_text(c, encoding="utf-8")
+    d2 = pl.sheets_dir("vx")
+    compose.write_files(r3, d2)
     check("German is the master", pl.master_lang(d2 / "vx_MASTER_production_sheet.md"), "de")
     check("languages are de + es (no phantom English)",
-          [l["code"] for l in pl.find_projects(d2)[0]["languages"]], ["de", "es"])
+          [l["code"] for l in pl.find_projects()[0]["languages"]], ["de", "es"])
 
     print("\n  a drifting split pads to keep numbering aligned:")
     G.segment_script = lambda en, s, nm, k, m, fb="": ["only one part"]

@@ -1,0 +1,23 @@
+{
+  "default": {
+    "name": "Reference (purple pop)",
+    "font": "Arial",
+    "size": 66,
+    "bold": true,
+    "uppercase": false,
+    "text_color": "#FFFFFF",
+    "active_color": "#B57BFF",
+    "outline_color": "#000000",
+    "outline": 3,
+    "shadow": 0,
+    "bar": true,
+    "bar_color": "#0A0A0F",
+    "bar_opacity": 0.55,
+    "bar_radius": 26,
+    "position": "bottom",
+    "margin_v": 130,
+    "max_words": 5,
+    "karaoke": true,
+    "active_scale": 1
+  }
+}

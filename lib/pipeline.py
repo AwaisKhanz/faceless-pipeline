@@ -10,10 +10,130 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import render, sheet as sheetlib, stock, tts
+from . import align, captions as cap, render, sheet as sheetlib, stock, tts
 from . import voices as V
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# One folder per project, everything for it inside:
+#   projects/<pid>/sheets/   the human-editable production sheets
+#   projects/<pid>/work/     picks, assets, per-language clips (intermediate)
+#   projects/<pid>/out/      the finished mp4s, srt, description, approval
+# Caches (stock footage, voice) stay shared at the top level, because they are
+# reused ACROSS projects and duplicating them per project would waste gigabytes.
+PROJECTS = ROOT / "projects"
+
+
+def project_dir(pid: str) -> Path:
+    return PROJECTS / pid
+
+
+def sheets_dir(pid: str) -> Path:
+    return PROJECTS / pid / "sheets"
+
+
+def _pid_of_dir(sheet: Path) -> Path:
+    """The project folder that owns a sheet, whatever depth it sits at.
+
+    New layout: projects/<pid>/sheets/<pid>_MASTER…  -> parent is 'sheets',
+    grandparent is the project folder. Written to survive either being handed
+    the master or a narration file.
+    """
+    return sheet.resolve().parent.parent
+
+
+def migrate_layout() -> dict:
+    """Move any old flat files into the projects/<pid>/{sheets,work,out} layout.
+
+    The pipeline used to scatter a project across three shared folders:
+        sheets/<pid>_*        work/<pid>_*        out/<pid>_*
+    This walks whatever is still sitting there and files it under one folder per
+    project. It is safe to run repeatedly: it only touches the legacy folders,
+    skips anything already migrated, and never crosses a project boundary. Caches
+    (cache/stock, cache/voice) are shared and deliberately left alone.
+
+    Returns a small report so callers can log what moved.
+    """
+    moved, projects = 0, set()
+    old_sheets, old_work, old_out = ROOT / "sheets", ROOT / "work", ROOT / "out"
+
+    # Learn the real project ids from the master sheets first — a pid may itself
+    # contain underscores (it comes from the video title), so we can't just split
+    # a filename on "_". We match work/out files against the longest known pid.
+    known_pids: list[str] = []
+    if old_sheets.is_dir():
+        for m in old_sheets.glob("*_MASTER_production_sheet.md"):
+            known_pids.append(project_id(m))
+    known_pids.sort(key=len, reverse=True)          # longest prefix wins
+
+    def _pid_from_name(name: str) -> str | None:
+        for pid in known_pids:
+            if name == pid or name.startswith(pid + "_"):
+                return pid
+        # No master seen (orphan file): fall back to the leading token.
+        return name.split("_", 1)[0] if "_" in name else None
+
+    # sheets/<pid>_*.md  ->  projects/<pid>/sheets/
+    if old_sheets.is_dir():
+        for f in old_sheets.glob("*.md"):
+            pid = _pid_from_name(f.name)
+            if not pid:
+                continue
+            dst = sheets_dir(pid)
+            dst.mkdir(parents=True, exist_ok=True)
+            target = dst / f.name
+            if not target.exists():
+                shutil.move(str(f), str(target))
+                moved += 1
+            projects.add(pid)
+
+    # work/<pid>_*  ->  projects/<pid>/work/  (renamed to drop the pid prefix)
+    if old_work.is_dir():
+        for f in sorted(old_work.iterdir()):
+            pid = _pid_from_name(f.name)
+            if not pid:
+                continue
+            rest = f.name[len(pid) + 1:]            # strip "<pid>_"
+            # picks.json / assets.json keep their canonical names; per-language
+            # working dirs "<pid>_<lang>" become just "<lang>".
+            dstdir = project_dir(pid) / "work"
+            dstdir.mkdir(parents=True, exist_ok=True)
+            target = dstdir / rest
+            if not target.exists():
+                shutil.move(str(f), str(target))
+                moved += 1
+            projects.add(pid)
+
+    # out/<pid>_*  ->  projects/<pid>/out/  (mp4/srt keep the pid; approval and
+    # meta lose it so they read cleanly inside the folder)
+    if old_out.is_dir():
+        for f in sorted(old_out.iterdir()):
+            pid = _pid_from_name(f.name)
+            if not pid:
+                continue
+            dstdir = project_dir(pid) / "out"
+            dstdir.mkdir(parents=True, exist_ok=True)
+            rest = f.name[len(pid) + 1:]
+            if rest == "approval.html" or f.name.endswith("_approval.html"):
+                newname = "approval.html"
+            else:
+                newname = f.name                    # keep pid on mp4/srt/meta
+            target = dstdir / newname
+            if not target.exists():
+                shutil.move(str(f), str(target))
+                moved += 1
+            projects.add(pid)
+
+    # Retire the empty legacy folders so we don't keep scanning them.
+    for d in (old_sheets, old_work, old_out):
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass
+
+    return {"moved": moved, "projects": sorted(projects)}
+
 
 TAIL = 1.0        # seconds of held picture after each narration line
 DISSOLVE = 0.6    # crossfade length between scenes
@@ -80,32 +200,48 @@ def project_id(sheet: Path) -> str:
             .replace("_MASTER", "").replace("_master", ""))
 
 
-def find_projects(sheets_dir: Path) -> list[dict]:
-    """Every master sheet in sheets/, with the translations sitting next to it."""
+def find_project(pid: str) -> dict | None:
+    """The one project with this id, or None. `proj["sheet"]` is a full path."""
+    return next((p for p in find_projects() if p["id"] == pid), None)
+
+
+def out_dir(pid: str) -> Path:
+    """Where a project's finished files live: projects/<pid>/out/."""
+    return PROJECTS / pid / "out"
+
+
+def find_projects(_root: Path | None = None) -> list[dict]:
+    """Every project under projects/, each master with its narration sheets.
+
+    Scans projects/<pid>/sheets/. The old signature took a sheets directory;
+    callers pass nothing now, but an argument is still accepted and ignored so
+    nothing breaks mid-upgrade. `sheet` is the full path to the master, and
+    `dir` is the project folder.
+    """
+    root = PROJECTS
     out = []
-    for f in sorted(sheets_dir.glob("*.md")):
-        txt = f.read_text(encoding="utf-8", errors="ignore")
-        if "- Narration:" not in txt:
-            continue  # a translation file, not a master sheet
-        pid = project_id(f)
-        mlang = master_lang(f)
-        # The structure language reads from the master; it has no side file.
-        langs = [{"code": mlang, "name": LANG_NAMES.get(mlang, mlang), "file": None}]
-        narr = sorted(sheets_dir.glob(f"{pid}_*_narration.md"))
-        for code, words in LANG_FILE_WORDS.items():
-            if code == mlang:
-                continue
-            hit = next((nf for nf in narr
-                        if words[0] in nf.stem.upper()), None)
-            if hit:
-                langs.append({"code": code, "name": LANG_NAMES.get(code, code),
-                              "file": hit.name})
-        try:
-            n = len(sheetlib.parse_master(f))
-        except SystemExit:
-            n = 0
-        out.append({"id": pid, "sheet": f.name, "label": pretty_name(f),
-                    "scenes": n, "languages": langs})
+    if not root.exists():
+        return out
+    for sd in sorted(root.glob("*/sheets")):
+        for f in sorted(sd.glob("*_MASTER_production_sheet.md")):
+            pid = sd.parent.name
+            mlang = master_lang(f)
+            # The structure language reads from the master; it has no side file.
+            langs = [{"code": mlang, "name": LANG_NAMES.get(mlang, mlang), "file": None}]
+            narr = sorted(sd.glob(f"{pid}_*_narration.md"))
+            for code, words in LANG_FILE_WORDS.items():
+                if code == mlang:
+                    continue
+                hit = next((nf for nf in narr if words[0] in nf.stem.upper()), None)
+                if hit:
+                    langs.append({"code": code, "name": LANG_NAMES.get(code, code),
+                                  "file": hit.name})
+            try:
+                n = len(sheetlib.parse_master(f))
+            except SystemExit:
+                n = 0
+            out.append({"id": pid, "sheet": str(f), "dir": str(sd.parent),
+                        "label": pretty_name(f), "scenes": n, "languages": langs})
     return out
 
 
@@ -213,11 +349,14 @@ def deletable(sheet: Path, langs: list[dict]) -> dict:
     # into a bad afternoon.
     sheet = Path(sheet).resolve()
     pid = project_id(sheet)
+    proj = _pid_of_dir(sheet)
     out: dict[str, list[Path]] = {"outputs": [], "voice": [], "visuals": [],
                                   "work": [], "sheets": []}
 
-    for f in (ROOT / "out").glob(f"{pid}_*"):
-        out["outputs"].append(f)
+    outd = proj / "out"
+    if outd.exists():
+        for f in outd.glob("*"):
+            out["outputs"].append(f)
 
     shared = paths_for(sheet, "en")
     for key in ("picks", "assets"):
@@ -290,6 +429,16 @@ def delete_project(sheet: Path, langs: list[dict], what: list[str]) -> dict:
                 removed.append(f.name)
             except OSError as e:
                 refused.append(f"{f.name}: {e}")
+    # If the whole project was cleared out, drop its now-empty folder so the
+    # projects/ directory doesn't accumulate hollow shells.
+    proj = _pid_of_dir(sheet)
+    if _inside(proj, PROJECTS) and proj.exists():
+        for d in (proj / "sheets", proj / "work", proj / "out", proj):
+            try:
+                if d.is_dir() and not any(d.iterdir()):
+                    d.rmdir()
+            except OSError:
+                pass
     return {"removed": removed, "count": len(removed),
             "freed_mb": round(freed / 1e6, 1), "refused": refused}
 
@@ -321,16 +470,19 @@ def translation_for(sheets_dir: Path, pid: str, lang: str) -> Path | None:
 
 def paths_for(sheet: Path, lang: str) -> dict:
     pid = project_id(sheet)
-    base = ROOT / "work" / f"{pid}_{lang}"
+    proj = _pid_of_dir(sheet)                    # projects/<pid>/
+    work = proj / "work"
+    outd = proj / "out"
+    base = work / lang                           # per-language working dir
     return {
-        "id": pid, "base": base, "clips": base / "clips", "tmp": base / "tmp",
+        "id": pid, "dir": proj, "base": base, "clips": base / "clips", "tmp": base / "tmp",
         "stockcache": ROOT / "cache" / "stock", "voicecache": ROOT / "cache" / "voice",
-        "picks": ROOT / "work" / f"{pid}_picks.json",       # shared by all languages
-        "assets": ROOT / "work" / f"{pid}_assets.json",     # shared by all languages
-        "approval": ROOT / "out" / f"{pid}_approval.html",
-        "out": ROOT / "out" / f"{pid}_{lang}.mp4",
-        "srt": ROOT / "out" / f"{pid}_{lang}.srt",
-        "meta": ROOT / "out" / f"{pid}_{lang}_meta.json",   # title/desc/tags
+        "picks": work / "picks.json",            # shared by all languages
+        "assets": work / "assets.json",          # shared by all languages
+        "approval": outd / "approval.html",
+        "out": outd / f"{pid}_{lang}.mp4",
+        "srt": outd / f"{pid}_{lang}.srt",
+        "meta": outd / f"{pid}_{lang}_meta.json",     # title/desc/tags
         "ass": base / "captions.ass",
     }
 
@@ -359,6 +511,92 @@ def load_config() -> dict:
 
 def load_scenes(sheet: Path, lang: str, translation: Path | None):
     return sheetlib.load(sheet, lang, translation)
+
+
+# --------------------------------------------------------- caption styling
+# The look of the burned-in subtitles. Three levels: built-in presets (in
+# lib/captions.py), the user's saved default and custom templates (captions.json,
+# shared across machines), and a per-project override (projects/<pid>/subtitle.json).
+
+CAPTIONS_FILE = ROOT / "captions.json"
+
+
+def load_captions_config() -> dict:
+    if CAPTIONS_FILE.exists():
+        try:
+            return json.loads(CAPTIONS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def save_captions_config(data: dict) -> None:
+    CAPTIONS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+
+
+def global_caption_style():
+    """The default style for every video, until a project overrides it."""
+    return load_captions_config().get("default") or cap.DEFAULT_PRESET
+
+
+def set_global_caption_style(spec) -> None:
+    data = load_captions_config()
+    data["default"] = spec
+    save_captions_config(data)
+
+
+def custom_caption_styles() -> dict:
+    """The user's own saved templates, name -> style dict."""
+    return load_captions_config().get("custom") or {}
+
+
+def save_custom_caption_style(name: str, spec: dict) -> None:
+    data = load_captions_config()
+    data.setdefault("custom", {})[name] = spec
+    save_captions_config(data)
+
+
+def delete_custom_caption_style(name: str) -> None:
+    data = load_captions_config()
+    if name in (data.get("custom") or {}):
+        del data["custom"][name]
+        save_captions_config(data)
+
+
+def _project_style_path(pid: str) -> Path:
+    return project_dir(pid) / "subtitle.json"
+
+
+def load_project_style(pid: str):
+    f = _project_style_path(pid)
+    if f.exists():
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def save_project_style(pid: str, spec) -> None:
+    """Set (or clear, with None) a project's own caption style."""
+    f = _project_style_path(pid)
+    if spec in (None, "", "default"):
+        if f.exists():
+            f.unlink()
+        return
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(spec, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def effective_caption_style(pid: str | None = None):
+    """The spec render should use: a project override if set, else the global
+    default. Returned as a preset id or a style dict — render resolves it."""
+    if pid:
+        ov = load_project_style(pid)
+        if ov not in (None, "", "default"):
+            return ov
+    return global_caption_style()
 
 
 # --------------------------------------------------------- publish metadata
@@ -426,7 +664,8 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
     """Fetch a visual per scene. Visuals are language-independent, so this is
     done once per project and reused by every language."""
     p = paths_for(sheet, "en")
-    p["base"].parent.mkdir(parents=True, exist_ok=True)
+    p["base"].parent.mkdir(parents=True, exist_ok=True)   # work/
+    p["approval"].parent.mkdir(parents=True, exist_ok=True)  # out/
 
     picks: dict[int, int] = {}
     if p["picks"].exists():
@@ -473,12 +712,52 @@ def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
     return tts.synth(scenes, lang, p["voicecache"], voice=voice, log=log)
 
 
+def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n):
+    """Per-scene word timings, in ABSOLUTE video time, for the karaoke captions.
+
+    Each scene is aligned against its own audio and cached in the language's work
+    folder keyed by the exact narration text, so a caption-only re-render (or a
+    second language sharing nothing) never realigns a scene whose words haven't
+    changed. Returns one word-list per scene: [{word, start, end}, ...].
+    """
+    cfg = load_config()
+    cache_f = p["base"] / "words.json"
+    cache: dict = {}
+    if cache_f.exists():
+        try:
+            cache = json.loads(cache_f.read_text(encoding="utf-8"))
+        except Exception:
+            cache = {}
+
+    out, changed = [], False
+    for i, s in enumerate(scenes):
+        rec = cache.get(str(s.n))
+        if not (rec and rec.get("text") == s.narration and rec.get("words")):
+            words = align.align_words(
+                voices[i], s.narration, lang, cfg=cfg, dur=vdurs[i],
+                log=lambda m: on_progress(n + 3, n + 4, m.strip()))
+            cache[str(s.n)] = rec = {"text": s.narration, "words": words}
+            changed = True
+        # Relative -> absolute, so every scene's words sit at the right moment in
+        # the finished audio.
+        out.append([{"word": w["word"],
+                     "start": round((w.get("start") or 0.0) + starts[i], 3),
+                     "end": round((w.get("end") or 0.0) + starts[i], 3)}
+                    for w in rec["words"]])
+
+    if changed:
+        cache_f.parent.mkdir(parents=True, exist_ok=True)
+        cache_f.write_text(json.dumps(cache, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
+    return out
+
+
 def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Path,
                  lang: str, captions: bool = True, music: Path | None = None,
                  music_level: float = 0.20, zoom: bool = True,
-                 caption_size: int = 58, on_progress=noop) -> Path:
+                 caption_size: int = 58, style=None, on_progress=noop) -> Path:
     p = paths_for(sheet, lang)
-    for d in (p["clips"], p["tmp"], ROOT / "out"):
+    for d in (p["clips"], p["tmp"], p["out"].parent):
         d.mkdir(parents=True, exist_ok=True)
 
     missing = [s.n for s in scenes if s.n not in assets]
@@ -541,12 +820,24 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     # caption failure must never throw it away: save the film, report the problem,
     # and leave the .srt to upload alongside.
     if captions:
+        st = cap.resolve_style(style)
+        # Legacy callers passed only a pixel size; honour it when no style chosen.
+        if style is None and caption_size:
+            st = st.merged(size=caption_size)
+
+        # Word-by-word timing. Aligned once per scene against its own audio and
+        # cached, so a caption-only re-render doesn't realign 100+ clips.
+        on_progress(n + 3, n + 4, "timing the words")
+        scene_words = _aligned_words(scenes, voices, vdurs, starts, lang, p,
+                                     on_progress, n)
+        groups = cap.groups_from_scenes(scene_words, st)
+        p["ass"].write_text(cap.build_ass(groups, st), encoding="utf-8")
+
         on_progress(n + 3, n + 4, "burning captions")
-        render.write_ass(texts, starts, vdurs, p["ass"], size=caption_size)
         try:
             method = render.burn_captions(silent, p["ass"], p["out"], texts=texts,
                                           starts=starts, durs=vdurs,
-                                          size=caption_size)
+                                          size=st.size)
             if method == "drawtext":
                 on_progress(n + 4, n + 4,
                             "done (captions burned without libass - plainer style)")
