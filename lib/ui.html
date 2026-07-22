@@ -130,20 +130,39 @@ input:focus,select:focus,textarea:focus{
 label.chk{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;color:var(--ink2)}
 label.chk input{accent-color:var(--accent);width:15px;height:15px}
 input[type=range]{accent-color:var(--accent)}
-/* multi-select toggle chips (language picker) */
-.chips{display:flex;gap:8px;flex-wrap:wrap}
-.chip{display:inline-flex;align-items:center;gap:7px;padding:8px 13px 8px 11px;
-  border-radius:99px;border:1px solid var(--line);background:var(--surface2);
-  color:var(--ink2);cursor:pointer;font:550 13.5px var(--ui);transition:.12s;
-  -webkit-user-select:none;user-select:none;white-space:nowrap}
-.chip:hover{border-color:var(--line2);color:var(--ink)}
-.chip .box{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line2);
-  display:grid;place-items:center;flex:none;transition:.12s}
-.chip .box .tk{font-size:11px;font-weight:800;line-height:1;opacity:0;transform:scale(.6);transition:.12s}
-.chip.on{background:color-mix(in srgb,var(--accent) 15%,var(--surface));
-  border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--ink)}
-.chip.on .box{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.chip.on .box .tk{opacity:1;transform:scale(1)}
+/* ─── dropdown multi-select ──────────────────────────────────────────────── */
+.msel{position:relative}
+.msel .control{display:flex;align-items:center;gap:8px;min-height:44px;
+  padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);cursor:pointer}
+.msel.open .control,.msel .control:focus-within{
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--line));
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 16%,transparent)}
+.msel .tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center;flex:1;min-width:0}
+.msel .ph{color:var(--ink3);font-size:14px}
+.msel .tag{display:inline-flex;align-items:center;gap:6px;padding:3px 7px 3px 9px;
+  border-radius:7px;font-size:13px;font-weight:500;
+  color:var(--accent);background:color-mix(in srgb,var(--accent) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--accent) 34%,var(--line))}
+.msel .tag .x{cursor:pointer;opacity:.75;font-size:15px;line-height:1}
+.msel .tag .x:hover{opacity:1}
+.msel .clr{color:var(--ink3);cursor:pointer;font-size:16px;line-height:1;padding:0 2px}
+.msel .clr:hover{color:var(--ink)}
+.msel .caret{width:8px;height:8px;flex:none;margin:-3px 4px 0 0;
+  border-right:2px solid var(--ink3);border-bottom:2px solid var(--ink3);
+  transform:rotate(45deg);transition:.15s}
+.msel.open .caret{transform:rotate(-135deg);margin-top:3px}
+.msel .menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:40;
+  background:var(--surface);border:1px solid var(--line);border-radius:11px;
+  box-shadow:var(--shadow);padding:6px;max-height:300px;overflow:auto}
+.msel .opt{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;
+  cursor:pointer;font-size:14px;color:var(--ink)}
+.msel .opt:hover{background:var(--surface2)}
+.msel .opt .box{width:18px;height:18px;border-radius:5px;border:1.6px solid var(--line2);
+  display:grid;place-items:center;flex:none;font-size:12px;font-weight:800;
+  color:var(--accent-ink);transition:.1s}
+.msel .opt.on .box{background:var(--accent);border-color:var(--accent)}
+.msel .opt .box .tk{opacity:0}
+.msel .opt.on .box .tk{opacity:1}
 
 /* ─── cards ──────────────────────────────────────────────────────────────── */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px}
@@ -348,6 +367,68 @@ const el = (t, a = {}, ...kids) => {
   }
   return n;
 };
+
+/** A dropdown multi-select: a box that shows the chosen items as removable
+ *  tags and opens a checklist. Reusable — pass options, a starting selection,
+ *  and onChange. Returns { root, get } where get() is the current value array. */
+function multiSelect({ options, placeholder = 'Select…', value = [], onChange = () => { } }) {
+  const sel = new Set(value);
+  let open = false;
+  const tags = el('div', { class: 'tags' });
+  const caret = el('span', { class: 'caret' });
+  const menu = el('div', { class: 'menu', style: 'display:none' });
+  const control = el('div', { class: 'control' });
+  const root = el('div', { class: 'msel' }, control, menu);
+
+  const fire = () => { paintControl(); paintMenu(); onChange([...sel]); };
+
+  function paintControl() {
+    tags.innerHTML = '';
+    if (!sel.size) {
+      tags.append(el('span', { class: 'ph' }, placeholder));
+    } else {
+      options.filter(o => sel.has(o.value)).forEach(o =>
+        tags.append(el('span', { class: 'tag' }, o.label,
+          el('span', {
+            class: 'x', title: 'Remove',
+            onclick: e => { e.stopPropagation(); sel.delete(o.value); fire(); }
+          }, '×'))));
+    }
+    control.innerHTML = '';
+    // Native append() renders a null argument as the text "null" — filter it.
+    control.append(...[tags,
+      sel.size ? el('span', {
+        class: 'clr', title: 'Clear all',
+        onclick: e => { e.stopPropagation(); sel.clear(); fire(); }
+      }, '×') : null,
+      caret].filter(Boolean));
+    control.onclick = () => setOpen(!open);
+  }
+
+  function paintMenu() {
+    menu.innerHTML = '';
+    options.forEach(o => {
+      const on = sel.has(o.value);
+      menu.append(el('div', {
+        class: 'opt' + (on ? ' on' : ''),
+        onclick: () => { on ? sel.delete(o.value) : sel.add(o.value); fire(); }
+      }, el('span', { class: 'box' }, el('span', { class: 'tk' }, '✓')), o.label));
+    });
+  }
+
+  const onDoc = e => { if (!root.contains(e.target)) setOpen(false); };
+  function setOpen(v) {
+    open = v;
+    root.classList.toggle('open', v);
+    menu.style.display = v ? '' : 'none';
+    if (v) setTimeout(() => document.addEventListener('click', onDoc), 0);
+    else document.removeEventListener('click', onDoc);
+  }
+
+  paintControl(); paintMenu();
+  return { root, get: () => [...sel] };
+}
+
 async function api(ep, body) {
   const r = await fetch(ep, body ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -847,13 +928,18 @@ function viewNew() {
       + 'The first language defines the scenes and the pictures; the rest reuse them.'))));
 
   const id = el('input', { type: 'text', placeholder: 'video06' });
-  const sel = { en: true, de: true, es: true };
-  const boxes = {};                       // lang -> textarea (kept across toggles)
+  const sel = new Set();                   // nothing pre-selected — pick your own
+  const boxes = {};                        // lang -> textarea (kept across toggles)
   const scriptsWrap = el('div', {});
 
   const paint = () => {
     scriptsWrap.innerHTML = '';
-    const chosen = LANG_ORDER.filter(c => sel[c]);
+    const chosen = LANG_ORDER.filter(c => sel.has(c));
+    if (!chosen.length) {
+      scriptsWrap.append(el('div', { class: 'sub', style: 'padding:6px 2px' },
+        'Choose a language above, then paste its script.'));
+      return;
+    }
     chosen.forEach((c, i) => {
       if (!boxes[c]) boxes[c] = el('textarea', {
         rows: 9, placeholder: `Paste the ${LANG_NAMES[c]} script here…`, style: MONO });
@@ -865,25 +951,17 @@ function viewNew() {
     });
   };
 
-  // A proper multi-select: tap a language to include it. All pre-selected.
-  const chips = el('div', { class: 'chips' }, LANG_ORDER.map(c => {
-    const chip = el('div', {
-      class: 'chip on', role: 'button', 'aria-pressed': 'true',
-      onclick: () => {
-        sel[c] = !sel[c];
-        chip.classList.toggle('on', sel[c]);
-        chip.setAttribute('aria-pressed', String(sel[c]));
-        paint();
-      }
-    }, el('span', { class: 'box' }, el('span', { class: 'tk' }, '✓')), LANG_NAMES[c]);
-    return chip;
-  }));
+  const picker = multiSelect({
+    options: LANG_ORDER.map(c => ({ value: c, label: LANG_NAMES[c] })),
+    placeholder: 'Select languages…',
+    onChange: chosen => { sel.clear(); chosen.forEach(c => sel.add(c)); paint(); }
+  });
 
   v.append(el('div', { class: 'card' },
     el('div', { class: 'grid2' },
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
-      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:8px' }, 'Languages'),
-        chips)),
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Languages'),
+        picker.root)),
     el('div', { class: 'hr' }),
     scriptsWrap,
     el('div', { class: 'row', style: 'margin-top:8px' },
@@ -891,12 +969,12 @@ function viewNew() {
         class: 'btn primary', onclick: async e => {
           if (!id.value.trim()) return toast('Give it a name first.', true);
           const scripts = {};
-          LANG_ORDER.filter(c => sel[c]).forEach(c => {
+          LANG_ORDER.filter(c => sel.has(c)).forEach(c => {
             const t = (boxes[c] && boxes[c].value || '').trim();
             if (t) scripts[c] = t;
           });
           if (!Object.keys(scripts).length)
-            return toast('Paste a script for at least one language.', true);
+            return toast('Pick a language and paste its script first.', true);
           e.target.disabled = true;
           const r = await api('/api/generate', { id: id.value.trim(), scripts });
           if (r.started) go('/activity'); else e.target.disabled = false;
