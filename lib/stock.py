@@ -164,6 +164,23 @@ _IDEAL_AR = 16 / 9
 POOL = 8
 
 
+def _score_pool(cfg: dict | None) -> int:
+    """How many pooled candidates to actually CLIP-score.
+
+    Scoring means fetching each candidate's thumbnail, so this trades accuracy
+    for time and is sized to the machine: a big net on a real GPU, a modest one
+    on a laptop CPU. With scoring off it doesn't matter — the caller keeps the
+    technical order — so POOL is fine.
+    """
+    try:
+        cap = vision.capability(cfg or {})
+        if not cap.get("ok"):
+            return POOL
+        return {"cuda": 30, "mps": 18}.get(cap.get("device"), 12)
+    except Exception:
+        return POOL
+
+
 def _score(hit: dict) -> float:
     """Rank a candidate by how well it fits a 16:9 1080p frame.
 
@@ -223,27 +240,38 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
 
     results: list[dict] = []
     errors: list[str] = []
+    seen: set[str] = set()
 
-    # `sources` is the routed order for this scene. Without it we behave
-    # exactly as before, so every existing caller is unaffected.
+    # `sources` is the routed order for this scene. EVERY routed source is
+    # queried and the results pooled together — not just the first that answers —
+    # so CLIP chooses the best picture across all of them instead of the best of
+    # one site. Each source is a single request and only the winner is
+    # downloaded, so a wide net stays cheap.
     order = sources or ["pexels", "pixabay"]
-    want = index + POOL          # a pool to rank, not just enough to index
-    for name in order:
-        if len(results) > index:
-            break
+    want = index + POOL          # depth per source; grows when a swap bumps index
+    for name in order:           # route() already caps how many sources this is
         try:
             if name == "pexels" and pexels_key:
-                results += _pexels(query, media, pexels_key, want)
+                got = _pexels(query, media, pexels_key, want)
             elif name == "pixabay" and pixabay_key:
-                results += _pixabay(query, media, pixabay_key, want)
+                got = _pixabay(query, media, pixabay_key, want)
             elif name in _SRC.REGISTRY:
-                results += [
+                got = [
                     {"url": h.url, "ext": h.ext, "credit": h.credit,
                      "page": h.page, "src": h.src, "license": h.license,
-                     "thumb": "", "width": h.width, "height": h.height}
+                     "thumb": getattr(h, "thumb", "") or "",
+                     "width": h.width, "height": h.height}
                     for h in _SRC.search(name, query, media, want, cfg or {})]
+            else:
+                got = []
         except Exception as e:
             errors.append(f"{name}: {e}")
+            got = []
+        for h in got:
+            u = h.get("url")
+            if u and u not in seen:           # dedupe: the same file appears on
+                seen.add(u)                   # more than one aggregator
+                results.append(h)
 
     if len(results) <= index:
         raise StockError(
@@ -251,11 +279,11 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
             + ("; ".join(errors) if errors else "Try a simpler, more literal query.")
         )
 
-    # Rank the pool so index 0 is the best-fitting candidate, not the first one
-    # the API happened to return. Stable sort keeps the routed order for ties,
-    # so a source that reports no dimensions is never pushed below one that does
-    # purely for being un-measured. Bumping the index (a swap on the review
-    # sheet) then walks down to the next-best.
+    # Rank the combined pool so index 0 is the best-fitting candidate, not the
+    # first one an API happened to return. Stable sort keeps the routed order for
+    # ties, so a source that reports no dimensions is never pushed below one that
+    # does purely for being un-measured. Bumping the index (a swap on the review
+    # sheet) walks down to the next-best.
     results.sort(key=_score, reverse=True)
 
     # Then, if this machine can run it, re-rank by what the picture is actually
@@ -263,10 +291,12 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     # technical score is a small tiebreak between equally-relevant candidates.
     # rel stays None when scoring is unavailable or a candidate could not be
     # scored, and those fall to the bottom in technical order — never above a
-    # candidate we actually verified.
-    rel = _relevance(results[:POOL], query, media, cfg)
+    # candidate we actually verified. The pool that gets scored is sized to the
+    # machine, so a GPU compares many more candidates than a laptop.
+    pool_n = _score_pool(cfg)
+    rel = _relevance(results[:pool_n], query, media, cfg)
     if rel:
-        for h in results[:POOL]:
+        for h in results[:pool_n]:
             h["rel"] = rel.get(h["url"])
 
         def _combined(h):
@@ -276,7 +306,7 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
                 return -1.0 + tech * 0.001            # unverified: below all scored
             return r + tech * 0.12                    # relevance leads, quality breaks ties
 
-        head = sorted(results[:POOL], key=_combined, reverse=True)
+        head = sorted(results[:pool_n], key=_combined, reverse=True)
         results[:len(head)] = head
 
     hit = results[index]

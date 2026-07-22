@@ -936,10 +936,11 @@ REGISTRY: dict[str, Source] = {
 ARCHIVE_FIRST = frozenset({"space", "history", "art", "science", "geology",
                            "culture", "ocean", "nature", "europe"})
 
-# Never ask more than this many sources for one scene. Three ladder rungs times
-# eight sources would be 24 requests per scene; at 115 scenes that is a sourcing
-# run measured in hours.
-MAX_SOURCES = 3
+# Never ask more than this many sources for one scene. Every routed source is
+# now pooled together and CLIP picks the best across all of them, so a couple
+# more places to look is a direct accuracy win — but each is still a request, so
+# this stays bounded to keep a 115-scene run to minutes, not hours.
+MAX_SOURCES = 4
 
 
 def route(domain: str, media: str, available: set, query: str = "") -> list[str]:
@@ -993,6 +994,14 @@ def route(domain: str, media: str, available: set, query: str = "") -> list[str]
         # video, so a VIDEO scene starts with stock whatever it is about.
         if media == "VIDEO" and src.generalist:
             score += 20.0
+
+        # Openverse aggregates ~800M CC images — including a great deal of modern
+        # Flickr life — behind one API, so for an IMAGE scene it is worth a place
+        # as extra breadth even when the subject matches no archive topic. A small
+        # base keeps it below the two stock generalists (which lead modern scenes)
+        # while still adding a third pool of candidates for CLIP to choose from.
+        if media == "IMAGE" and name == "openverse" and score < 2.0:
+            score = 2.0
 
         # Earning a place and being ordered within it are separate questions.
         # An archive with no topic overlap holds nothing for this scene and is

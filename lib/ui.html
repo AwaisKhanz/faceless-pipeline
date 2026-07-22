@@ -666,11 +666,12 @@ async function viewProject(id) {
         `${st.assets} / ${st.scenes}`))));
 
   // languages -------------------------------------------------------------
-  const opts = { captions: true, zoom: true, music: '' };
+  const opts = { captions: true, zoom: true, music: '', master: true };
   const run = async (langs, steps, force) => {
     const r = await api('/api/run', {
       id: p.id, langs, steps, force,
-      captions: opts.captions, zoom: opts.zoom, music: opts.music || null
+      captions: opts.captions, zoom: opts.zoom, music: opts.music || null,
+      master: opts.master
     });
     if (r.started) go('/activity');
   };
@@ -746,6 +747,9 @@ async function viewProject(id) {
       el('label', { class: 'chk' },
         el('input', { type: 'checkbox', checked: true, onchange: e => opts.zoom = e.target.checked }),
         'Slow zoom on photos'),
+      el('label', { class: 'chk', title: 'Normalise to YouTube -14 LUFS and duck music under the voice' },
+        el('input', { type: 'checkbox', checked: true, onchange: e => opts.master = e.target.checked }),
+        'Master audio'),
       el('button', { class: 'btn sm', onclick: () => go('/subtitles/' + id) },
         'Subtitle style →'),
       el('div', { style: 'flex:1' }),
@@ -1473,6 +1477,13 @@ async function viewSettings() {
         a.ok ? 'precise · ' + a.engine + ' on ' + a.device
           : 'estimated (no aligner)',
         a.ok ? '' : (a.reason || ''));
+    })(),
+    (() => {
+      const au = d.audio || {};
+      return line(au.master ? true : null, 'Audio mastering',
+        au.master ? `on · ${au.lufs} LUFS` + (au.duck ? ' · music ducking' : '')
+          : 'off — raw mix',
+        au.master ? '' : 'turn on with audio_master in config.json');
     })()))));
 
   v.append(el('div', { class: 'sec', style: 'margin-top:22px' }, el('h2', {}, 'API keys')));

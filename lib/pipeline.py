@@ -509,6 +509,16 @@ def load_config() -> dict:
     return cfg
 
 
+def _flag(v, default: bool = True) -> bool:
+    """Read a config value as an on/off switch. 'auto'/'on'/True are on;
+    'off'/'no'/'false'/'0'/False are off. Missing falls back to `default`."""
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() not in ("off", "false", "no", "0", "none", "")
+
+
 def load_scenes(sheet: Path, lang: str, translation: Path | None):
     return sheetlib.load(sheet, lang, translation)
 
@@ -659,6 +669,56 @@ def build_metadata(sheet: Path, lang: str, cfg: dict) -> dict:
 
 # ------------------------------------------------------------------ steps
 
+def _expand_scene_queries(scenes, p, cfg: dict, on_progress=lambda *_: None) -> None:
+    """Attach LLM-generated alternative image queries to each scene's fallbacks.
+
+    Needs a Gemini key; a no-op without one, so it never blocks sourcing. Results
+    are cached in the project's work folder keyed by the scene's own query, so a
+    re-source spends no tokens and only genuinely new/changed scenes are sent.
+    The extra phrases go to the END of `fallbacks`, keeping the human-written
+    query and any existing fallbacks first.
+    """
+    key = cfg.get("gemini_key")
+    if not key or not scenes:
+        return
+    if not _flag(cfg.get("expand_queries", "auto")):
+        return
+
+    cache_f = p["base"].parent / "queries.json"      # work/queries.json (shared)
+    cache: dict = {}
+    if cache_f.exists():
+        try:
+            cache = json.loads(cache_f.read_text(encoding="utf-8"))
+        except Exception:
+            cache = {}
+
+    need = [s for s in scenes
+            if cache.get(str(s.n), {}).get("query") != (s.query or "")]
+    if need:
+        on_progress(f"expanding queries for {len(need)} scene(s)")
+        from . import gemini as G
+        got = G.expand_queries(
+            [{"n": s.n, "query": s.query, "narration": s.narration} for s in need],
+            key, cfg.get("gemini_model") or "auto")
+        for s in need:
+            cache[str(s.n)] = {"query": s.query or "", "extra": got.get(s.n, [])}
+        try:
+            cache_f.parent.mkdir(parents=True, exist_ok=True)
+            cache_f.write_text(json.dumps(cache, indent=2, ensure_ascii=False),
+                               encoding="utf-8")
+        except Exception:
+            pass
+
+    # Merge cached expansions into each scene's ladder, de-duplved against what
+    # the scene already carries so nothing is searched twice.
+    for s in scenes:
+        extra = cache.get(str(s.n), {}).get("extra") or []
+        have = {(s.query or "").lower(), *(f.lower() for f in getattr(s, "fallbacks", []))}
+        add = [q for q in extra if q.lower() not in have]
+        if add:
+            s.fallbacks = list(getattr(s, "fallbacks", [])) + add
+
+
 def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
                  on_progress=noop) -> dict[int, dict]:
     """Fetch a visual per scene. Visuals are language-independent, so this is
@@ -679,6 +739,16 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
         assets = {int(k): v for k, v in json.loads(p["assets"].read_text(encoding="utf-8")).items()}
 
     todo = [s for s in scenes if redo is None or s.n in redo or s.n not in assets]
+
+    # Give each scene a few concrete alternative queries (once, cached). They sit
+    # at the BOTTOM of its query ladder, so a scene whose own query already finds
+    # a strong match never uses them — they only rescue the weak ones, which is
+    # what keeps the extra searches (and the one Gemini call) cheap.
+    try:
+        _expand_scene_queries(todo, p, cfg,
+                              on_progress=lambda m: on_progress(0, len(todo), m))
+    except Exception:
+        pass
 
     # Delegated rather than reimplemented. stock.fetch_all owns the query
     # ladder, the routing to NASA/Smithsonian/stock, and the refusal to reuse
@@ -755,7 +825,8 @@ def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n):
 def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Path,
                  lang: str, captions: bool = True, music: Path | None = None,
                  music_level: float = 0.20, zoom: bool = True,
-                 caption_size: int = 58, style=None, on_progress=noop) -> Path:
+                 caption_size: int = 58, style=None, master: bool = True,
+                 on_progress=noop) -> Path:
     p = paths_for(sheet, lang)
     for d in (p["clips"], p["tmp"], p["out"].parent):
         d.mkdir(parents=True, exist_ok=True)
@@ -803,10 +874,26 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     aud = p["base"] / "audio_track.wav"
     starts = render.build_audio(voices, gaps, aud, p["tmp"], tail=DISSOLVE)
 
+    acfg = load_config()
     if music:
+        # Duck the bed under the narration unless explicitly turned off.
+        duck = _flag(acfg.get("music_duck", True))
         mixed = p["base"] / "audio_mixed.wav"
-        render.mix_music(aud, Path(music), mixed, level=music_level)
+        render.mix_music(aud, Path(music), mixed, level=music_level, duck=duck)
         aud = mixed
+
+    # Master the final mix to broadcast loudness so the video plays back as loud
+    # as everything else on YouTube. Never fatal: the audio is already fine, this
+    # only polishes it, so a failure leaves the un-mastered track in place.
+    if master and _flag(acfg.get("audio_master", "auto")):
+        lufs = float(acfg.get("lufs_target") or -14.0)
+        on_progress(n + 3, n + 4, f"mastering audio to {lufs:g} LUFS")
+        try:
+            mastered = p["base"] / "audio_master.wav"
+            render.master_audio(aud, mastered, lufs=lufs)
+            aud = mastered
+        except Exception as e:
+            on_progress(n + 3, n + 4, f"mastering skipped ({e})")
 
     on_progress(n + 3, n + 4, "muxing")
     silent = p["base"] / "muxed.mp4"

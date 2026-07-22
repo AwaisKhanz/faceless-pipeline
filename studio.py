@@ -374,7 +374,7 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
 
 
 def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
-              zoom: bool, voices: dict[str, str]) -> None:
+              zoom: bool, voices: dict[str, str], master: bool = True) -> None:
     try:
         proj = pl.find_project(pid)
         sheet = Path(proj["sheet"])
@@ -408,7 +408,7 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
                 out = pl.render_video(
                     scenes, assets, vs, sheet, lang, captions=captions,
                     music=Path(music) if music else None, zoom=zoom,
-                    style=pl.effective_caption_style(pid),
+                    style=pl.effective_caption_style(pid), master=master,
                     on_progress=lambda d, t, m: progress(d, t, f"{tag} — {m}"))
             except pl.CaptionsSkipped as cs:
                 out = cs.video
@@ -434,7 +434,7 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
 
 def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
               music: str | None, zoom: bool, voices: dict[str, str],
-              force: bool = False) -> None:
+              force: bool = False, master: bool = True) -> None:
     """Run a chosen subset of steps for chosen languages.
 
     `steps` is any of "voice" and "render". This is what the project view's
@@ -521,7 +521,7 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
                     out = pl.render_video(
                         scenes, assets, vs, sheet, lang, captions=captions,
                         music=Path(music) if music else None, zoom=zoom,
-                        style=pl.effective_caption_style(pid),
+                        style=pl.effective_caption_style(pid), master=master,
                         on_progress=lambda d, t, m: progress(d, t, f"{tag} — {m}"))
                 except pl.CaptionsSkipped as cs:
                     out = cs.video
@@ -769,6 +769,9 @@ class Handler(BaseHTTPRequestHandler):
                 "gpu_ok": dev.get("device") in ("cuda", "mps"),
                 "clip": VIS.capability(cfg),
                 "align": AL.capability(cfg),
+                "audio": {"master": pl._flag(cfg.get("audio_master", "auto")),
+                          "lufs": float(cfg.get("lufs_target") or -14.0),
+                          "duck": pl._flag(cfg.get("music_duck", True))},
 
                 "references": CB.list_references() if CB.installed() else [],
                 "voices": langs,
@@ -947,7 +950,8 @@ class Handler(BaseHTTPRequestHandler):
             ok = start_thread(run_build, b.get("id"), b.get("langs") or ["en"],
                               bool(b.get("captions", True)),
                               b.get("music") and str(ROOT / "music" / b["music"]),
-                              bool(b.get("zoom", True)), b.get("voices") or {})
+                              bool(b.get("zoom", True)), b.get("voices") or {},
+                              bool(b.get("master", True)))
             return self._json({"started": ok})
 
         if path == "/api/run":
@@ -964,7 +968,7 @@ class Handler(BaseHTTPRequestHandler):
                               b.get("langs") or ["en"], steps,
                               bool(b.get("captions")), b.get("music") or None,
                               b.get("zoom", True), b.get("voices") or {},
-                              bool(b.get("force")))
+                              bool(b.get("force")), bool(b.get("master", True)))
             if not ok:
                 return self._json({"error": "something is already running"}, 409)
             return self._json({"started": ok, "steps": steps})

@@ -10,23 +10,27 @@ It is completely free and completely local:
   - it runs on the torch install the voice engine already uses, and very likely
     needs no new package (Chatterbox/diffusers already pull in `transformers`).
 
-IT ADAPTS TO THE MACHINE. There is one code path and three model tiers, chosen
-by what the hardware can actually do:
+IT ADAPTS TO THE MACHINE. One code path, chosen by what the hardware can do:
 
-    CUDA, >=10 GB VRAM   ViT-L/14   sharpest    (the RTX box)
-    CUDA <10 GB / Apple  ViT-B/16   balanced    (a Mac, a gaming laptop)
-    CPU only             ViT-B/32   lightest    (a small laptop)
+    CUDA >=12 GB VRAM    SigLIP 2 so400m   strongest   (the RTX box)
+    CUDA >=8 GB          SigLIP 2 large    strong
+    CUDA <8 GB           CLIP ViT-B/16     reliable
+    Apple MPS            CLIP ViT-B/16     reliable     (a Mac)
+    CPU only             CLIP ViT-B/32     lightest     (a small laptop)
 
-and if torch or transformers is missing, or the model will not load, it reports
-that plainly and the caller falls back to size/aspect scoring. Nothing breaks;
-a weaker machine simply gets the older behaviour.
+SigLIP 2 (2025) is a markedly better image-text matcher than CLIP, so it leads
+where there is a real GPU and the VRAM for it; smaller GPUs, Apple MPS and CPU
+stay on dependable CLIP. If the picked model will not load (old transformers, a
+bad download, OOM) it drops to CLIP at load time, so the choice only ever goes
+UP — a weak or old environment silently gets the reliable path, never nothing.
+Missing torch/transformers reports plainly and the caller ranks by size/aspect.
 
-CALIBRATION. Raw CLIP cosines sit in a narrow band and are not comparable across
-queries, so a bare number cannot answer "is this good enough". Instead each image
-is scored by a softmax over [the scene concept] + [a list of junk concepts]
-(text, watermark, chart, clip-art …). The result is the probability the image is
-the scene concept rather than junk — a real 0..1 number that both RANKS the pool
-and gives an absolute bar to decide whether to search harder.
+CALIBRATION. Cosines sit in a narrow, family-specific band, so each image's
+cosine to the scene is mapped to 0..1 over that band. Crucially the RANKING —
+which picture wins — uses the raw cosine and is band-independent, so a stronger
+model improves the actual pick regardless of how the % is calibrated. A short
+list of junk concepts (text, chart, watermark, clip-art) knocks down anything
+that looks more like junk than like the subject.
 """
 from __future__ import annotations
 
@@ -34,10 +38,18 @@ import hashlib
 import io
 import sys
 
-# Model tiers. All three are open weights on the Hugging Face hub.
+# Model tiers, all open weights on the Hugging Face hub. Two families:
+#   CLIP   — the original; reliable everywhere, incl. Apple MPS and CPU.
+#   SigLIP 2 (2025) — stronger image-text retrieval, so it leads on a real GPU
+#            where the VRAM and (for SigLIP) a recent transformers are present.
+# The machine picks the strongest it can run; anything that won't load falls back
+# to CLIP, so a weak or old environment simply gets the dependable path.
+SIGLIP_SO400M = "google/siglip2-so400m-patch14-384"   # strongest, big GPU
+SIGLIP_L = "google/siglip2-large-patch16-256"          # strong, mid GPU
+BASE_SIGLIP = "google/siglip2-base-patch16-224"        # (override only)
 LARGE = "openai/clip-vit-large-patch14"    # ~1.7 GB
-BASE16 = "openai/clip-vit-base-patch16"    # ~600 MB
-BASE32 = "openai/clip-vit-base-patch32"    # ~350 MB
+BASE16 = "openai/clip-vit-base-patch16"    # ~600 MB  (Apple/MPS default)
+BASE32 = "openai/clip-vit-base-patch32"    # ~350 MB  (CPU default)
 
 # Concepts an image can be "about" instead of the scene. Softmaxing the scene
 # concept against these turns a bare cosine into a calibrated relevance, and
@@ -47,8 +59,12 @@ JUNK = [
     "clip art", "a blank or solid colour image", "an advertisement",
 ]
 
-# Text templates. Averaging a couple of phrasings is steadier than one.
-TEMPLATES = ("a photo of {}", "{}")
+# Text templates. Averaging several phrasings is steadier than one — it is the
+# standard prompt-ensembling trick, and it nudges a true match's score up a
+# little because the picture matches the *idea* across wordings, not one exact
+# phrase. Kept neutral (no "cinematic", no style words) so the score measures
+# subject, not aesthetic.
+TEMPLATES = ("a photo of {}", "a picture of {}", "an image showing {}", "{}")
 
 # Relevance is a cosine similarity between the picture and the scene, mapped to
 # 0..1 over the band a CLIP image-text pair actually occupies: a strong,
@@ -57,13 +73,35 @@ TEMPLATES = ("a photo of {}", "{}")
 # softmax against junk concepts saturated — any real photograph scored ~100%,
 # because it only measured "photo vs junk", not "matches THIS line".)
 _COS_LOW = 0.17
-_COS_HIGH = 0.30
+_COS_HIGH = 0.29
+
+# Each family's cosines sit in a different band, so the map from cosine to the
+# 0..1 match% is per-family. IMPORTANT: ranking (which picture wins) uses cosine
+# directly and is band-independent, so a slightly-off band never hurts the pick —
+# it only shifts the displayed % and how eagerly a scene escalates. SigLIP's
+# numbers are a sensible starting point; easy to tune after a real run because a
+# version bump re-scores from disk with no re-download.
+_BANDS = {
+    "clip":   (0.17, 0.29),
+    "siglip": (0.02, 0.24),
+}
+
+
+def _family_of(model_id: str) -> str:
+    return "siglip" if "siglip" in (model_id or "").lower() else "clip"
+
+
+def _band_of(model_id: str) -> tuple:
+    return _BANDS.get(_family_of(model_id), (_COS_LOW, _COS_HIGH))
+
 
 # Bumped whenever the scoring maths change. A cached pick tagged with an older
 # version is re-scored from the file already on disk — no re-download — so a
 # calibration fix takes effect on the next source without clearing the cache.
 #   1: softmax vs junk (saturated to ~100%)   2: normalised cosine
-SCORE_VERSION = 2
+#   3: 4-template ensemble, gentler junk penalty, band top 0.29
+#   4: model family tiers (SigLIP 2 on a real GPU), per-family band
+SCORE_VERSION = 4
 
 
 def _cfg_get(cfg: dict, key: str, default):
@@ -97,6 +135,8 @@ def capability(cfg: dict | None = None) -> dict:
     override = _cfg_get(cfg, "clip_model", "")
     model = override or _pick_model(device, vram)
     return {"ok": True, "device": device, "vram_gb": vram, "model": model,
+            "family": _family_of(model),
+            "fallback": _clip_fallback(device, vram),
             "reason": "ready"}
 
 
@@ -143,12 +183,32 @@ def _probe_device() -> tuple:
 
 
 def _pick_model(device: str, vram_gb: float | None) -> str:
-    """The heaviest model the machine can comfortably run."""
-    if device == "cuda" and vram_gb and vram_gb >= 10:
+    """The strongest model the machine can comfortably run.
+
+    SigLIP 2 leads on a real GPU with the VRAM for it; a smaller GPU or Apple
+    MPS stays on dependable CLIP (SigLIP on MPS is unproven and not worth a
+    silent regression); CPU keeps the lightest CLIP. Anything that then fails to
+    load (old transformers, a bad download, OOM) drops back to CLIP at load time,
+    so this only ever chooses UP — it can't strand a machine.
+    """
+    if device == "cuda" and vram_gb:
+        if vram_gb >= 12:
+            return SIGLIP_SO400M       # RTX-class: the strongest we ship
+        if vram_gb >= 8:
+            return SIGLIP_L            # mid GPU: still SigLIP, lighter
+        return BASE16                  # small GPU: reliable CLIP
+    if device == "mps":
+        return BASE16                  # Apple Silicon: CLIP, known-good on MPS
+    return BASE32                      # cpu / unknown: keep it light
+
+
+def _clip_fallback(device: str, vram_gb: float | None) -> str:
+    """The CLIP model to drop to if the picked model won't load."""
+    if device == "cuda" and vram_gb and vram_gb >= 8:
         return LARGE
     if device in ("cuda", "mps"):
         return BASE16
-    return BASE32                     # cpu / unknown: keep it light
+    return BASE32
 
 
 # ───────────────────────────────────────────────────────── the scorer
@@ -161,26 +221,51 @@ class Scorer:
     walking the query ladder or re-sourcing never recomputes an image.
     """
 
-    def __init__(self, model_id: str, device: str):
+    def __init__(self, model_id: str, device: str, fallback: str | None = None):
         self.model_id = model_id
         self.device = device
+        self.family = _family_of(model_id)
+        self.band = _band_of(model_id)
+        self._fallback = fallback           # a CLIP id to drop to if this won't load
         self._model = None
         self._proc = None
         self._cache: dict[tuple, float] = {}
+
+    def _load_one(self, model_id: str):
+        """Load a specific model, family chosen by its id. Raises on failure."""
+        import transformers
+        transformers.logging.set_verbosity_error()
+        if _family_of(model_id) == "siglip":
+            from transformers import AutoModel, AutoProcessor
+            model = AutoModel.from_pretrained(
+                model_id, use_safetensors=True).to(self.device).eval()
+            proc = AutoProcessor.from_pretrained(model_id)
+        else:
+            from transformers import CLIPModel, CLIPProcessor
+            # use_safetensors avoids also pulling the legacy pytorch_model.bin —
+            # the repo ships both, and fetching each is a needless ~600 MB.
+            model = CLIPModel.from_pretrained(
+                model_id, use_safetensors=True).to(self.device).eval()
+            proc = CLIPProcessor.from_pretrained(model_id)
+        return model, proc
 
     def _load(self):
         if self._model is not None:
             return
         import torch
-        import transformers
-        from transformers import CLIPModel, CLIPProcessor
-        transformers.logging.set_verbosity_error()   # skip the load-report noise
         self._torch = torch
-        # use_safetensors avoids also pulling the legacy pytorch_model.bin — the
-        # repo ships both, and fetching each is a needless second ~600 MB.
-        self._model = CLIPModel.from_pretrained(
-            self.model_id, use_safetensors=True).to(self.device).eval()
-        self._proc = CLIPProcessor.from_pretrained(self.model_id)
+        try:
+            self._model, self._proc = self._load_one(self.model_id)
+        except Exception:
+            # The picked model won't load here (old transformers, bad download,
+            # OOM). Drop to the dependable CLIP fallback rather than losing
+            # scoring entirely — this is the whole point of choosing UP only.
+            if not self._fallback or self._fallback == self.model_id:
+                raise
+            self.model_id = self._fallback
+            self.family = _family_of(self.model_id)
+            self.band = _band_of(self.model_id)
+            self._model, self._proc = self._load_one(self.model_id)
 
     def relevance(self, query: str, items: list[tuple[str, bytes]]) -> dict[str, float]:
         """Score each (key, image-bytes) for how well it matches `query`, 0..1.
@@ -218,20 +303,30 @@ class Scorer:
                     out[key] = 0.0
 
             if todo:
+                # SigLIP was trained with fixed-length text padding; CLIP uses
+                # dynamic. Getting this wrong quietly wrecks SigLIP's scores.
+                pad = "max_length" if self.family == "siglip" else True
                 inputs = self._proc(text=texts, images=[im for _, _, im in todo],
-                                    return_tensors="pt", padding=True).to(self.device)
+                                    return_tensors="pt", padding=pad).to(self.device)
                 with torch.no_grad():
                     m = self._model(**inputs)
                     ie = m.image_embeds / m.image_embeds.norm(dim=-1, keepdim=True)
                     te = m.text_embeds / m.text_embeds.norm(dim=-1, keepdim=True)
                     cos = (ie @ te.t()).tolist()          # images x texts, -1..1
-                span = _COS_HIGH - _COS_LOW
+                low, high = self.band
+                span = (high - low) or 1e-6
                 for (key, ck, _img), row in zip(todo, cos):
                     pos = sum(row[:n_pos]) / n_pos          # match to the subject
                     junk = max(row[n_pos:]) if len(row) > n_pos else 0.0
-                    rel = max(0.0, min(1.0, (pos - _COS_LOW) / span))
-                    if junk > pos:                          # more junk than subject
-                        rel *= 0.35
+                    rel = max(0.0, min(1.0, (pos - low) / span))
+                    # Only knock a picture down when it looks CLEARLY more like
+                    # junk (text, a chart, clip-art) than like the subject — a
+                    # small margin, so a real photo that happens to score close on
+                    # a junk concept is not wrongly sent to 0. The penalty is
+                    # gentler now too (0.55, was 0.35): enough to sink screenshots
+                    # below real photos, not enough to erase a borderline match.
+                    if junk > pos + 0.02:
+                        rel *= 0.55
                     rel = round(rel, 4)
                     out[key] = rel
                     self._cache[ck] = rel
@@ -269,7 +364,7 @@ def get_scorer(cfg: dict | None = None, log=lambda *a: None) -> Scorer | None:
     where = cap["device"] + (f" {cap['vram_gb']}GB" if cap["vram_gb"] else "")
     log(f"  visual matching on — {cap['model'].split('/')[-1]} on {where}. "
         f"First run downloads the model once.")
-    _SCORER = Scorer(cap["model"], cap["device"])
+    _SCORER = Scorer(cap["model"], cap["device"], fallback=cap.get("fallback"))
     return _SCORER
 
 

@@ -38,9 +38,15 @@ def main() -> int:
               f"{'' if ok else f'  (wanted {want})'}")
 
     print("\n  the machine picks a model it can run:")
-    check("RTX-class GPU -> large", vision._pick_model("cuda", 16), vision.LARGE)
-    check("small GPU / Apple -> base16", vision._pick_model("mps", None), vision.BASE16)
+    check("RTX-class GPU -> SigLIP 2 so400m", vision._pick_model("cuda", 16), vision.SIGLIP_SO400M)
+    check("mid GPU -> SigLIP 2 large", vision._pick_model("cuda", 8), vision.SIGLIP_L)
+    check("small GPU -> reliable CLIP", vision._pick_model("cuda", 6), vision.BASE16)
+    check("Apple MPS -> reliable CLIP", vision._pick_model("mps", None), vision.BASE16)
     check("cpu-only laptop -> base32", vision._pick_model("cpu", None), vision.BASE32)
+    check("SigLIP picks a CLIP fallback", vision._family_of(
+        vision._clip_fallback("cuda", 16)), "clip")
+    check("family detection: siglip", vision._family_of(vision.SIGLIP_SO400M), "siglip")
+    check("family detection: clip", vision._family_of(vision.BASE32), "clip")
     check("config can turn it off", vision.capability({"clip": "off"})["ok"], False)
 
     # Relevance each query "returns", keyed by query text. The fake fetch reads

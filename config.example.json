@@ -14,12 +14,20 @@
   "gemini_key": "",
   "gemini_model": "auto",
   "_gemini_model": "\"auto\" asks your key which models it can call and picks the best Flash one. Only pin a name here if you want a specific model.",
-  "_clip": "Visual matching: scores each candidate picture for how well it actually matches the scene, not just its size. Free and local (open CLIP weights on your own GPU/CPU, one-time download). \"auto\" turns it on wherever it can run; set \"off\" to rank by size and aspect only.",
+  "_clip": "Visual matching: scores each candidate picture for how well it actually matches the scene, not just its size. Free and local (open weights on your own GPU/CPU, one-time download). \"auto\" turns it on wherever it can run; set \"off\" to rank by size and aspect only.",
   "clip": "auto",
-  "_clip_model": "Optional override, e.g. openai/clip-vit-base-patch32. Empty lets it pick a model to fit the machine (large on a big GPU, base on a Mac, small on a plain laptop).",
+  "_clip_model": "Optional override of the matcher, e.g. openai/clip-vit-base-patch32 or google/siglip2-so400m-patch14-384. Empty lets it auto-pick for the machine: SigLIP 2 on a real GPU (needs transformers >= 4.49), dependable CLIP on Apple/CPU. Anything that won't load falls back to CLIP automatically.",
   "clip_model": "",
   "_clip_min": "How good a match must be before sourcing stops searching (0-1). Lower accepts looser matches; higher searches harder and flags more scenes. 0.45 is a sensible start.",
   "clip_min": 0.45,
+  "_expand_queries": "Uses your Gemini key to generate a few concrete alternative image searches per scene, so a weak or abstract line (e.g. a 'hypnogram') still finds a real photo. \"auto\" is on when a Gemini key is set; \"off\" uses only the queries in the sheet. Cached per project, so a re-source costs nothing.",
+  "expand_queries": "auto",
   "_align": "Word-by-word caption timing. \"auto\" uses WhisperX forced alignment where it's installed (free, local, uses your GPU) so each spoken word lights up in time; \"off\" (or no install) falls back to estimated timing from word length. Captions still render either way.",
-  "align": "auto"
+  "align": "auto",
+  "_audio_master": "Loudness mastering. \"auto\" brings every finished video to YouTube's -14 LUFS standard so it plays back at the same volume as everything else; \"off\" leaves the raw mix.",
+  "audio_master": "auto",
+  "_lufs_target": "Target integrated loudness in LUFS. -14 is YouTube standard; -16 is a touch quieter (closer to podcast/TV).",
+  "lufs_target": -14,
+  "_music_duck": "When true, background music automatically ducks (drops back) under the narration and swells in the gaps, so speech is always clear. false keeps a flat music level.",
+  "music_duck": true
 }

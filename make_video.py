@@ -170,6 +170,7 @@ def step_render(a) -> None:
                               music_level=a.music_level, zoom=not a.no_zoom,
                               caption_size=a.caption_size,
                               style=pl.effective_caption_style(pl.project_id(sheet)),
+                              master=not a.no_master,
                               on_progress=bar)
     except pl.CaptionsSkipped as cs:
         out, warn_caps = cs.video, cs.reason
@@ -271,6 +272,8 @@ def main() -> None:
     ap.add_argument("--captions", action="store_true")
     ap.add_argument("--caption-size", type=int, default=58)
     ap.add_argument("--no-zoom", action="store_true")
+    ap.add_argument("--no-master", action="store_true",
+                    help="skip loudness mastering (leave the raw mix)")
     ap.add_argument("--yes", action="store_true", help="'all' skips the approval pause")
     a = ap.parse_args()
 

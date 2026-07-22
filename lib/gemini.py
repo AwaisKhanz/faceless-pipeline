@@ -251,6 +251,75 @@ def generate_metadata(narration: str, lang_name: str, topics: list[str],
     }
 
 
+# --------------------------------------------------- visual query expansion
+
+_EXPAND_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scenes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "scene": {"type": "integer"},
+                    "queries": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["scene", "queries"],
+            },
+        }
+    },
+    "required": ["scenes"],
+}
+
+_EXPAND_SYSTEM = (
+    "You turn a line of narration into concrete, literal image-search phrases "
+    "that a free stock library or photo archive would actually match. For each "
+    "scene give THREE alternative phrases — different literal framings of the "
+    "same idea, as a real photograph or piece of footage. Rules: 2-5 words each; "
+    "only concrete things a camera can see; NO metaphors, NO abstract concepts, "
+    "NO charts/diagrams/text unless the line is literally about one; prefer "
+    "ordinary, photographable subjects. "
+    "Example — line 'the real thief of your sleep is almost never the alarm' -> "
+    "['person lying awake in bed', 'dark bedroom at night', 'glowing alarm clock 3am']."
+)
+
+
+def expand_queries(scenes: list[dict], key: str,
+                   model: str = DEFAULT_MODEL) -> dict[int, list[str]]:
+    """Concrete alternative image queries for each scene, batched.
+
+    `scenes` is [{"n", "query", "narration"}, ...]. Returns {n: [phrase, ...]}.
+    Best effort: any failure returns {} and the caller keeps the original
+    queries. Chunked so one bad scene can't cost the whole video its expansions.
+    """
+    if not scenes or not key:
+        return {}
+    out: dict[int, list[str]] = {}
+    CH = 40
+    for i in range(0, len(scenes), CH):
+        chunk = scenes[i:i + CH]
+        lines = "\n".join(
+            f"{s['n']}. line: {normalise(s.get('narration', ''))[:160]}"
+            f"   (current search: {s.get('query', '')})"
+            for s in chunk)
+        prompt = ("Give alternative image-search phrases for each numbered "
+                  "scene below.\n\n" + lines)
+        try:
+            data = call(prompt, _EXPAND_SCHEMA, key, model,
+                        system=_EXPAND_SYSTEM, temperature=0.7)
+        except Exception:
+            continue
+        for item in data.get("scenes", []):
+            try:
+                n = int(item["scene"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            qs = [q.strip() for q in (item.get("queries") or []) if q and q.strip()]
+            if qs:
+                out[n] = qs[:4]
+    return out
+
+
 # ------------------------------------------------------------- text handling
 
 SMART = {"’": "'", "‘": "'", "“": '"', "”": '"',

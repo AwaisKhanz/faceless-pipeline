@@ -277,16 +277,95 @@ def build_audio(voices: list[Path], gaps: list[float], out: Path, work: Path,
     return starts
 
 
-def mix_music(voice: Path, music: Path, out: Path, level: float = 0.20) -> None:
-    """Loop the music bed under the narration at a fixed level."""
+def mix_music(voice: Path, music: Path, out: Path, level: float = 0.20,
+              duck: bool = True) -> None:
+    """Lay a music bed under the narration.
+
+    With `duck` on (the default), the music is side-chained to the voice: it
+    drops back whenever someone is speaking and swells back up in the gaps, so
+    the words are always clearly on top instead of fighting a constant bed. This
+    is what every professionally-mixed talking video does. With `duck` off it is
+    the old flat mix at a fixed level.
+    """
     vdur = duration_of(voice)
-    run(["ffmpeg", "-y", "-i", str(voice),
-         "-stream_loop", "-1", "-i", str(music),
-         "-filter_complex",
-         f"[1:a]volume={level},atrim=0:{vdur:.3f},afade=t=in:st=0:d=2,"
-         f"afade=t=out:st={max(0.0, vdur-3):.3f}:d=3[m];"
-         f"[0:a][m]amix=inputs=2:duration=first:normalize=0[a]",
+    # An explicit stereo/48k layout on every branch: sidechaincompress refuses to
+    # run if an input's channel layout is undefined, which it can be straight off
+    # a decoder even when the data is stereo.
+    FMT = "aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=48000"
+    bed = (f"[1:a]volume={level},atrim=0:{vdur:.3f},afade=t=in:st=0:d=2,"
+           f"afade=t=out:st={max(0.0, vdur - 3):.3f}:d=3,{FMT}[m]")
+    if duck:
+        # The voice is used twice — once as the mix, once as the key that ducks
+        # the music — so it is split. sidechaincompress attenuates its FIRST
+        # input (music) whenever the SECOND (voice) is loud: fast attack ducks
+        # the instant speech starts, a ~300 ms release lets music swell back in
+        # the gaps without pumping.
+        chain = (f"[0:a]{FMT},asplit=2[v0][v1];" + bed + ";"
+                 "[m][v1]sidechaincompress=threshold=0.045:ratio=9:attack=5:"
+                 "release=300:makeup=1[md];"
+                 "[v0][md]amix=inputs=2:duration=first:normalize=0[a]")
+    else:
+        chain = (f"[0:a]{FMT}[v0];" + bed
+                 + ";[v0][m]amix=inputs=2:duration=first:normalize=0[a]")
+    run(["ffmpeg", "-y", "-i", str(voice), "-stream_loop", "-1", "-i", str(music),
+         "-filter_complex", chain,
          "-map", "[a]", "-c:a", "pcm_s16le", str(out)])
+
+
+# --------------------------------------------------------------- mastering
+
+def _loudnorm_measure(inp: Path, I: float, TP: float, LRA: float) -> dict | None:
+    """First pass: measure the track so the second pass can hit the target
+    exactly. Returns the measured values, or None if ffmpeg's JSON can't be read
+    (in which case the caller does a single dynamic pass instead)."""
+    r = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", str(inp), "-af",
+         f"loudnorm=I={I}:TP={TP}:LRA={LRA}:print_format=json",
+         "-f", "null", "-"],
+        capture_output=True, text=True)
+    err = r.stderr or ""
+    start = err.rfind("{")
+    end = err.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        return json.loads(err[start:end + 1])
+    except Exception:
+        return None
+
+
+def master_audio(inp: Path, out: Path, lufs: float = -14.0, tp: float = -1.0,
+                 lra: float = 11.0) -> dict:
+    """Bring the final mix to broadcast loudness (EBU R128).
+
+    Two passes: measure, then normalise to `lufs` integrated with a true-peak
+    ceiling of `tp` dBTP. -14 LUFS / -1 dBTP is what YouTube targets, so the
+    video plays back at the same loudness as everything around it instead of
+    noticeably quiet or hot. Falls back to a single dynamic pass if the measure
+    step can't be parsed, and never raises past that — the audio is already fine,
+    mastering only polishes it.
+    """
+    m = _loudnorm_measure(inp, lufs, tp, lra)
+    af = f"loudnorm=I={lufs}:TP={tp}:LRA={lra}"
+    if m:
+        af += (f":measured_I={m.get('input_i')}"
+               f":measured_TP={m.get('input_tp')}"
+               f":measured_LRA={m.get('input_lra')}"
+               f":measured_thresh={m.get('input_thresh')}"
+               f":offset={m.get('target_offset')}:linear=true")
+    # 48 kHz stereo out, matching the rest of the audio chain.
+    run(["ffmpeg", "-y", "-i", str(inp), "-af", af,
+         "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(out)])
+    return {"measured": bool(m), "target_lufs": lufs, "tp": tp}
+
+
+def measure_loudness(inp: Path) -> float | None:
+    """Integrated loudness (LUFS) of a file, for verification/reporting."""
+    m = _loudnorm_measure(inp, -14.0, -1.0, 11.0)
+    try:
+        return float(m["input_i"]) if m else None
+    except Exception:
+        return None
 
 
 # ------------------------------------------------------------------ captions

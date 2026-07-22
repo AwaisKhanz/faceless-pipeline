@@ -144,7 +144,11 @@ def main() -> int:
     # CUDA torch is re-asserted below, so that re-assert is always the last word
     # on which torch wins.
     say("\n  [3/7] installing the visual-matching libraries")
-    if pip("transformers", "pillow", quiet=True) != 0:
+    # A recent transformers unlocks SigLIP 2 (the stronger matcher on a real GPU);
+    # if that version can't be resolved here, plain transformers still gives the
+    # dependable CLIP path, so this never blocks the install.
+    if pip("transformers>=4.49", "pillow", quiet=True) != 0 \
+            and pip("transformers", "pillow", quiet=True) != 0:
         say("     could not install them — visual matching stays off and sourcing")
         say("     ranks by size and aspect. Everything else is unaffected.")
 
