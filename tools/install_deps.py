@@ -45,6 +45,30 @@ def say(msg: str = "") -> None:
     print(msg, flush=True)
 
 
+def _install_launcher() -> tuple[bool, str]:
+    """Put a `faceless` command on PATH by writing a tiny launcher into the
+    venv's Scripts (Windows) or bin (Unix) directory — the dir that holds this
+    very interpreter, and which is on PATH whenever the venv is active.
+
+    Deterministic: no build, no metadata, no pyproject parsing, so it can't fail
+    the way `pip install -e .` did. Returns (ok, reason_if_not).
+    """
+    scripts = Path(sys.executable).parent
+    cli = ROOT / "cli.py"
+    try:
+        if platform.system() == "Windows":
+            (scripts / "faceless.bat").write_text(
+                f'@echo off\r\n"{sys.executable}" "{cli}" %*\r\n', encoding="utf-8")
+        else:
+            launcher = scripts / "faceless"
+            launcher.write_text(
+                f'#!/bin/sh\nexec "{sys.executable}" "{cli}" "$@"\n', encoding="utf-8")
+            launcher.chmod(0o755)
+        return True, ""
+    except Exception as e:                       # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
+
+
 def have_nvidia_gpu() -> bool:
     """Is there an NVIDIA driver present? Cheap check before a 3 GB download."""
     try:
@@ -188,19 +212,19 @@ def main() -> int:
 
     pip("setuptools<81", quiet=True)      # put it back if anything moved it
 
-    # The `faceless` command. --no-deps is essential: this project declares no
-    # dependencies precisely so pip cannot re-resolve the environment here and
-    # undo the CUDA build we just installed.
+    # The `faceless` command. Written DIRECTLY into the venv's Scripts/bin dir —
+    # no `pip install -e .`, so it can't be broken by a build step or a stray
+    # character in pyproject.toml (which is exactly what was failing on Windows).
+    # Because that dir is on PATH whenever the .venv is active, a bare
+    # `faceless start` then works; and the faceless / faceless.bat launcher in the
+    # repo root works with no activation at all.
     say("\n  [5/6] installing the 'faceless' command")
-    # This console entry point only appears on PATH once the .venv is activated,
-    # which most people never do. The ./faceless launcher in the repo root needs
-    # no activation and is the path we point people at, so a failure here is not
-    # a problem — it is a shortcut on top of a shortcut.
+    ok, why = _install_launcher()
     launch = "faceless start" if platform.system() == "Windows" else "./faceless start"
-    if pip("-e", ".", "--no-deps", quiet=True) == 0:
+    if ok:
         say(f"     installed. Run:  {launch}")
     else:
-        say(f"     skipped — no harm done, the launcher still works:  {launch}")
+        say(f"     couldn't write it ({why}) — the repo launcher still works: {launch}")
 
     say("\n  [6/6] checking the install actually works")
     t = torch_report()
