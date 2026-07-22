@@ -73,11 +73,8 @@ h1{font-size:28px;letter-spacing:-.025em}
 .app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
 .side{background:var(--surface);border-right:1px solid var(--line);padding:22px 14px;
   position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:5px}
-.brand{display:flex;align-items:center;gap:11px;padding:2px 8px 4px}
-.dot{width:30px;height:30px;border-radius:8px;background:var(--accent);display:grid;
-  place-items:center;color:var(--accent-ink);font-weight:700;font-size:16px;letter-spacing:-.03em}
-.brand b{display:block;font-size:16px;font-weight:600;letter-spacing:-.02em;line-height:1.15}
-.brand .st{font-size:11px;color:var(--ink3);font-family:var(--mono);letter-spacing:.02em}
+.brand{display:flex;align-items:center;gap:11px;padding:2px 8px 6px}
+.brand b{display:block;font-size:17px;font-weight:600;letter-spacing:-.02em;line-height:1.2}
 .newbtn{margin:12px 4px 16px;display:flex;align-items:center;justify-content:center;gap:8px;
   background:var(--accent);border:1px solid var(--accent);color:var(--accent-ink);
   padding:10px 14px;border-radius:9px;cursor:pointer;font:600 14px var(--ui);transition:.12s}
@@ -87,6 +84,8 @@ h1{font-size:28px;letter-spacing:-.025em}
 .nav{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:9px;
   color:var(--ink2);cursor:pointer;border:1px solid transparent;font:500 14px var(--ui)}
 .nav svg{width:17px;height:17px;flex:none;opacity:.9}
+/* Icons are decoration — never let one become a click target of its own. */
+.nav svg,.newbtn svg,.back svg,.btn svg{pointer-events:none}
 .nav:hover{background:var(--surface2);color:var(--ink)}
 .nav.on{background:var(--surface3);color:var(--ink);border-color:var(--line)}
 .badge{margin-left:auto;font-size:12px;font-family:var(--mono);background:var(--accent);
@@ -268,8 +267,7 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
 <div class="app">
   <aside class="side">
     <div class="brand">
-      <span class="dot">F</span>
-      <span><b>Faceless</b><span class="st">STUDIO</span></span>
+      <b>Faceless Studio</b>
     </div>
     <button class="newbtn" data-r="/new" type="button">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -1222,12 +1220,20 @@ async function route() {
 }
 
 addEventListener('popstate', route);
-// Any element carrying data-r is a route link — the nav items and the sidebar
-// "New video" button. Anchors get a real href so they behave like links.
-document.querySelectorAll('[data-r]').forEach(n => {
-  if (n.tagName === 'A') n.setAttribute('href', n.dataset.r);
-  n.onclick = e => { e.preventDefault(); go(n.dataset.r); };
+// Route links (nav items + the sidebar "New video" button) are handled by ONE
+// delegated listener rather than a handler per element. This is deliberate:
+// a click on the button's "+" icon lands on the inner <svg>, and per-element
+// listeners only fire if that click bubbles cleanly — which is exactly the kind
+// of thing that silently fails. closest() walks up from whatever was clicked to
+// the nearest [data-r], so clicking the icon, the label or the padding all work.
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-r]');
+  if (!t) return;
+  e.preventDefault();
+  go(t.dataset.r);
 });
+// Real hrefs so anchors still hover, middle-click and copy-link like links.
+document.querySelectorAll('a[data-r]').forEach(a => a.setAttribute('href', a.dataset.r));
 
 // ═══ polling ══════════════════════════════════════════════════════════════
 let lastStage = null;
