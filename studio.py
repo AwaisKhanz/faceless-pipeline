@@ -337,8 +337,13 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
             raise RuntimeError(
                 "No stock API key yet. Open config.json and paste your free "
                 "Pexels and Pixabay keys in, then try again.")
-        scenes = pl.load_scenes(sheet, "en", None)
-        begin_job(pid, ["en"], "stock")
+        # Sourcing only needs the scene list and each scene's (English) search
+        # query — never a specific language's narration. Read straight from the
+        # main script in ITS OWN language, so a German- or Spanish-main project
+        # sources without demanding an English narration file it doesn't have.
+        mlang = pl.main_lang(sheet)
+        scenes = pl.load_scenes(sheet, mlang, None)
+        begin_job(pid, [mlang], "stock")
         set_job(total=len(redo or scenes))
         log(f"Sourcing visuals for {proj['label']}")
 
@@ -598,8 +603,11 @@ def script_data(pid: str) -> dict:
 def approval_data(pid: str) -> dict:
     proj = pl.find_project(pid)
     sheet = Path(proj["sheet"])
-    p = pl.paths_for(sheet, "en")
-    scenes = pl.load_scenes(sheet, "en", None)
+    p = pl.paths_for(sheet, "en")        # assets/picks are shared, language-agnostic
+    # Read scenes from the main script in its own language (English is not
+    # guaranteed to exist); the review page shows structure + visuals, not
+    # a specific language's narration.
+    scenes = pl.load_scenes(sheet, pl.main_lang(sheet), None)
     assets = {}
     if p["assets"].exists():
         assets = {int(k): v for k, v in json.loads(p["assets"].read_text(encoding="utf-8")).items()}
