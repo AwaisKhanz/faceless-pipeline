@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -137,19 +138,32 @@ def _get(url: str, headers: dict | None = None) -> bytes:
     req = urllib.request.Request(
         url, headers={"User-Agent": user_agent(),
                       "Accept": "application/json, */*", **(headers or {})})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            return r.read()
-    except Exception as e:
-        msg = str(e)
-        # A reset can be an agent-based block OR the network refusing the host
-        # outright, and the two look identical here. Do not assert either:
-        # point at the command that can actually tell them apart.
-        if "reset" in msg.lower() or "forcibly closed" in msg.lower():
-            msg += (" — the connection was dropped. That is either this network "
-                    "refusing the host, or the API refusing this client. Run "
-                    "'faceless sources' to find out which.")
-        raise SourceError(msg)
+    last: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                return r.read()
+        except Exception as e:
+            last = e
+            # A READ TIMEOUT usually means a slow archive (the Library of
+            # Congress photo search is genuinely slow), not a refusal — so give
+            # it another try or two before giving up. A RESET/REFUSAL is a block:
+            # retrying only stalls the run, so fall straight through and let the
+            # circuit breaker skip the source.
+            if "timed out" in str(e).lower() and attempt < 3:
+                time.sleep(1.0 * attempt)
+                continue
+            break
+
+    msg = str(last)
+    # A reset can be an agent-based block OR the network refusing the host
+    # outright, and the two look identical here. Do not assert either: point at
+    # the command that can actually tell them apart.
+    if "reset" in msg.lower() or "forcibly closed" in msg.lower():
+        msg += (" — the connection was dropped. That is either this network "
+                "refusing the host, or the API refusing this client. Run "
+                "'faceless sources' to find out which.")
+    raise SourceError(msg)
 
 
 def _json(url: str, headers: dict | None = None) -> dict:
