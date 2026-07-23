@@ -346,6 +346,22 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
             progress(d, t, m)
             log(f"  {m}")
 
+        # Warm up the visual-matching model UP FRONT, with a visible note. The
+        # very first source downloads it (SigLIP 2 is ~1.7 GB) and, until now,
+        # that happened silently mid-scene and looked frozen. Loading it here
+        # surfaces the status; the download's own progress bar is in the terminal.
+        if pl._flag(cfg.get("clip", "auto")):
+            cap = VIS.capability(cfg)
+            if cap.get("ok"):
+                log(f"Preparing visual matching — {cap['model'].split('/')[-1]} on "
+                    f"{cap['device']}. The FIRST run downloads it once "
+                    f"(watch the terminal window for the % bar)…")
+                try:
+                    VIS.get_scorer(cfg, log=lambda m: log(f"  {m.strip()}"))
+                    log("  model ready — sourcing now.")
+                except Exception as e:
+                    log(f"  visual matching unavailable ({e}) — ranking by size only.")
+
         assets = pl.source_stock(scenes, sheet, cfg, redo=redo, on_progress=onp)
         end_step()
 
