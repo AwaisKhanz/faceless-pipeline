@@ -140,7 +140,7 @@ def guess_lang(name: str) -> str:
     return ""
 
 
-def ensure_folders(langs=("en", "de", "es")) -> None:
+def ensure_folders(langs=("en", "de", "es", "fr", "it", "pt")) -> None:
     """Make the language folders exist so there is somewhere obvious to drop files."""
     for code in langs:
         (REFS / code).mkdir(parents=True, exist_ok=True)

@@ -1007,8 +1007,13 @@ function paintRun() {
 }
 
 // ═══ new from script ══════════════════════════════════════════════════════
-const LANG_NAMES = { en: 'English', de: 'German', es: 'Spanish' };
-const LANG_ORDER = ['en', 'de', 'es'];
+// Mirrors the backend's narration-capable set (pipeline.LANG_FILE_WORDS). Any of
+// these can be the main script or an added language; keep in sync with the backend.
+const LANG_NAMES = {
+  en: 'English', de: 'German', es: 'Spanish',
+  fr: 'French', it: 'Italian', pt: 'Portuguese',
+};
+const LANG_ORDER = ['en', 'de', 'es', 'fr', 'it', 'pt'];
 const MONO = 'font-family:ui-mono,Menlo,Consolas,monospace;font-size:14.5px';
 
 function viewNew() {

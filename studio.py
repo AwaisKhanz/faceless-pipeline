@@ -403,7 +403,10 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
         proj = pl.find_project(pid)
         sheet = Path(proj["sheet"])
         sdir = sheet.parent
-        assets_f = pl.paths_for(sheet, "en")["assets"]
+        # No language chosen -> build the project's own main language, never a
+        # hardcoded "en" (which a German- or Spanish-main project does not have).
+        langs = langs or [pl.main_lang(sheet)]
+        assets_f = pl.paths_for(sheet, "en")["assets"]   # assets.json is shared
         assets = {int(k): v for k, v in json.loads(assets_f.read_text(encoding="utf-8")).items()}
         outputs = []
         begin_job(pid, langs, "voice")
@@ -474,6 +477,8 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
         proj = pl.find_project(pid)
         sheet = Path(proj["sheet"])
         sdir = sheet.parent
+        # Default to the project's own main language, never a hardcoded "en".
+        langs = langs or [pl.main_lang(sheet)]
         begin_job(pid, langs, steps[0] if steps else "voice")
 
         assets = {}
@@ -838,7 +843,7 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             langs = {}
-            for lg in ("en", "de", "es"):
+            for lg in pl.LANG_NAMES:          # every narration-capable language
                 try:
                     langs[lg] = vx.status(lg)
                 except Exception:
@@ -880,16 +885,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(dict(JOB))
 
         if path == "/api/voices":
-            lang = (q.get("lang") or ["en"])[0]
             pid = (q.get("id") or [""])[0]
             scenes = None
+            lang = (q.get("lang") or [""])[0]
             if pid:
                 try:
                     proj = pl.find_project(pid)
+                    sheet = Path(proj["sheet"])
+                    # Default to the project's main language, not "en".
+                    lang = lang or pl.main_lang(sheet)
                     tr = pl.narration_file(pl.sheets_dir(pid), pid, lang)
-                    scenes = pl.load_scenes(Path(proj["sheet"]), lang, tr)
-                except Exception:
+                    scenes = pl.load_scenes(sheet, lang, tr)
+                # load_scenes raises SystemExit (not Exception) for a language
+                # with no narration file — catch it so the panel still opens.
+                except (Exception, SystemExit):
                     scenes = None
+            lang = lang or "en"          # global (project-less) voices page
             vx.ensure_folders()
             refs = vx.references(lang)
             return self._json({
@@ -901,7 +912,7 @@ class Handler(BaseHTTPRequestHandler):
                 # list full of English voices is noise, not choice.
                 "references": [r for r in refs if r["lang"] == lang],
                 "loose": [r for r in refs if not r["lang"]],
-                "counts": {c: len(vx.references(c)) for c in ("en", "de", "es")},
+                "counts": {c: len(vx.references(c)) for c in pl.LANG_NAMES},
                 "folder": f"voices_refs/{lang}",
                 "chosen": vx.pref_for(lang),
                 "sample": vx.sample_line(lang, scenes),
@@ -929,10 +940,10 @@ class Handler(BaseHTTPRequestHandler):
             # Load whatever description/tags were last generated or edited for a
             # language. Empty is a valid answer (nothing generated yet).
             pid = (q.get("id") or [""])[0]
-            lang = (q.get("lang") or ["en"])[0]
             proj = pl.find_project(pid)
             if proj is None:
                 return self._json({"error": "project not found"}, 404)
+            lang = (q.get("lang") or [""])[0] or pl.main_lang(Path(proj["sheet"]))
             data = pl.load_metadata(Path(proj["sheet"]), lang)
             return self._json(data or {})
 
@@ -1043,7 +1054,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"started": ok})
 
         if path == "/api/build":
-            ok = start_thread(run_build, b.get("id"), b.get("langs") or ["en"],
+            ok = start_thread(run_build, b.get("id"), b.get("langs") or [],
                               bool(b.get("captions", True)),
                               b.get("music") and str(ROOT / "music" / b["music"]),
                               bool(b.get("zoom", True)), b.get("voices") or {},
@@ -1061,7 +1072,7 @@ class Handler(BaseHTTPRequestHandler):
             if not pid:
                 return self._json({"error": "which project?"}, 400)
             ok = start_thread(run_steps, pid,
-                              b.get("langs") or ["en"], steps,
+                              b.get("langs") or [], steps,
                               bool(b.get("captions")), b.get("music") or None,
                               b.get("zoom", True), b.get("voices") or {},
                               bool(b.get("force")), bool(b.get("master", True)))
@@ -1102,10 +1113,10 @@ class Handler(BaseHTTPRequestHandler):
             # Generate title/description/tags for one language. Synchronous — it
             # is a single Gemini call, not a long job — so the UI just waits.
             pid = b.get("id")
-            lang = b.get("lang") or "en"
             proj = pl.find_project(pid)
             if proj is None:
                 return self._json({"error": "project not found"}, 404)
+            lang = b.get("lang") or pl.main_lang(Path(proj["sheet"]))
             try:
                 data = pl.build_metadata(Path(proj["sheet"]), lang, pl.load_config())
                 log(f"Wrote {lang} description for {pid}")
@@ -1116,10 +1127,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/metadata_save":
             # Persist the user's edits to the description/tags.
             pid = b.get("id")
-            lang = b.get("lang") or "en"
             proj = pl.find_project(pid)
             if proj is None:
                 return self._json({"error": "project not found"}, 404)
+            lang = b.get("lang") or pl.main_lang(Path(proj["sheet"]))
             try:
                 saved = pl.save_metadata(Path(proj["sheet"]), lang, {
                     "title": b.get("title"), "description": b.get("description"),

@@ -114,6 +114,17 @@ def main() -> int:
     check("reading the main script language directly returns scenes",
           len(pl.load_scenes(Path(proj["sheet"]), "de", None)), 3)
 
+    # No language chosen -> the project's own main language, never a hardcoded
+    # "en". This is what the CLI (resolve) and the studio workers now default to.
+    import types
+    import make_video as mv
+    a = types.SimpleNamespace(sheet=proj["sheet"], lang=None, narration=None)
+    _sheet, _tr, _sc = mv.resolve(a)
+    check("CLI resolve() with no --lang uses the main language", a.lang, "de")
+    check("CLI resolve() loads scenes with no narration file", len(_sc), 3)
+    check("worker langs default is the main language, not 'en'",
+          [] or [pl.main_lang(Path(proj["sheet"]))], ["de"])
+
     print("\n  a drifting split pads to keep numbering aligned:")
     G.segment_script = lambda en, s, nm, k, m, fb="": ["only one part"]
 

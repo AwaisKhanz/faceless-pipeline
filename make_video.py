@@ -101,18 +101,23 @@ def resolve(a) -> tuple[Path, Path | None, list]:
     if not sheet.exists():
         raise SystemExit(f"Sheet not found: {sheet}")
     pid = pl.project_id(sheet)
+    # No --lang given -> use the project's OWN main language, not a hardcoded
+    # "en". Sourcing especially is language-independent and must never demand an
+    # English narration file a German- or Spanish-main project does not have.
+    lang = a.lang or pl.main_lang(sheet)
+    a.lang = lang                        # so later steps read the resolved value
     tr = Path(a.narration) if a.narration else pl.narration_file(
-        sheet.parent, pid, a.lang)
+        sheet.parent, pid, lang)
     # A language needs its own narration file unless it IS the main script's own
     # language (which reads its narration straight from the main script).
-    if a.lang != pl.main_lang(sheet) and tr is None:
+    if lang != pl.main_lang(sheet) and tr is None:
         raise SystemExit(
-            f"Language '{a.lang}' needs a narration file.\n"
+            f"Language '{lang}' needs a narration file.\n"
             f"Put it in {sheet.parent}/ named like {pid}_GERMAN_narration.md, "
             f"or pass --narration.")
     if tr:
         print(f"Narration: {tr.name}")
-    return sheet, tr, pl.load_scenes(sheet, a.lang, tr)
+    return sheet, tr, pl.load_scenes(sheet, lang, tr)
 
 
 # ---------------------------------------------------------------------- steps
@@ -133,9 +138,9 @@ def step_stock(a) -> None:
     banner(f"Sourcing visuals for {len(scenes)} scenes")
     assets = pl.source_stock(scenes, sheet, cfg, redo=redo, on_progress=bar)
 
-    p = pl.paths_for(sheet, "en")
+    p = pl.paths_for(sheet, "en")        # picks/approval are shared, language-agnostic
     picks = json.loads(p["picks"].read_text(encoding="utf-8")) if p["picks"].exists() else {}
-    approve.build(scenes, assets, p["approval"], a.sheet, "en",
+    approve.build(scenes, assets, p["approval"], a.sheet, a.lang,
                   {int(k): v for k, v in picks.items()})
     banner("Approval sheet ready")
     print(f"  open {p['approval']}")
@@ -267,7 +272,9 @@ def main() -> None:
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--verbose", action="store_true",
                     help="show full Python tracebacks")
-    ap.add_argument("--lang", default="en")
+    ap.add_argument("--lang", default=None,
+                    help="language to voice/render; defaults to the project's "
+                         "own main-script language")
     ap.add_argument("--narration")
     ap.add_argument("--redo", help="comma-separated scene numbers to re-source")
     ap.add_argument("--voice", help="reference clip to use, e.g. english-narrator-1.mp3")
@@ -424,8 +431,11 @@ def main() -> None:
         projs = pl.find_projects()
         if projs:
             p0 = next((p for p in projs if p["scenes"] > 20), projs[0])
-            tr = pl.narration_file(pl.sheets_dir(p0["id"]), p0["id"], a.lang)
-            sc = pl.load_scenes(Path(p0["sheet"]), a.lang, tr)
+            # Benchmark in the sample project's OWN main language (it may not have
+            # an English narration), unless the user forced one with --lang.
+            lang = a.lang or pl.main_lang(Path(p0["sheet"]))
+            tr = pl.narration_file(pl.sheets_dir(p0["id"]), p0["id"], lang)
+            sc = pl.load_scenes(Path(p0["sheet"]), lang, tr)
             mid = [s.narration for s in sc if 12 <= len(s.narration.split()) <= 30]
             lines = mid[:5] or [s.narration for s in sc[:5]]
             print(f"  lines:     5 real ones from {p0['id']} ({a.lang})")
