@@ -18,20 +18,9 @@ from . import gemini as G
 
 ROOT = Path(__file__).resolve().parent.parent
 SECTION_WORDS = 700
-WORDS_PER_SEC = 2.5      # narration pace at the pipeline's default rate
-GAP = 0.4                # silence between lines, matches TAIL - DISSOLVE
 
 LANG_NAMES = {"de": "German", "es": "Spanish", "fr": "French",
               "it": "Italian", "pt": "Portuguese"}
-
-DISCLAIMER = {
-    "en": """⚠️ IMPORTANT — PLEASE READ
-This video is for EDUCATIONAL AND INFORMATIONAL PURPOSES ONLY. It is not medical advice, diagnosis, or treatment, and it is not a substitute for the guidance of a qualified healthcare professional. I am not a doctor. Everything here is a plain-language summary of published research, and it describes what tends to be found across large groups of people — not what is true for you personally. If you have any concern about your health, please speak with your own doctor, who knows your history. Never disregard professional medical advice or delay seeking it because of something you watched here.""",
-    "de": """⚠️ WICHTIG — BITTE LESEN
-Dieses Video dient AUSSCHLIESSLICH BILDUNGS- UND INFORMATIONSZWECKEN. Es ist keine medizinische Beratung, Diagnose oder Behandlung und ersetzt nicht den Rat einer qualifizierten medizinischen Fachperson. Ich bin kein Arzt. Alles hier ist eine allgemein verständliche Zusammenfassung veröffentlichter Forschung und beschreibt, was sich über große Gruppen von Menschen hinweg zeigt — nicht, was für Sie persönlich zutrifft. Wenn Sie sich um Ihre Gesundheit sorgen, sprechen Sie bitte mit Ihrem eigenen Arzt, der Ihre Vorgeschichte kennt. Ignorieren Sie ärztlichen Rat niemals und verzögern Sie ihn nicht wegen etwas, das Sie hier gesehen haben.""",
-    "es": """⚠️ IMPORTANTE — POR FAVOR, LEA
-Este vídeo tiene FINES EXCLUSIVAMENTE EDUCATIVOS E INFORMATIVOS. No es asesoramiento médico, ni diagnóstico, ni tratamiento, y no sustituye la orientación de un profesional sanitario cualificado. No soy médico. Todo lo que aquí se cuenta es un resumen en lenguaje sencillo de investigaciones publicadas, y describe lo que se observa en grandes grupos de personas, no lo que es cierto para usted en particular. Si le preocupa su salud, hable con su propio médico, que conoce su historial. Nunca ignore el consejo médico profesional ni retrase buscarlo por algo que haya visto aquí.""",
-}
 
 
 @dataclass
@@ -67,43 +56,16 @@ def esc(s: str) -> str:
     return G.normalise(s).replace("\n", " ")
 
 
-def ts(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    return f"{m:02d}:{s:02d}"
-
-
-def estimate_starts(scenes: list[Scene]) -> list[float]:
-    t, out = 0.0, []
-    for s in scenes:
-        out.append(t)
-        t += len(s.narration.split()) / WORDS_PER_SEC + GAP
-    return out
-
-
-def act_ranges(scenes: list[Scene], acts: list[dict]) -> list[tuple[dict, int, int]]:
-    """Spread the acts evenly over the scenes. The model's act boundaries are a
-    narrative judgement; the numbers have to be exact, so they are computed."""
-    if not acts:
-        return [({"name": "MAIN", "summary": ""}, 1, len(scenes))]
-    n, k = len(scenes), len(acts)
-    out, start = [], 1
-    for i, a in enumerate(acts):
-        end = n if i == k - 1 else round(n * (i + 1) / k)
-        end = max(end, start)
-        out.append((a, start, end))
-        start = end + 1
-    return out
-
-
 # ---------------------------------------------------------------- rendering
 
 def render_master(plan: dict, scenes: list[Scene], pid: str, lang: str = "en") -> str:
-    vids = [s.n for s in scenes if s.media == "VIDEO"]
-    heroes = sum(1 for s in scenes if s.hero)
-    ranges = act_ranges(scenes, plan.get("acts", []))
-    est = estimate_starts(scenes)
-    total = est[-1] + len(scenes[-1].narration.split()) / WORDS_PER_SEC + 1.0
+    """The master sheet: only what the pipeline reads plus a little context.
 
+    Deliberately lean. Everything here is either parsed by lib/sheet.py (the
+    scene blocks) or a short human note; the old settings tables, act summaries,
+    music/thumbnail prompts, checklists and count tables were decoration nothing
+    read, so they're gone. One block per scene, in order.
+    """
     L: list[str] = []
     add = L.append
 
@@ -111,127 +73,53 @@ def render_master(plan: dict, scenes: list[Scene], pid: str, lang: str = "en") -
     # language that is so the rest of the app never has to assume English — a
     # project can start in German or Spanish and still read correctly.
     add(f"<!-- master-lang: {lang} -->")
-    add(f"# 🎬 MASTER PRODUCTION SHEET — {pid}")
-    add(f"## \"{plan.get('title_en', pid)}\"")
+    add(f"# {plan.get('title_en', pid)}")
+    add(f"_{len(scenes)} scenes · language: {lang} · "
+        f"generated {datetime.now():%Y-%m-%d}_")
     add("")
-    add(f"> **{len(scenes)} SCENES.** One scene = one narration line = one media "
-        f"asset. Generated from the script on {datetime.now():%Y-%m-%d}.")
+    add("Each block is one scene = one narration line + one picture or clip. "
+        "**ALT / search** is what gets searched for the visual; **Fallbacks** are "
+        "tried only if it finds nothing. Edit any line, then re-source or "
+        "re-render from the studio.")
+    if plan.get("visual_style"):
+        add("")
+        add(f"**Visual style:** {plan['visual_style']}")
     add("")
     add("---")
-    add("")
-    add("## 0. PROJECT SETTINGS")
-    add("")
-    add("| Setting | Value |")
-    add("|---|---|")
-    add("| **Narrator voice** | Set per language in the studio |")
-    add("| **Aspect** | Landscape 16:9 |")
-    add(f"| **Total scenes** | **{len(scenes)}** |")
-    add(f"| **Estimated runtime** | ~{int(total // 60)} min {int(total % 60)} s |")
-    add("| **Audience** | 60+, warm reassuring documentary |")
-    add("| **Captions** | Black-box white-text, burned in |")
-    add("| **Music** | Prompt below, ~20% under narration |")
-    add("| **Transitions** | Dissolve 0.6s |")
-    add("")
-    add("### ⭐ THE RULE")
-    add("**One scene = one narration line = one media asset.**")
-    add("")
-    add("### Visual style")
-    add(plan.get("visual_style", ""))
-    if plan.get("recurring"):
-        add("")
-        add("**Recurring people — cast the same face every time:**")
-        for r in plan["recurring"]:
-            add(f"- **{r['name']}** — {r['look']}")
-    if plan.get("spine_phrase"):
-        add("")
-        add(f"### ⚑ Spine phrase")
-        add(f"**\"{plan['spine_phrase']}\"** — this is what the video turns on. "
-            f"Keep it word-identical everywhere it appears, in every language.")
-    add("")
-    add("**Status:** `⬜ TODO` · `✅ DONE`")
     add("")
 
-    for act, a, b in ranges:
-        add("---")
+    for s in scenes:
+        flag = f" ⚑ {s.note}" if getattr(s, "note", "") else ""
+        add(f"**S{s.n} ⬜** · {s.media}{flag}")
+        add(f"- Narration: \"{esc(s.narration)}\"")
+        add(f"- ALT / search: `{s.query.strip().strip('`')}`")
+        if getattr(s, "domain", ""):
+            add(f"- Domain: {s.domain}")
+        fb = [q.strip().strip('`') for q in getattr(s, "fallbacks", []) if q.strip()]
+        if fb:
+            # Its own line so sheets from before the ladder existed stay valid —
+            # the parser treats Fallbacks as optional.
+            add("- Fallbacks: " + " · ".join(f"`{q}`" for q in fb))
         add("")
-        add(f"# {act['name'].upper()} (S{a}–S{b})")
-        if act.get("summary"):
-            add("")
-            add(f"_{act['summary']}_")
-        add("")
-        for s in scenes[a - 1:b]:
-            flag = f" ⚑ {s.note}" if s.note else ""
-            add(f"**S{s.n} ⬜** · {s.media}{flag}")
-            add(f"- Narration: \"{esc(s.narration)}\"")
-            add(f"- ALT / search: `{s.query.strip().strip('`')}`")
-            fb = [q.strip().strip('`') for q in getattr(s, "fallbacks", []) if q.strip()]
-            if getattr(s, "domain", ""):
-                add(f"- Domain: {s.domain}")
-            if fb:
-                # Written on its own line so sheets from before the ladder
-                # existed stay valid — the parser treats it as optional.
-                add("- Fallbacks: " + " · ".join(f"`{q}`" for q in fb))
-            add("")
 
-    add("---")
-    add("")
-    add("# FINAL PASSES")
-    add("")
-    add("- [ ] **Visuals** — review every pick in the studio")
-    add("- [ ] **Narration** — generate, spot-check the hero scenes")
-    add("- [ ] **Render** — captions on, music under")
-    add("- [ ] **Thumbnail** — prompt below")
-    add("- [ ] **Upload** — description and tags from the language files")
-    add("")
-    add("---")
-    add("")
-    add("# 🎵 BACKGROUND MUSIC PROMPT")
-    add(f"> \"{plan.get('music_prompt', '')}\"")
-    add("")
-    add("**Settings:** starts at **0:00** · spans the whole video · volume **~20%**")
-    add("")
-    add("---")
-    add("")
-    add("# 🖼️ THUMBNAIL PROMPT")
-    add("")
-    add("**AI image-gen prompt (background):**")
-    add(f"> \"{plan.get('thumbnail_prompt', '')}\"")
-    add("")
-    add("**Text overlay (2 lines):**")
-    add(f"- Line 1 (biggest, white/warm yellow): **\"{plan.get('thumbnail_line1', '')}\"**")
-    add(f"- Line 2 (smaller, accent red): **\"{plan.get('thumbnail_line2', '')}\"**")
-    add("")
-    add("---")
-    add("")
-    add("### Scene count")
-    add("| Act | Scenes | Count |")
-    add("|---|---|---|")
-    for act, a, b in ranges:
-        add(f"| {act['name']} | S{a}–S{b} | {b - a + 1} |")
-    add(f"| **Total** | | **{len(scenes)}** |")
-    add("")
-    add(f"**Media split:** {len(scenes) - len(vids)} IMAGE · {len(vids)} VIDEO"
-        + (f" — {', '.join('S' + str(v) for v in vids)}" if vids else ""))
-    add(f"**Hero scenes:** {heroes}")
-    add("")
     return "\n".join(L) + "\n"
 
 
-def render_translation(plan: dict, scenes: list[Scene], lang: str,
-                       lines: list[str], yt: dict | None, pid: str) -> str:
-    name = LANG_NAMES.get(lang, lang.upper())
+def render_translation(scenes: list[Scene], lang: str, lines: list[str],
+                       pid: str) -> str:
+    """A per-language narration file: the master's scenes, this language's words.
+
+    Lean, like the master. Only the `EN:` / `<LANG>:` lines are read (by
+    lib/sheet.parse_translation); the reference line is labelled EN whatever the
+    structure language is, because the parser keys on it. Titles/tags are written
+    on demand (the Publish button), not baked in here."""
     code = lang.upper()
+    name = LANG_NAMES.get(lang, lang.upper())
     L: list[str] = []
     add = L.append
-
-    add(f"# 🇩🇪 {name.upper()} NARRATION — {pid}" if lang == "de"
-        else f"# {name.upper()} NARRATION — {pid}")
-    add(f"## \"{plan.get('title_en', pid)}\"")
-    if yt:
-        add(f"### {name} title: \"{yt.get('title', '')}\"")
-    add("")
-    add(f"> Matches the {len(scenes)}-scene master sheet exactly. Scene numbers are "
-        f"identical, so the pipeline reuses the same visuals.")
+    add(f"# {name} narration — {pid}")
+    add(f"_{len(scenes)} scenes · same scene numbers as the master, so the "
+        f"pictures are shared_")
     add("")
     add("---")
     add("")
@@ -239,50 +127,6 @@ def render_translation(plan: dict, scenes: list[Scene], lang: str,
         add(f"**S{s.n}** · EN: \"{esc(s.narration)}\"")
         add(f"{code}: \"{esc(tr)}\"")
         add("")
-
-    if yt:
-        add("---")
-        add("")
-        add(f"## 📺 YOUTUBE PACKAGE ({name.upper()})")
-        add("")
-        add("### Title")
-        add(f"> **{yt.get('title', '')}**")
-        add("")
-        if yt.get("alt_titles"):
-            add("**A/B alternates:**")
-            for t in yt["alt_titles"]:
-                add(f"- {t}")
-            add("")
-        add("### Description")
-        add("")
-        add("```")
-        add(yt.get("hook", ""))
-        add("")
-        starts = estimate_starts(scenes)
-        for ch in yt.get("chapters", []):
-            i = max(1, min(len(scenes), int(ch.get("scene", 1)))) - 1
-            add(f"{ts(starts[i])} — {ch.get('label', '')}")
-        add("")
-        add(DISCLAIMER.get(lang, DISCLAIMER["en"]))
-        add("```")
-        add("")
-        add("### Tags")
-        add("")
-        add("```")
-        add(", ".join(yt.get("tags", [])))
-        add("```")
-        add("")
-        add("### Thumbnail text")
-        add(f"- **\"{yt.get('thumbnail_line1', '')}\"**")
-        add(f"- _\"{yt.get('thumbnail_line2', '')}\"_")
-        add("")
-
-    add("---")
-    add("")
-    add("### Note")
-    if plan.get("spine_phrase"):
-        add(f"The spine of this video is **\"{plan['spine_phrase']}\"**. Its "
-            f"{name} wording must stay identical everywhere it appears.")
     return "\n".join(L) + "\n"
 
 
@@ -403,13 +247,13 @@ def segment_language(scenes: list[Scene], script: str, lang: str, key: str,
     return (seg + [""] * len(en_lines))[:len(en_lines)]
 
 
-def _language_sheet(scenes: list[Scene], plan: dict, pid: str, lang: str,
-                    lines: list[str], key: str, model: str) -> tuple[str, str]:
-    """The narration + YouTube package file for one language."""
+def _language_sheet(scenes: list[Scene], pid: str, lang: str,
+                    lines: list[str]) -> tuple[str, str]:
+    """The narration file for one language. No YouTube call — titles/tags are
+    generated on demand from the Publish button, not baked into the sheet."""
     name = LANG_NAMES.get(lang, lang.upper())
-    yt = G.youtube_package(lines, name, plan, key, model)
     return (f"{pid}_{name.upper()}_narration.md",
-            render_translation(plan, scenes, lang, lines, yt, pid))
+            render_translation(scenes, lang, lines, pid))
 
 
 def generate(scripts: dict[str, str], pid: str, key: str,
@@ -448,11 +292,9 @@ def generate(scripts: dict[str, str], pid: str, key: str,
     res.scenes = scenes
 
     # The structure language's narration IS the master — no separate sheet for
-    # it. One YouTube call enriches the plan (thumbnail lines) before rendering.
+    # it. Titles/descriptions/tags are written on demand (the Publish button), so
+    # generating them here would be a wasted LLM call.
     tick(f"writing the {struct_name} master sheet")
-    yt0 = G.youtube_package([s.narration for s in scenes], struct_name, plan, key, model)
-    plan["thumbnail_line1"] = yt0.get("thumbnail_line1") or plan.get("thumbnail_line1", "")
-    plan["thumbnail_line2"] = yt0.get("thumbnail_line2") or plan.get("thumbnail_line2", "")
     res.files[f"{pid}_MASTER_production_sheet.md"] = render_master(plan, scenes, pid, struct)
 
     # Every other language: segment its pasted script onto the shared scenes.
@@ -461,7 +303,7 @@ def generate(scripts: dict[str, str], pid: str, key: str,
         tick(f"splitting the {name} script onto {len(scenes)} scenes")
         lines = segment_language(scenes, scripts[lang].strip(), lang, key, model,
                                  res, on_warn)
-        fn, c = _language_sheet(scenes, plan, pid, lang, lines, key, model)
+        fn, c = _language_sheet(scenes, pid, lang, lines)
         res.files[fn] = c
 
     return res
@@ -489,8 +331,8 @@ def add_language(sheet: Path, lang: str, script: str, key: str,
     on_progress(1, 3, f"reading {pid}")
     on_progress(2, 3, f"splitting the {name} script onto {len(scenes)} scenes")
     lines = segment_language(scenes, script.strip(), lang, key, model, res, on_warn)
-    on_progress(3, 3, f"writing the {name} package")
-    fn, c = _language_sheet(scenes, plan, pid, lang, lines, key, model)
+    on_progress(3, 3, f"writing the {name} narration")
+    fn, c = _language_sheet(scenes, pid, lang, lines)
     res.files[fn] = c
     return res
 
