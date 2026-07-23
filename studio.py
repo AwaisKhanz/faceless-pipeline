@@ -394,6 +394,7 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
 def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
               zoom: bool, voices: dict[str, str], master: bool = True) -> None:
     try:
+        VIS.unload()          # free the sourcing model before the heavy voice work
         proj = pl.find_project(pid)
         sheet = Path(proj["sheet"])
         sdir = sheet.parent
@@ -464,6 +465,7 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
     would otherwise be reused.
     """
     try:
+        VIS.unload()          # free the sourcing model before voice/render
         proj = pl.find_project(pid)
         sheet = Path(proj["sheet"])
         sdir = sheet.parent

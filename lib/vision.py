@@ -385,3 +385,28 @@ def reset() -> None:
     """Drop the singleton — for tests that swap the scorer."""
     global _SCORER, _TRIED
     _SCORER, _TRIED = None, False
+
+
+def unload() -> None:
+    """Free the matching model's memory.
+
+    On a Mac the GPU shares system RAM, so the ~0.6–1.7 GB the scorer holds is
+    RAM the voice/render step can't use. Sourcing is done by the time those run,
+    so this hands it back — the model reloads (no re-download) next time it's
+    needed. A no-op if nothing was loaded.
+    """
+    global _SCORER, _TRIED
+    scorer, _SCORER, _TRIED = _SCORER, None, False
+    if scorer is not None:
+        scorer._model = scorer._proc = None
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        mps = getattr(torch.backends, "mps", None)
+        if mps and mps.is_available() and hasattr(torch, "mps"):
+            torch.mps.empty_cache()
+    except Exception:
+        pass
