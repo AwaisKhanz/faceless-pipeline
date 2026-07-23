@@ -565,6 +565,32 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
         traceback.print_exc()
 
 
+# ---------------------------------------------------------------- script view
+
+def script_data(pid: str) -> dict:
+    """The narration a project was built from, per scene and per language, with
+    the image query beside each line — for a read-only 'View script' panel."""
+    proj = pl.find_project(pid)
+    if proj is None:
+        return {"error": "project not found"}
+    sheet = Path(proj["sheet"])
+    langs = []
+    for lg in proj["languages"]:
+        code = lg["code"]
+        try:
+            tr = pl.translation_for(sheet.parent, pid, code)
+            scenes = pl.load_scenes(sheet, code, tr)
+        except Exception:
+            scenes = []
+        rows = [{"n": s.n, "narration": s.narration, "query": s.query,
+                 "media": s.media, "hero": bool(getattr(s, "hero", False))}
+                for s in scenes]
+        text = " ".join(r["narration"] for r in rows if r["narration"]).strip()
+        langs.append({"code": code, "name": lg.get("name", code), "scenes": rows,
+                      "text": text, "words": len(text.split())})
+    return {"id": pid, "label": proj["label"], "languages": langs}
+
+
 # ---------------------------------------------------------------- approval data
 
 def approval_data(pid: str) -> dict:
@@ -862,6 +888,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(approval_data(pid))
             except StopIteration:
                 return self._json({"error": "project not found"}, 404)
+
+        if path == "/api/script":
+            d = script_data((q.get("id") or [""])[0])
+            return self._json(d, 404 if d.get("error") else 200)
 
         if path == "/api/metadata":
             # Load whatever description/tags were last generated or edited for a

@@ -656,6 +656,7 @@ async function viewProject(id) {
       }, st.assets ? 'Re-source all' : 'Find visuals'),
       st.assets ? el('button', { class: 'btn', onclick: () => go('/review/' + p.id) },
         'Review & swap pictures') : null,
+      el('button', { class: 'btn', onclick: () => viewScript(p.id) }, 'View script'),
       el('div', { style: 'flex:1' }),
       // Match quality, when visuals were scored. A quiet read that the pictures
       // actually fit, with a nudge when some don't.
@@ -1670,6 +1671,59 @@ function playVideo(name, title) {
         }, 'Close')),
       v,
       el('div', { class: 'sub mono', style: 'margin-top:8px' }, name)));
+  document.body.append(modal);
+}
+
+// ═══ view script ══════════════════════════════════════════════════════════
+// Read-only look at the narration a project was built from, per scene, with the
+// image query beside each line. One tab per language; copy the whole script.
+async function viewScript(pid) {
+  const d = await api('/api/script?id=' + encodeURIComponent(pid));
+  if (!d || d.error) return toast((d && d.error) || 'Could not load the script', true);
+  const langs = d.languages || [];
+  if (!langs.length) return toast('No script for this project yet.', true);
+  let cur = langs[0];
+
+  const tabs = el('div', { class: 'row', style: 'gap:8px;margin-bottom:12px;flex-wrap:wrap' });
+  const meta = el('span', { class: 'sub', style: 'display:block;margin-bottom:8px' });
+  const body = el('div', { style: 'overflow:auto;max-height:62vh' });
+
+  const modal = el('div', {
+    class: 'modal', onclick: e => { if (e.target === modal) modal.remove(); }
+  },
+    el('div', { class: 'box', style: 'max-width:820px' },
+      el('div', { class: 'row', style: 'margin-bottom:10px' },
+        el('h3', { style: 'flex:1' }, 'Script — ' + (d.label || pid)),
+        el('button', {
+          class: 'btn sm', onclick: () => {
+            navigator.clipboard && navigator.clipboard.writeText(cur.text || '');
+            toast('Copied the ' + cur.name + ' script.');
+          }
+        }, 'Copy script'),
+        el('button', { class: 'btn sm', onclick: () => modal.remove() }, 'Close')),
+      tabs, meta, body));
+
+  const paint = () => {
+    meta.textContent = `${(cur.scenes || []).length} scenes · ${cur.words || 0} words`;
+    body.innerHTML = '';
+    (cur.scenes || []).forEach(s => body.append(
+      el('div', { style: 'display:flex;gap:11px;padding:9px 0;border-bottom:1px solid var(--line)' },
+        el('span', { class: 'sub mono', style: 'flex:none;width:32px;padding-top:1px' }, 'S' + s.n),
+        el('div', { style: 'min-width:0' },
+          el('div', { style: 'font-size:14.5px;line-height:1.5' },
+            s.narration || el('span', { class: 'sub' }, '(no narration)')),
+          el('div', { class: 'sub mono', style: 'margin-top:3px;white-space:pre-wrap' },
+            (s.media === 'VIDEO' ? '▶ ' : '\u{1F5BC} ') + (s.query || '—'))))));
+  };
+  const paintTabs = () => {
+    tabs.innerHTML = '';
+    langs.forEach(l => tabs.append(el('button', {
+      class: 'btn sm' + (l.code === cur.code ? ' primary' : ''),
+      onclick: () => { cur = l; paintTabs(); paint(); }
+    }, l.name)));
+  };
+  if (langs.length > 1) paintTabs();
+  paint();
   document.body.append(modal);
 }
 
