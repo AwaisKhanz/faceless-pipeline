@@ -103,6 +103,17 @@ def main() -> int:
     check("languages are de + es (no phantom English)",
           [l["code"] for l in pl.find_projects()[0]["languages"]], ["de", "es"])
 
+    # Regression: reading the master's OWN language needs no translation file.
+    # This used to raise SystemExit ("Language 'de' needs a translation file")
+    # and take down the whole dashboard for anyone whose master wasn't English.
+    proj = pl.find_projects()[0]
+    st = pl.project_status(Path(proj["sheet"]), proj["languages"])
+    check("status loads for a non-English master (no crash)", "error" not in st)
+    check("the master language counts as having its sheet",
+          st["languages"]["de"]["sheets"])
+    check("reading the master language directly returns scenes",
+          len(pl.load_scenes(Path(proj["sheet"]), "de", None)), 3)
+
     print("\n  a drifting split pads to keep numbering aligned:")
     G.segment_script = lambda en, s, nm, k, m, fb="": ["only one part"]
 

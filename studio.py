@@ -777,10 +777,13 @@ class Handler(BaseHTTPRequestHandler):
             # Attach per-language status so the dashboard needs one request,
             # not one per project.
             for pr in projects:
+                # SystemExit is not an Exception; library code raises it for
+                # user-facing problems. Catch it too so one bad project shows an
+                # error card instead of taking down the whole dashboard.
                 try:
                     pr["status"] = pl.project_status(
                         Path(pr["sheet"]), pr["languages"])
-                except Exception as e:
+                except (Exception, SystemExit) as e:
                     pr["status"] = {"error": str(e), "scenes": pr.get("scenes", 0),
                                     "assets": 0, "languages": {}}
             return self._json({

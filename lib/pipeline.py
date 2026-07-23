@@ -266,6 +266,7 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
         render   the finished MP4 is on disk
     """
     pid = project_id(sheet)
+    mlang = master_lang(sheet)          # the language the master itself is written in
     p_shared = paths_for(sheet, "en")
     n_scenes = 0
     try:
@@ -307,7 +308,10 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
             vp = tts.voice_paths(scenes, code, p_shared['voicecache'])
             voiced = sum(1 for v in vp
                          if v.exists() and v.stat().st_size > 1024)
-        except Exception:
+        # SystemExit (not an Exception) is what sheet.load raises for a language
+        # whose narration can't be found. Catch it here so one missing
+        # translation degrades to "not voiced" instead of failing the dashboard.
+        except (Exception, SystemExit):
             scenes = []
 
         # Which clip reads this language. The project page needs it to show and
@@ -328,7 +332,7 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
             "voice_ref": ref,
             "voice_label": V.label_for(ref) if ref else "",
             "voice_ok": ref_ok,
-            "sheets": bool(lg.get("file")) or code == "en",
+            "sheets": bool(lg.get("file")) or code == mlang,
             "visuals": assets_n > 0 and assets_n >= n_scenes,
             "visuals_n": assets_n,
             "voice_n": voiced,

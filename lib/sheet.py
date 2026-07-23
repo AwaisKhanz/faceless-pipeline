@@ -127,10 +127,27 @@ def parse_translation(path: Path, lang: str) -> dict[int, str]:
     return out
 
 
+_MLANG_RE = re.compile(r"master-lang:\s*([a-z]{2})", re.I)
+
+
+def master_lang(master: Path) -> str:
+    """Which language the master sheet's own narration is written in. Recorded as
+    an HTML comment at the top; older sheets without it are English."""
+    try:
+        head = Path(master).read_text(encoding="utf-8", errors="ignore")[:400]
+    except Exception:
+        return "en"
+    m = _MLANG_RE.search(head)
+    return m.group(1).lower() if m else "en"
+
+
 def load(master: Path, lang: str, translation: Path | None = None) -> list[Scene]:
     """Master sheet + optional translation -> scenes in the requested language."""
     scenes = parse_master(master)
-    if lang.lower() == "en":
+    # The master carries ITS OWN language's narration directly — which may be
+    # German or Spanish, not just English. Reading that language needs no
+    # translation file; only OTHER languages do.
+    if lang.lower() == master_lang(master):
         return scenes
     if translation is None:
         raise SystemExit(
