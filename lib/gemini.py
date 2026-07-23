@@ -471,9 +471,12 @@ You are only deciding WHERE TO CUT. This is checked mechanically and a mismatch
 is rejected.
 
 ════════════════════════════════════════════════════════════════════════
-2. WHERE TO CUT:  ONE SCENE = ONE CLEAR VISUAL IDEA
+2. WHERE TO CUT:  ONE SCENE = ONE VISUAL, AND THE SCRIPT DECIDES HOW MANY
 ════════════════════════════════════════════════════════════════════════
-NOT one sentence = one scene. NOT one noun = one scene.
+NOT one noun = one scene. But ALSO NOT one sentence = one scene. Let the words
+decide: cut EVERY time the picture would have to change, as many times as the
+sentence demands. There is no fixed cadence and no target count — a sentence
+that names three things is three scenes; a sentence that shows one thing is one.
 
 A scene ends when the picture would have to change. Cut when any of these
 changes:
@@ -496,31 +499,51 @@ changes:
 If none of those change, DO NOT CUT — even at a full stop.
 
 ────────────────────────────────────────────────────────────────────────
-DO NOT OVER-SPLIT: group things that share one picture
+ONE SENTENCE IS USUALLY SEVERAL SCENES — THIS IS THE #1 MISTAKE
 ────────────────────────────────────────────────────────────────────────
-A list of similar nouns is ONE visual idea, or at most a few:
+A single sentence that NAMES several things, or MOVES through several
+subjects, places or eras, is several scenes — ONE PER VISUAL — even though it
+is a single sentence with no full stop inside it. Leaving a compound sentence
+on one static picture is the most common and most visible failure. Split it.
 
-  "Apples, bananas, oranges, strawberries, blueberries, grapes, mangoes
-   and watermelons..."
+  "a journey full of great changes, astonishing discoveries and decisive
+   turning points"
+     -> 3 scenes:  something transforming / a moment of discovery /
+                   a pivotal turning point
 
-  WRONG  8 scenes, one per fruit
-  RIGHT  2-3 scenes, grouped into shots a camera could actually take
-         (a bowl of mixed fruit / berries close up / melons being cut)
+  "from the first civilisations in Egypt and Mesopotamia to mighty empires"
+     -> 3 scenes:  Egyptian pyramids / Mesopotamian ziggurat / an empire's army
 
-Two sentences describing the same picture from different angles are ONE scene.
+  "wars, inventions and scientific breakthroughs changed daily life"
+     -> 3 scenes:  a battle / an inventor's workshop / a laboratory
+
+Every item in a list of DIFFERENT things a camera would frame separately is
+its own scene. Commas and the words "and / und / y / e / et / or / oder"
+joining different things are your signal to cut.
 
 ────────────────────────────────────────────────────────────────────────
-DO NOT UNDER-SPLIT: a long passage holding one still image is dead air
+BUT DO NOT SPLIT WHAT SHARES ONE PICTURE
 ────────────────────────────────────────────────────────────────────────
-Each scene gets ONE photo or ONE clip for its whole duration.
+A run of similar nouns a single camera catches in one frame stays ONE scene:
 
-  - Over ~28 words containing a second visual idea -> you MUST split it.
-  - Genuinely one idea but long -> prefer media "VIDEO". Motion holds
+  "apples, bananas and oranges"  ->  one bowl of mixed fruit = 1 scene
+
+Two clauses describing the SAME picture from different angles are ONE scene.
+Never cut into single words or fragments that cannot be filmed on their own.
+
+────────────────────────────────────────────────────────────────────────
+NO STILL SITS TOO LONG
+────────────────────────────────────────────────────────────────────────
+Each scene gets ONE photo or ONE clip for its whole duration. A still that
+would hold longer than about six seconds (~15 words) is dead air:
+
+  - If it holds more than one visual -> SPLIT it (almost always the case).
+  - If it is genuinely ONE thing but long -> use media "VIDEO"; motion holds
     attention where a static photo dies.
-  - Under ~5 words is fine when it lands as a beat ("It was people.").
+  - A very short scene is fine when it lands as a beat ("It was people.").
 
-Typical result: 6-25 words per scene. That is an OUTCOME of cutting on visual
-ideas, not a target to hit. Never pad or force a scene count.
+Most scenes land in the 4-14 word range. That is an OUTCOME of cutting on the
+visuals the script names — never pad, never force a count, let the script lead.
 
 ════════════════════════════════════════════════════════════════════════
 3. READ THE SCRIPT AND DECIDE WHAT KIND OF FILM THIS IS

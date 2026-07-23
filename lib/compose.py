@@ -164,6 +164,36 @@ def _flag_repeats(scenes, res) -> None:
 
 STRUCT_ORDER = ["en", "de", "es"]     # who defines the scenes when several arrive
 
+# Conjunctions that, like commas, usually join DIFFERENT things a camera would
+# frame separately. Multilingual because any language can be the structure
+# language. Only a heuristic hint — never a hard rule.
+_LIST_CONJ = {"and", "und", "y", "e", "et", "ed", "or", "oder", "sowie"}
+
+
+def _under_split(narration: str) -> bool:
+    """A rough, language-agnostic guess that a scene bundles several visuals.
+
+    Not authoritative: it only decides whether to ASK the model to look again.
+    A scene is flagged when it is very long, or long-ish AND clearly a list
+    (commas and/or joining conjunctions). A short scene, or a long one that is
+    plainly a single picture, is left alone — the model still makes the call.
+    """
+    words = narration.split()
+    n = len(words)
+    if n >= 20:
+        return True
+    breaks = narration.count(",") + narration.count(";")
+    breaks += sum(1 for w in words if w.strip('.,;:!?"\'’”').lower() in _LIST_CONJ)
+    return n >= 11 and breaks >= 2
+
+
+def _finer_split_feedback(coarse: list[dict]) -> str:
+    """Targeted retry note naming the scenes that still hold several pictures."""
+    lines = "\n".join(f'  - "{s.get("narration", "")}"' for s in coarse[:6])
+    return ("Some scenes still hold more than one picture. Split EACH of these "
+            "on every change of visual — one scene per distinct thing named, "
+            "keeping every word verbatim and in order:\n" + lines)
+
 
 def split_into_scenes(script: str, plan: dict, key: str, model: str,
                       res: Result, tick, on_warn) -> list[Scene]:
@@ -177,15 +207,31 @@ def split_into_scenes(script: str, plan: dict, key: str, model: str,
         for attempt in range(1, 4):
             got = G.scenes_for_section(sec, plan, key, model, feedback)
             joined = " ".join(s.get("narration", "") for s in got)
-            if G.words(joined) == G.words(sec):
-                break
-            feedback = ("Your narration did not reproduce the section exactly.\n"
-                        + G.diff_words(sec, joined))
-            if attempt == 3:
+
+            # Hard gate: the narration must reproduce the section word for word.
+            if G.words(joined) != G.words(sec):
+                feedback = ("Your narration did not reproduce the section exactly.\n"
+                            + G.diff_words(sec, joined))
+                if attempt == 3:
+                    res.warnings.append(
+                        f"Section {i}: narration still differs from the script after "
+                        f"3 attempts.\n{G.diff_words(sec, joined)}")
+                    on_warn(f"Section {i} did not match the script — see warnings")
+                continue
+
+            # Soft gate: push back on scenes that bundle several visuals into one
+            # long shot, so a compound sentence becomes a beat per picture. The
+            # model decides the real cuts; this only asks it to look again, and
+            # never blocks a section that is genuinely word-accurate.
+            coarse = [s for s in got if _under_split(s.get("narration", ""))]
+            if coarse and attempt < 3:
+                feedback = _finer_split_feedback(coarse)
+                continue
+            if coarse:
                 res.warnings.append(
-                    f"Section {i}: narration still differs from the script after "
-                    f"3 attempts.\n{G.diff_words(sec, joined)}")
-                on_warn(f"Section {i} did not match the script — see warnings")
+                    f"Section {i}: {len(coarse)} scene(s) may still hold more than "
+                    f"one picture — check them in review and split if needed.")
+            break
         all_scenes.extend(got or [])
 
     scenes = [Scene(n=i, narration=s.get("narration", ""),
