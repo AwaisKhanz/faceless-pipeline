@@ -277,7 +277,17 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
   color:var(--bad);font:700 11px var(--ui);letter-spacing:.04em;padding:6px}
 /* neutral placeholder fill: built the render, but needs a real shot */
 .thumb .ph{position:absolute;left:0;bottom:0;background:var(--warn);color:#08120a;
-  font:700 10px var(--mono);padding:2px 6px;border-radius:0 6px 0 0}
+  font:700 10px var(--mono);padding:2px 6px;border-radius:0 6px 0 0;z-index:2}
+/* enlarge / play button — appears on hover, never triggers the mark-for-swap click */
+.thumb .zoom{position:absolute;right:6px;bottom:6px;width:27px;height:27px;border-radius:7px;
+  display:grid;place-items:center;background:rgba(0,0,0,.62);color:#fff;cursor:pointer;
+  opacity:0;transition:opacity .12s;border:1px solid rgba(255,255,255,.28);z-index:3}
+.thumb:hover .zoom{opacity:1}
+.thumb .zoom:hover{background:rgba(0,0,0,.9)}
+.thumb .zoom svg{width:15px;height:15px;pointer-events:none}
+/* source + media, under each picture */
+.tcap .src{color:var(--ink2);font-weight:700}
+.tcap .mk{color:var(--ink3)}
 /* the scoring legend / key */
 .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
 .legend .k{display:inline-flex;align-items:center;gap:6px}
@@ -1548,6 +1558,7 @@ async function viewReview(id) {
   // (scored on a machine that could not run it). The bar below which a match is
   // called weak comes from the server so the UI and the pipeline always agree.
   const min = d.clip_min ?? 0.45;
+  window._clipMin = min;                 // so the lightbox colours its match pill
   const pct = s => s.score == null ? null : Math.round(s.score * 100);
   const scored = items.filter(s => s.score != null);
   const weak = scored.filter(s => s.score < min);
@@ -1628,7 +1639,16 @@ async function viewReview(id) {
       p != null ? el('span', { class: 'm ' + (low ? 'weak' : 'good') }, p + '%') : null,
       s.placeholder ? el('span', { class: 'ph' }, 'PLACEHOLDER') : null,
       empty ? el('div', { class: 'nopic' }, 'NO PICTURE') : null,
-      el('div', { class: 'rep' }, el('span', {}, 'Replace')));
+      el('div', { class: 'rep' }, el('span', {}, 'Replace')),
+      // Enlarge / play — opens the picture big; stopPropagation so it doesn't
+      // also mark the scene for a swap.
+      s.url ? el('div', {
+        class: 'zoom', title: s.video ? 'Play big' : 'View big',
+        onclick: e => { e.stopPropagation(); lightbox(s); }
+      }, s.video
+        ? el('svg', { viewBox: '0 0 24 24', fill: 'currentColor' }, svgPath('M8 5v14l11-7z'))
+        : el('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round' },
+          svgPath('M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7'))) : null);
     if (s.url) t.append(s.video
       ? el('video', {
         src: s.url, muted: true, loop: true, playsinline: true, preload: 'metadata',
@@ -1636,13 +1656,50 @@ async function viewReview(id) {
         onmouseleave: e => e.target.pause()
       })
       : el('img', { src: s.url, loading: 'lazy', alt: s.query || '' }));
-    // Under each picture: the media kind and the phrase it was scored against,
-    // so it is obvious what was compared to what.
+    // Under each picture: where it came from, the media kind, and the phrase it
+    // was scored against — so it is obvious what was compared to what.
     return el('div', { class: 'tcell' }, t,
-      el('div', { class: 'tcap', title: s.query || '' },
-        (s.video ? '▶ ' : '') + (s.query || '—')));
+      el('div', { class: 'tcap', title: (s.src ? s.src + ' · ' : '') + (s.query || '') },
+        s.src ? el('span', { class: 'src' }, s.src) : null,
+        s.src ? el('span', { class: 'mk' }, ' · ') : null,
+        el('span', { class: 'mk' }, (s.video ? '▶ ' : '')),
+        (s.query || '—')));
   })));
 }
+
+// A helper: build an <svg> <path>. (el() sets attributes, so this keeps the
+// path terse inline above.)
+function svgPath(d) { const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', d); return p; }
+
+// ═══ lightbox ═════════════════════════════════════════════════════════════
+// See one sourced picture big — a still full-size, a clip with real controls —
+// with its source, match and the line it was matched against.
+function lightbox(s) {
+  const media = s.video
+    ? el('video', {
+      src: s.url, controls: true, autoplay: true, loop: true, playsinline: true,
+      style: 'width:100%;max-height:74vh;border-radius:8px;background:#000'
+    })
+    : el('img', { src: s.url, style: 'width:100%;max-height:74vh;object-fit:contain;border-radius:8px;background:#000' });
+  const pc = pctOf(s);
+  const modal = el('div', {
+    class: 'modal', onclick: e => { if (e.target === modal) { try { media.pause(); } catch (_) { } modal.remove(); } }
+  },
+    el('div', { class: 'box', style: 'max-width:1000px' },
+      el('div', { class: 'row', style: 'margin-bottom:10px;align-items:center' },
+        el('h3', { style: 'flex:1' }, 'S' + s.n + ' · ' + (s.video ? 'video' : 'image')
+          + (s.src ? ' · ' + s.src : '')),
+        pc != null ? el('span', { class: 'pill ' + (s.score < (window._clipMin ?? 0.45) ? 'part' : 'ok') },
+          'match ' + pc + '%') : null,
+        el('button', { class: 'btn sm', onclick: () => window.open(s.url, '_blank') }, 'Open in tab'),
+        el('button', { class: 'btn sm', onclick: () => { try { media.pause(); } catch (_) { } modal.remove(); } }, 'Close')),
+      media,
+      el('div', { class: 'sub mono', style: 'margin-top:8px' },
+        'matched against: "' + (s.query || '') + '"'),
+      s.narration ? el('div', { class: 'sub', style: 'margin-top:4px' }, s.narration) : null));
+  document.body.append(modal);
+}
+function pctOf(s) { return s.score == null ? null : Math.round(s.score * 100); }
 
 // ═══ player ═══════════════════════════════════════════════════════════════
 function playVideo(name, title) {

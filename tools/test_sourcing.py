@@ -114,7 +114,7 @@ def main() -> int:
 
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")
-    check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 4)
+    check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 5)
     check("prompt ensemble has four templates", len(vision.TEMPLATES), 4)
     check("clip band unchanged for the reliable path", vision._band_of(vision.BASE32), (0.17, 0.29))
     check("siglip has its own band", vision._family_of(vision.SIGLIP_SO400M), "siglip")

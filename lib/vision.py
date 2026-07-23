@@ -101,7 +101,8 @@ def _band_of(model_id: str) -> tuple:
 #   1: softmax vs junk (saturated to ~100%)   2: normalised cosine
 #   3: 4-template ensemble, gentler junk penalty, band top 0.29
 #   4: model family tiers (SigLIP 2 on a real GPU), per-family band
-SCORE_VERSION = 4
+#   5: SigLIP scored by its native sigmoid (band was saturating to 100%)
+SCORE_VERSION = 5
 
 
 def _cfg_get(cfg: dict, key: str, default):
@@ -310,26 +311,38 @@ class Scorer:
                                     return_tensors="pt", padding=pad).to(self.device)
                 with torch.no_grad():
                     m = self._model(**inputs)
-                    ie = m.image_embeds / m.image_embeds.norm(dim=-1, keepdim=True)
-                    te = m.text_embeds / m.text_embeds.norm(dim=-1, keepdim=True)
-                    cos = (ie @ te.t()).tolist()          # images x texts, -1..1
+                    siglip = (self.family == "siglip"
+                              and getattr(m, "logits_per_image", None) is not None)
+                    if siglip:
+                        # SigLIP's own calibrated answer to "does this image match
+                        # this text": sigmoid of its logits, a real 0..1 per pair.
+                        # No guessed band — that band was the reason every picture
+                        # read 100%. Rows are images x texts.
+                        rows = torch.sigmoid(m.logits_per_image).tolist()
+                    else:
+                        # CLIP: cosine, mapped to 0..1 over the band it occupies.
+                        ie = m.image_embeds / m.image_embeds.norm(dim=-1, keepdim=True)
+                        te = m.text_embeds / m.text_embeds.norm(dim=-1, keepdim=True)
+                        rows = (ie @ te.t()).tolist()
                 low, high = self.band
                 span = (high - low) or 1e-6
-                for (key, ck, _img), row in zip(todo, cos):
+                for (key, ck, _img), row in zip(todo, rows):
                     pos = sum(row[:n_pos]) / n_pos          # match to the subject
                     junk = max(row[n_pos:]) if len(row) > n_pos else 0.0
-                    rel = max(0.0, min(1.0, (pos - low) / span))
-                    # Only knock a picture down when it looks CLEARLY more like
+                    if siglip:
+                        rel = max(0.0, min(1.0, pos))       # already a probability
+                        margin = 0.05
+                    else:
+                        rel = max(0.0, min(1.0, (pos - low) / span))
+                        margin = 0.02
+                    # Knock a picture down only when it looks CLEARLY more like
                     # junk (text, a chart, clip-art) than like the subject — a
-                    # small margin, so a real photo that happens to score close on
-                    # a junk concept is not wrongly sent to 0. The penalty is
-                    # gentler now too (0.55, was 0.35): enough to sink screenshots
-                    # below real photos, not enough to erase a borderline match.
-                    if junk > pos + 0.02:
+                    # small margin, so a real photo that scores close on a junk
+                    # concept isn't wrongly sunk. 0.55 sinks screenshots below
+                    # real photos without erasing a borderline match.
+                    if junk > pos + margin:
                         rel *= 0.55
-                    rel = round(rel, 4)
-                    out[key] = rel
-                    self._cache[ck] = rel
+                    out[key] = self._cache[ck] = round(rel, 4)
             return out
         except Exception:
             # Model failed at runtime (OOM, corrupt download, …). Degrade.
