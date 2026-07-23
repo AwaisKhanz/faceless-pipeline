@@ -733,8 +733,27 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
 
+    def _guard(self, fn):
+        """Run a handler so a crash becomes a 500 with a readable message, never
+        a dead connection. Without this, one bad endpoint (a corrupt config.json,
+        a malformed project file) closes the socket with no response — the
+        browser reports ERR_EMPTY_RESPONSE and the whole UI says 'Failed to
+        fetch' with no clue why. Catches SystemExit too, because load_config
+        raises it on invalid JSON."""
+        try:
+            fn()
+        except (Exception, SystemExit) as e:
+            traceback.print_exc()
+            try:
+                self._json({"error": str(e) or e.__class__.__name__}, 500)
+            except Exception:
+                pass          # headers may already be on the wire — nothing to do
+
     # ---------------------------------------------------------------- GET
     def do_GET(self):
+        self._guard(self._get)
+
+    def _get(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         path = u.path
@@ -950,6 +969,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # --------------------------------------------------------------- POST
     def do_POST(self):
+        self._guard(self._post)
+
+    def _post(self):
         path = urlparse(self.path).path
         try:
             b = self._body()

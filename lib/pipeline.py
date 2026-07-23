@@ -224,24 +224,30 @@ def find_projects(_root: Path | None = None) -> list[dict]:
         return out
     for sd in sorted(root.glob("*/sheets")):
         for f in sorted(sd.glob("*_MASTER_production_sheet.md")):
-            pid = sd.parent.name
-            mlang = master_lang(f)
-            # The structure language reads from the master; it has no side file.
-            langs = [{"code": mlang, "name": LANG_NAMES.get(mlang, mlang), "file": None}]
-            narr = sorted(sd.glob(f"{pid}_*_narration.md"))
-            for code, words in LANG_FILE_WORDS.items():
-                if code == mlang:
-                    continue
-                hit = next((nf for nf in narr if words[0] in nf.stem.upper()), None)
-                if hit:
-                    langs.append({"code": code, "name": LANG_NAMES.get(code, code),
-                                  "file": hit.name})
+            # One unreadable project must not hide every other one. Anything that
+            # goes wrong reading a single sheet skips just that project, so the
+            # dashboard still loads the rest.
             try:
-                n = len(sheetlib.parse_master(f))
-            except SystemExit:
-                n = 0
-            out.append({"id": pid, "sheet": str(f), "dir": str(sd.parent),
-                        "label": pretty_name(f), "scenes": n, "languages": langs})
+                pid = sd.parent.name
+                mlang = master_lang(f)
+                # The structure language reads from the master; no side file.
+                langs = [{"code": mlang, "name": LANG_NAMES.get(mlang, mlang), "file": None}]
+                narr = sorted(sd.glob(f"{pid}_*_narration.md"))
+                for code, words in LANG_FILE_WORDS.items():
+                    if code == mlang:
+                        continue
+                    hit = next((nf for nf in narr if words[0] in nf.stem.upper()), None)
+                    if hit:
+                        langs.append({"code": code, "name": LANG_NAMES.get(code, code),
+                                      "file": hit.name})
+                try:
+                    n = len(sheetlib.parse_master(f))
+                except SystemExit:
+                    n = 0
+                out.append({"id": pid, "sheet": str(f), "dir": str(sd.parent),
+                            "label": pretty_name(f), "scenes": n, "languages": langs})
+            except Exception:
+                continue
     return out
 
 

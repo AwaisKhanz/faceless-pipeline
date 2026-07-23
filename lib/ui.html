@@ -580,6 +580,22 @@ function stepBar(st, l) {
 // ═══ dashboard ════════════════════════════════════════════════════════════
 async function viewDashboard() {
   const d = await api('/api/projects');
+  // The server hit a real problem (most often a broken config.json). Show its
+  // message plainly instead of a blank dashboard, so it's fixable.
+  if (d && d.error) {
+    const v = $('#view'); v.innerHTML = '';
+    v.append(el('div', { class: 'head' }, el('h1', {}, 'Dashboard')),
+      el('div', { class: 'empty card' },
+        el('b', {}, 'The app hit a problem starting up'),
+        el('div', { class: 'mono sub', style: 'margin-top:8px;white-space:pre-wrap' }, d.error),
+        el('div', { class: 'sub', style: 'margin-top:12px' },
+          'This is usually a broken config.json (often curly “smart quotes” from '
+          + 'a word processor). Reopen config.json in a plain editor, fix the '
+          + 'quotes, save, and reload.'),
+        el('div', { style: 'margin-top:14px' },
+          el('button', { class: 'btn', onclick: () => route() }, 'Reload'))));
+    return;
+  }
   S.projects = d.projects || []; S.music = d.music || [];
   S.meta = { has_keys: d.has_keys, has_gemini: d.has_gemini };
   const v = $('#view'); v.innerHTML = '';
