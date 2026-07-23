@@ -72,8 +72,12 @@ TEMPLATES = ("a photo of {}", "a picture of {}", "an image showing {}", "{}")
 # is fixed so a percentage means the same thing on every scene. (An earlier
 # softmax against junk concepts saturated — any real photograph scored ~100%,
 # because it only measured "photo vs junk", not "matches THIS line".)
-_COS_LOW = 0.17
-_COS_HIGH = 0.29
+# CLIP ViT-B/16 puts a genuinely on-subject image-text pair around cosine
+# 0.29–0.34, so the OLD top of 0.29 meant every real match pegged at 100% and the
+# number stopped telling you anything. The band top is raised so a solid match
+# reads ~75–90% and only a near-perfect one approaches 100%, restoring the spread.
+_COS_LOW = 0.15
+_COS_HIGH = 0.35
 
 # Each family's cosines sit in a different band, so the map from cosine to the
 # 0..1 match% is per-family. IMPORTANT: ranking (which picture wins) uses cosine
@@ -82,7 +86,7 @@ _COS_HIGH = 0.29
 # numbers are a sensible starting point; easy to tune after a real run because a
 # version bump re-scores from disk with no re-download.
 _BANDS = {
-    "clip":   (0.17, 0.29),
+    "clip":   (0.15, 0.35),
     "siglip": (0.02, 0.24),
 }
 
@@ -102,7 +106,8 @@ def _band_of(model_id: str) -> tuple:
 #   3: 4-template ensemble, gentler junk penalty, band top 0.29
 #   4: model family tiers (SigLIP 2 on a real GPU), per-family band
 #   5: SigLIP scored by its native sigmoid (band was saturating to 100%)
-SCORE_VERSION = 5
+#   6: CLIP band top raised 0.29->0.35 so real matches stop pegging at 100%
+SCORE_VERSION = 6
 
 
 def _cfg_get(cfg: dict, key: str, default):

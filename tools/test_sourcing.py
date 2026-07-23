@@ -112,11 +112,38 @@ def main() -> int:
     pl._expand_scene_queries(s3, {"base": Path(tempfile.mkdtemp()) / "w" / "en"}, {})
     check("nothing added without a key", s3[0].fallbacks, [])
 
+    # ── no-dimension archive still gets a fair shot ─────────────────────────
+    print("\n  a source that reports no dimensions is still scored and can win:")
+    # 20 dimensioned stock hits would, under the old technical-sort-first code,
+    # push the single no-dimension NASA hit outside the scored window. _fair_pool
+    # round-robins across sources so the archive is always looked at.
+    many = ([{"url": f"px{i}", "src": "pexels", "width": 1920, "height": 1080}
+             for i in range(20)]
+            + [{"url": "nasa1", "src": "nasa", "width": 0, "height": 0}])
+    pool = stock._fair_pool(many, 4)
+    check("fair pool includes the no-dimension source",
+          "nasa1" in [h["url"] for h in pool])
+
+    cache3 = Path(tempfile.mkdtemp())
+    stock._pexels = lambda q, m, k, w: [
+        {"url": "pxD", "ext": ".jpg", "width": 1920, "height": 1080,
+         "thumb": "pxDt", "src": "pexels", "credit": "", "page": ""}]
+    stock._SRC.search = lambda name, q, m, w, cfg: [
+        SimpleNamespace(url="nasaD", ext=".jpg", width=0, height=0, thumb="",
+                        src="nasa", credit="", page="", license="pd")]
+    stock._relevance = lambda pool, q, media, cfg: {"pxD": 0.40, "nasaD": 0.88}
+    stock._fetch_bytes = lambda url: b"imgbytes"
+    stock._pixel_width = lambda f: 1920
+    meta3 = stock.fetch("moon surface", "IMAGE", cache3, "PXKEY", None, index=0,
+                        sources=["nasa", "pexels"], cfg={})
+    check("no-dimension archive wins when it is the better match", meta3["src"], "nasa")
+
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")
-    check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 5)
+    check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 6)
     check("prompt ensemble has four templates", len(vision.TEMPLATES), 4)
-    check("clip band unchanged for the reliable path", vision._band_of(vision.BASE32), (0.17, 0.29))
+    check("clip band top raised so matches stop pegging at 100%",
+          vision._band_of(vision.BASE32), (0.15, 0.35))
     check("siglip has its own band", vision._family_of(vision.SIGLIP_SO400M), "siglip")
 
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")

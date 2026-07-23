@@ -181,6 +181,34 @@ def _score_pool(cfg: dict | None) -> int:
         return POOL
 
 
+def _fair_pool(results: list[dict], n: int) -> list[dict]:
+    """Pick up to `n` candidates to CLIP-score, giving EVERY source a fair place.
+
+    Ranking by technical fit (16:9, resolution) before scoring quietly buried the
+    sources that report no dimensions — NASA and Smithsonian score 0 on `_score`,
+    so they sorted to the bottom, fell outside the scored window, and could never
+    win however relevant their picture was. That is why an all-space script used
+    zero NASA. This round-robins across sources instead: the first candidate from
+    each source, then the second from each, and so on. Every routed source is
+    always looked at, and relevance then picks the best on merit — not on who
+    happened to report a width.
+    """
+    by_src: "OrderedDict[str, list]" = OrderedDict()
+    for h in results:
+        by_src.setdefault(h.get("src", ""), []).append(h)
+    lists = list(by_src.values())
+    out: list[dict] = []
+    i = 0
+    while len(out) < n and any(i < len(lst) for lst in lists):
+        for lst in lists:
+            if i < len(lst):
+                out.append(lst[i])
+                if len(out) >= n:
+                    break
+        i += 1
+    return out
+
+
 def _score(hit: dict) -> float:
     """Rank a candidate by how well it fits a 16:9 1080p frame.
 
@@ -279,24 +307,16 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
             + ("; ".join(errors) if errors else "Try a simpler, more literal query.")
         )
 
-    # Rank the combined pool so index 0 is the best-fitting candidate, not the
-    # first one an API happened to return. Stable sort keeps the routed order for
-    # ties, so a source that reports no dimensions is never pushed below one that
-    # does purely for being un-measured. Bumping the index (a swap on the review
-    # sheet) walks down to the next-best.
-    results.sort(key=_score, reverse=True)
-
-    # Then, if this machine can run it, re-rank by what the picture is actually
-    # OF. Relevance (0..1, whether the image matches the scene) dominates; the
-    # technical score is a small tiebreak between equally-relevant candidates.
-    # rel stays None when scoring is unavailable or a candidate could not be
-    # scored, and those fall to the bottom in technical order — never above a
-    # candidate we actually verified. The pool that gets scored is sized to the
-    # machine, so a GPU compares many more candidates than a laptop.
+    # Choose which candidates to CLIP-score, giving every routed source a fair
+    # place (see _fair_pool) instead of pre-sorting by technical fit — that used
+    # to bury NASA/Smithsonian, which report no dimensions, before they were ever
+    # looked at. The pool that gets scored is sized to the machine, so a GPU
+    # compares many more candidates than a laptop.
     pool_n = _score_pool(cfg)
-    rel = _relevance(results[:pool_n], query, media, cfg)
+    scored_pool = _fair_pool(results, pool_n)
+    rel = _relevance(scored_pool, query, media, cfg)
     if rel:
-        for h in results[:pool_n]:
+        for h in scored_pool:
             h["rel"] = rel.get(h["url"])
 
         def _combined(h):
@@ -306,8 +326,18 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
                 return -1.0 + tech * 0.001            # unverified: below all scored
             return r + tech * 0.12                    # relevance leads, quality breaks ties
 
-        head = sorted(results[:pool_n], key=_combined, reverse=True)
-        results[:len(head)] = head
+        # Relevance decides the winner across ALL sources; technical fit only
+        # breaks ties between equally-relevant pictures. Anything not scored
+        # keeps a sensible technical order behind the scored head.
+        ranked = sorted(scored_pool, key=_combined, reverse=True)
+        scored_urls = {h["url"] for h in scored_pool}
+        rest = sorted((h for h in results if h["url"] not in scored_urls),
+                      key=_score, reverse=True)
+        results = ranked + rest
+    else:
+        # No relevance signal (scoring off, or nothing scorable): rank on
+        # technical fit alone, so index 0 is still the best-framed candidate.
+        results.sort(key=_score, reverse=True)
 
     hit = results[index]
     dest = cache / f"{slug}{hit['ext']}"
