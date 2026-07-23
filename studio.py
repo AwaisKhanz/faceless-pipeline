@@ -240,10 +240,10 @@ class Cancelled(Exception):
 # ------------------------------------------------------------------ the work
 
 def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
-    """Per-language scripts in → production sheets out. No translation: the
-    structure language defines the scenes and visuals, and each other language's
-    pasted script is segmented onto them. compose.py writes the file format, so
-    it cannot come out malformed."""
+    """Per-language scripts in → main script + narration files out. No
+    translation: the structure language defines the scenes and visuals, and each
+    other language's pasted script is segmented onto them. compose.py writes the
+    file format, so it cannot come out malformed."""
     langs = [l for l in ("en", "de", "es") if (scripts.get(l) or "").strip()]
     langs += [l for l in scripts if l not in ("en", "de", "es")
               and (scripts.get(l) or "").strip()]
@@ -405,7 +405,7 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
 
         for li, lang in enumerate(langs):
             tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
-            tr = pl.translation_for(sdir, pid, lang)
+            tr = pl.narration_file(sdir, pid, lang)
             scenes = pl.load_scenes(sheet, lang, tr)
 
             begin_step("voice", lang)
@@ -498,7 +498,7 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
             if cancelled():
                 raise Cancelled()
             tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
-            tr = pl.translation_for(sdir, pid, lang)
+            tr = pl.narration_file(sdir, pid, lang)
             scenes = pl.load_scenes(sheet, lang, tr)
             vs = []
 
@@ -580,7 +580,7 @@ def script_data(pid: str) -> dict:
     for lg in proj["languages"]:
         code = lg["code"]
         try:
-            tr = pl.translation_for(sheet.parent, pid, code)
+            tr = pl.narration_file(sheet.parent, pid, code)
             scenes = pl.load_scenes(sheet, code, tr)
         except Exception:
             scenes = []
@@ -878,7 +878,7 @@ class Handler(BaseHTTPRequestHandler):
             if pid:
                 try:
                     proj = pl.find_project(pid)
-                    tr = pl.translation_for(pl.sheets_dir(pid), pid, lang)
+                    tr = pl.narration_file(pl.sheets_dir(pid), pid, lang)
                     scenes = pl.load_scenes(Path(proj["sheet"]), lang, tr)
                 except Exception:
                     scenes = None

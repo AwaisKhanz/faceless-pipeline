@@ -35,9 +35,9 @@ def sheets_dir(pid: str) -> Path:
 def _pid_of_dir(sheet: Path) -> Path:
     """The project folder that owns a sheet, whatever depth it sits at.
 
-    New layout: projects/<pid>/sheets/<pid>_MASTER…  -> parent is 'sheets',
+    Layout: projects/<pid>/sheets/<pid>_main_script.md  -> parent is 'sheets',
     grandparent is the project folder. Written to survive either being handed
-    the master or a narration file.
+    the main script or a narration file.
     """
     return sheet.resolve().parent.parent
 
@@ -57,12 +57,12 @@ def migrate_layout() -> dict:
     moved, projects = 0, set()
     old_sheets, old_work, old_out = ROOT / "sheets", ROOT / "work", ROOT / "out"
 
-    # Learn the real project ids from the master sheets first — a pid may itself
+    # Learn the real project ids from the main scripts first — a pid may itself
     # contain underscores (it comes from the video title), so we can't just split
     # a filename on "_". We match work/out files against the longest known pid.
     known_pids: list[str] = []
     if old_sheets.is_dir():
-        for m in old_sheets.glob("*_MASTER_production_sheet.md"):
+        for m in old_sheets.glob("*_main_script.md"):
             known_pids.append(project_id(m))
     known_pids.sort(key=len, reverse=True)          # longest prefix wins
 
@@ -70,7 +70,7 @@ def migrate_layout() -> dict:
         for pid in known_pids:
             if name == pid or name.startswith(pid + "_"):
                 return pid
-        # No master seen (orphan file): fall back to the leading token.
+        # No main script seen (orphan file): fall back to the leading token.
         return name.split("_", 1)[0] if "_" in name else None
 
     # sheets/<pid>_*.md  ->  projects/<pid>/sheets/
@@ -141,15 +141,15 @@ DISSOLVE = 0.6    # crossfade length between scenes
 LANG_NAMES = {"en": "English", "de": "German", "es": "Spanish",
               "fr": "French", "it": "Italian", "pt": "Portuguese"}
 # How per-language narration files are named, e.g. video04_GERMAN_narration.md.
-# English is included now that any language can be the master: when English is
-# NOT the structure language it gets its own narration file like the others.
+# English is included now that any language can be the main script: when English
+# is NOT the structure language it gets its own narration file like the others.
 LANG_FILE_WORDS = {"en": ("ENGLISH", "EN"), "de": ("GERMAN", "DE"),
                    "es": ("SPANISH", "ES"), "fr": ("FRENCH", "FR"),
                    "it": ("ITALIAN", "IT"), "pt": ("PORTUGUESE", "PT")}
 
 
-def master_lang(sheet: Path) -> str:
-    """Which language the master sheet's narration is in.
+def main_lang(sheet: Path) -> str:
+    """Which language the main script's narration is in.
 
     Recorded as an HTML comment at the top of the sheet. Older sheets, written
     before projects could start in another language, have no marker and are
@@ -158,7 +158,7 @@ def master_lang(sheet: Path) -> str:
     try:
         head = sheet.read_text(encoding="utf-8", errors="ignore")[:400]
         import re as _re
-        m = _re.search(r"master-lang:\s*([a-z]{2})", head)
+        m = _re.search(r"main-lang:\s*([a-z]{2})", head)
         return m.group(1) if m else "en"
     except Exception:
         return "en"
@@ -183,7 +183,7 @@ def noop(*_a, **_k) -> None:
 # --------------------------------------------------------------- discovery
 
 def pretty_name(sheet: Path) -> str:
-    """'video04_MASTER_production_sheet.md' -> 'video04 - Sharpest 80-Year-Olds'"""
+    """'video04_main_script.md' -> 'video04 - Sharpest 80-Year-Olds'"""
     stem = project_id(sheet)
     title = ""
     for line in sheet.read_text(encoding="utf-8").splitlines()[:12]:
@@ -196,8 +196,8 @@ def pretty_name(sheet: Path) -> str:
 
 
 def project_id(sheet: Path) -> str:
-    return (sheet.stem.replace("_MASTER_production_sheet", "")
-            .replace("_MASTER", "").replace("_master", ""))
+    """The project id from a main-script path: '<pid>_main_script.md' -> '<pid>'."""
+    return sheet.stem.replace("_main_script", "")
 
 
 def find_project(pid: str) -> dict | None:
@@ -211,11 +211,11 @@ def out_dir(pid: str) -> Path:
 
 
 def find_projects(_root: Path | None = None) -> list[dict]:
-    """Every project under projects/, each master with its narration sheets.
+    """Every project under projects/, each main script with its narration sheets.
 
     Scans projects/<pid>/sheets/. The old signature took a sheets directory;
     callers pass nothing now, but an argument is still accepted and ignored so
-    nothing breaks mid-upgrade. `sheet` is the full path to the master, and
+    nothing breaks mid-upgrade. `sheet` is the full path to the main script, and
     `dir` is the project folder.
     """
     root = PROJECTS
@@ -223,14 +223,14 @@ def find_projects(_root: Path | None = None) -> list[dict]:
     if not root.exists():
         return out
     for sd in sorted(root.glob("*/sheets")):
-        for f in sorted(sd.glob("*_MASTER_production_sheet.md")):
+        for f in sorted(sd.glob("*_main_script.md")):
             # One unreadable project must not hide every other one. Anything that
             # goes wrong reading a single sheet skips just that project, so the
             # dashboard still loads the rest.
             try:
                 pid = sd.parent.name
-                mlang = master_lang(f)
-                # The structure language reads from the master; no side file.
+                mlang = main_lang(f)
+                # The structure language reads from the main script; no side file.
                 langs = [{"code": mlang, "name": LANG_NAMES.get(mlang, mlang), "file": None}]
                 narr = sorted(sd.glob(f"{pid}_*_narration.md"))
                 for code, words in LANG_FILE_WORDS.items():
@@ -241,7 +241,7 @@ def find_projects(_root: Path | None = None) -> list[dict]:
                         langs.append({"code": code, "name": LANG_NAMES.get(code, code),
                                       "file": hit.name})
                 try:
-                    n = len(sheetlib.parse_master(f))
+                    n = len(sheetlib.parse_main_script(f))
                 except SystemExit:
                     n = 0
                 out.append({"id": pid, "sheet": str(f), "dir": str(sd.parent),
@@ -259,18 +259,18 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
     dashboard can never claim something exists when it doesn't.
 
     Per language, four steps:
-        sheets   the narration text exists (always true for en; needs a
-                 translation file otherwise)
+        sheets   the narration text exists (always true for the main script's
+                 own language; needs a narration file otherwise)
         visuals  stock footage has been sourced and assigned to scenes
         voice    every scene has a cached narration file
         render   the finished MP4 is on disk
     """
     pid = project_id(sheet)
-    mlang = master_lang(sheet)          # the language the master itself is written in
+    mlang = main_lang(sheet)          # the language the main script is written in
     p_shared = paths_for(sheet, "en")
     n_scenes = 0
     try:
-        n_scenes = len(sheetlib.parse_master(sheet))
+        n_scenes = len(sheetlib.parse_main_script(sheet))
     except Exception:
         pass
 
@@ -304,13 +304,13 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
         voiced = 0
         try:
             scenes = load_scenes(sheet, code,
-                                 translation_for(sheet.parent, pid, code))
+                                 narration_file(sheet.parent, pid, code))
             vp = tts.voice_paths(scenes, code, p_shared['voicecache'])
             voiced = sum(1 for v in vp
                          if v.exists() and v.stat().st_size > 1024)
         # SystemExit (not an Exception) is what sheet.load raises for a language
         # whose narration can't be found. Catch it here so one missing
-        # translation degrades to "not voiced" instead of failing the dashboard.
+        # narration file degrades to "not voiced" instead of failing the dashboard.
         except (Exception, SystemExit):
             scenes = []
 
@@ -382,7 +382,7 @@ def deletable(sheet: Path, langs: list[dict]) -> dict:
         if base.exists():
             out["work"].append(base)
         try:
-            scenes = load_scenes(sheet, code, translation_for(sheet.parent, pid, code))
+            scenes = load_scenes(sheet, code, narration_file(sheet.parent, pid, code))
             for f in tts.voice_paths(scenes, code, shared["voicecache"]):
                 if f.exists():
                     out["voice"].append(f)
@@ -455,9 +455,9 @@ def delete_project(sheet: Path, langs: list[dict], what: list[str]) -> dict:
 
 def narration_file(sheets_dir: Path, pid: str, lang: str) -> Path | None:
     """The per-language narration sheet for `lang`, or None if that language is
-    the master's own (it reads from the master) or has no sheet yet."""
-    master = sheets_dir / f"{pid}_MASTER_production_sheet.md"
-    if master.exists() and master_lang(master) == lang:
+    the main script's own (it reads from the main script) or has no sheet yet."""
+    main_script = sheets_dir / f"{pid}_main_script.md"
+    if main_script.exists() and main_lang(main_script) == lang:
         return None
     words = LANG_FILE_WORDS.get(lang, ())
     if not words:
@@ -466,14 +466,6 @@ def narration_file(sheets_dir: Path, pid: str, lang: str) -> Path | None:
         if words[0] in nf.stem.upper():
             return nf
     return None
-
-
-# Kept as the historical name; callers pass a language and get its sheet (or
-# None for the master's own language). "Translation" is a misnomer now — the
-# words are the user's, segmented, not machine-translated — but renaming every
-# caller is churn for no behaviour change.
-def translation_for(sheets_dir: Path, pid: str, lang: str) -> Path | None:
-    return narration_file(sheets_dir, pid, lang)
 
 
 # ------------------------------------------------------------------ paths
@@ -529,8 +521,8 @@ def _flag(v, default: bool = True) -> bool:
     return str(v).strip().lower() not in ("off", "false", "no", "0", "none", "")
 
 
-def load_scenes(sheet: Path, lang: str, translation: Path | None):
-    return sheetlib.load(sheet, lang, translation)
+def load_scenes(sheet: Path, lang: str, narration: Path | None):
+    return sheetlib.load(sheet, lang, narration)
 
 
 # --------------------------------------------------------- caption styling
@@ -658,13 +650,13 @@ def build_metadata(sheet: Path, lang: str, cfg: dict) -> dict:
             "(gemini_key), or set llm=ollama with an ollama_model in config.json.")
 
     pid = project_id(sheet)
-    tr = translation_for(sheet.parent, pid, lang)
+    tr = narration_file(sheet.parent, pid, lang)
     scenes = load_scenes(sheet, lang, tr)
     narration = " ".join(s.narration for s in scenes if s.narration).strip()
     if not narration:
         raise RuntimeError(
             f"No {LANG_NAMES.get(lang, lang)} narration to describe yet — "
-            f"generate the sheets (and translation) for this language first.")
+            f"generate the script for this language first.")
 
     # Canonical subjects, from the scene domains and the narration itself, so a
     # medical or historical video gets the right framing in its description.

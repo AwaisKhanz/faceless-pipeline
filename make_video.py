@@ -4,15 +4,15 @@
 automation and troubleshooting.
 
   python3 make_video.py studio                       # open the control panel
-  python3 make_video.py stock  --sheet projects/video04/sheets/video04_MASTER_production_sheet.md
-  python3 make_video.py voice  --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang en
-  python3 make_video.py render --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang en --captions
-  python3 make_video.py all    --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang en --yes
+  python3 make_video.py stock  --sheet projects/video04/sheets/video04_main_script.md
+  python3 make_video.py voice  --sheet projects/video04/sheets/video04_main_script.md --lang en
+  python3 make_video.py render --sheet projects/video04/sheets/video04_main_script.md --lang en --captions
+  python3 make_video.py all    --sheet projects/video04/sheets/video04_main_script.md --lang en --yes
 
-Non-English needs a narration file (found automatically if it sits next to the
-master in projects/<id>/sheets/ and is named like video04_GERMAN_narration.md):
+A non-main-script language needs a narration file (found automatically if it sits
+next to the main script in projects/<id>/sheets/, named video04_GERMAN_narration.md):
 
-  python3 make_video.py all --sheet projects/video04/sheets/video04_MASTER_production_sheet.md --lang de --yes
+  python3 make_video.py all --sheet projects/video04/sheets/video04_main_script.md --lang de --yes
 
 Tip: `make_video.py list` prints the exact --sheet path for every project.
 
@@ -101,15 +101,17 @@ def resolve(a) -> tuple[Path, Path | None, list]:
     if not sheet.exists():
         raise SystemExit(f"Sheet not found: {sheet}")
     pid = pl.project_id(sheet)
-    tr = Path(a.translation) if a.translation else pl.translation_for(
+    tr = Path(a.narration) if a.narration else pl.narration_file(
         sheet.parent, pid, a.lang)
-    if a.lang != "en" and tr is None:
+    # A language needs its own narration file unless it IS the main script's own
+    # language (which reads its narration straight from the main script).
+    if a.lang != pl.main_lang(sheet) and tr is None:
         raise SystemExit(
-            f"Language '{a.lang}' needs a translation file.\n"
+            f"Language '{a.lang}' needs a narration file.\n"
             f"Put it in {sheet.parent}/ named like {pid}_GERMAN_narration.md, "
-            f"or pass --translation.")
+            f"or pass --narration.")
     if tr:
-        print(f"Translation: {tr.name}")
+        print(f"Narration: {tr.name}")
     return sheet, tr, pl.load_scenes(sheet, a.lang, tr)
 
 
@@ -203,17 +205,17 @@ def step_generate(a) -> None:
             "(https://aistudio.google.com/apikey) as \"gemini_key\", or set "
             "\"llm\": \"ollama\" with an \"ollama_model\" to run locally.")
 
-    # One script file = one language now (no translation). --lang says which.
-    # If the project already has a master in another language, this ADDS the new
-    # language onto its shared scenes; otherwise it creates the master.
+    # One script file = one language. --lang says which. If the project already
+    # has a main script in another language, this ADDS the new language onto its
+    # shared scenes; otherwise it creates the main script.
     lang = (a.lang or (a.langs or "en").split(",")[0]).strip() or "en"
     text = src.read_text(encoding="utf-8")
     key, model = LLM.key_for(cfg), LLM.model_for(cfg)
     sdir = pl.sheets_dir(pid)
-    master = sdir / f"{pid}_MASTER_production_sheet.md"
-    if master.exists() and pl.master_lang(master) != lang:
+    main_script = sdir / f"{pid}_main_script.md"
+    if main_script.exists() and pl.main_lang(main_script) != lang:
         banner(f"Adding {pl.LANG_NAMES.get(lang, lang)} to '{pid}'")
-        res = compose.add_language(master, lang, text, key,
+        res = compose.add_language(main_script, lang, text, key,
                                    model=model, on_progress=bar,
                                    on_warn=lambda m: print(f"\n  ⚠ {m}"))
     else:
@@ -266,7 +268,7 @@ def main() -> None:
     ap.add_argument("--verbose", action="store_true",
                     help="show full Python tracebacks")
     ap.add_argument("--lang", default="en")
-    ap.add_argument("--translation")
+    ap.add_argument("--narration")
     ap.add_argument("--redo", help="comma-separated scene numbers to re-source")
     ap.add_argument("--voice", help="reference clip to use, e.g. english-narrator-1.mp3")
     ap.add_argument("--music")
@@ -422,7 +424,7 @@ def main() -> None:
         projs = pl.find_projects()
         if projs:
             p0 = next((p for p in projs if p["scenes"] > 20), projs[0])
-            tr = pl.translation_for(pl.sheets_dir(p0["id"]), p0["id"], a.lang)
+            tr = pl.narration_file(pl.sheets_dir(p0["id"]), p0["id"], a.lang)
             sc = pl.load_scenes(Path(p0["sheet"]), a.lang, tr)
             mid = [s.narration for s in sc if 12 <= len(s.narration.split()) <= 30]
             lines = mid[:5] or [s.narration for s in sc[:5]]
@@ -645,13 +647,14 @@ def main() -> None:
             return
         banner(f"{len(projects)} project(s) in projects/")
         for p in projects:
+            ml = pl.main_lang(Path(p["sheet"]))   # reads from the main script
             langs = ", ".join(
-                lg["code"] + ("" if lg["file"] or lg["code"] == "en" else "?")
+                lg["code"] + ("" if lg["file"] or lg["code"] == ml else "?")
                 for lg in p["languages"])
             print(f"\n  {p['id']}  ·  {p['scenes']} scenes  ·  {langs}")
             print(f"    {p['label']}")
             print(f"    --sheet {Path(p['sheet']).relative_to(ROOT)}")
-        print("\n  A '?' marks a language with no translation file yet.")
+        print("\n  A '?' marks a language with no narration file yet.")
         return
 
     if not a.sheet:

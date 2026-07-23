@@ -718,7 +718,7 @@ SECTION TO SPLIT (reproduce every word exactly, in order):
 
 def segment_script(en_lines: list[str], script: str, lang_name: str, key: str,
                    model: str, feedback: str = "") -> list[str]:
-    """Cut a pasted script into scene-sized narration aligned to the master.
+    """Cut a pasted script into scene-sized narration aligned to the main script.
 
     The visuals are shared across languages, so line i in every language must
     describe the same moment as English line i. This does NOT translate: the

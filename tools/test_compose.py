@@ -6,7 +6,7 @@
 Gemini is mocked, so this runs offline and for free. It checks the contract that
 matters after the translation-to-segmentation change:
 
-  - the structure language defines the master (and records its own language);
+  - the structure language defines the main script (and records its own language);
   - every other language becomes a narration sheet segmented onto the SAME
     scenes, word-for-word from the pasted text;
   - a project can start in any language, not just English;
@@ -59,10 +59,10 @@ def main() -> int:
 
     print("\n  generate en + de (English is the structure language):")
     res = compose.generate({"en": EN, "de": DE}, "vid", "key", "model")
-    check("master + one narration sheet, no others",
-          sorted(res.files), ["vid_GERMAN_narration.md", "vid_MASTER_production_sheet.md"])
-    check("master records its language", "master-lang: en"
-          in res.files["vid_MASTER_production_sheet.md"])
+    check("main script + one narration sheet, no others",
+          sorted(res.files), ["vid_GERMAN_narration.md", "vid_main_script.md"])
+    check("main script records its language", "main-lang: en"
+          in res.files["vid_main_script.md"])
     check("scene count came from the structure script", len(res.scenes), 3)
     check("segmentation preserved the German words exactly",
           G.words("".join(l.split(': "')[-1] for l in
@@ -80,13 +80,13 @@ def main() -> int:
     projs = pl.find_projects()
     check("one project", len(projs), 1)
     check("both languages listed", [l["code"] for l in projs[0]["languages"]], ["en", "de"])
-    check("English reads from the master (no side file)",
+    check("English reads from the main script (no side file)",
           pl.narration_file(d, "vid", "en"), None)
     check("German has its narration sheet",
           pl.narration_file(d, "vid", "de").name, "vid_GERMAN_narration.md")
 
     print("\n  add Spanish to the finished project:")
-    r2 = compose.add_language(d / "vid_MASTER_production_sheet.md", "es", ES, "k", "m")
+    r2 = compose.add_language(d / "vid_main_script.md", "es", ES, "k", "m")
     check("only the Spanish sheet is written", sorted(r2.files),
           ["vid_SPANISH_narration.md"])
     compose.write_files(r2, d)
@@ -99,19 +99,19 @@ def main() -> int:
     r3 = compose.generate({"de": DE, "es": ES}, "vx", "k", "m")
     d2 = pl.sheets_dir("vx")
     compose.write_files(r3, d2)
-    check("German is the master", pl.master_lang(d2 / "vx_MASTER_production_sheet.md"), "de")
+    check("German is the main script", pl.main_lang(d2 / "vx_main_script.md"), "de")
     check("languages are de + es (no phantom English)",
           [l["code"] for l in pl.find_projects()[0]["languages"]], ["de", "es"])
 
-    # Regression: reading the master's OWN language needs no translation file.
+    # Regression: reading the main script's OWN language needs no translation file.
     # This used to raise SystemExit ("Language 'de' needs a translation file")
-    # and take down the whole dashboard for anyone whose master wasn't English.
+    # and take down the whole dashboard for anyone whose main script wasn't English.
     proj = pl.find_projects()[0]
     st = pl.project_status(Path(proj["sheet"]), proj["languages"])
-    check("status loads for a non-English master (no crash)", "error" not in st)
-    check("the master language counts as having its sheet",
+    check("status loads for a non-English main script (no crash)", "error" not in st)
+    check("the main script language counts as having its sheet",
           st["languages"]["de"]["sheets"])
-    check("reading the master language directly returns scenes",
+    check("reading the main script language directly returns scenes",
           len(pl.load_scenes(Path(proj["sheet"]), "de", None)), 3)
 
     print("\n  a drifting split pads to keep numbering aligned:")

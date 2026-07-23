@@ -615,7 +615,7 @@ async function viewDashboard() {
 
   if (!S.projects.length) {
     v.append(el('div', { class: 'empty card' }, el('b', {}, 'No projects yet'),
-      'Put a master sheet in sheets/, or paste a script and let Gemini split it.',
+      'Put a main script in sheets/, or paste a script and let Gemini split it.',
       el('div', { style: 'margin-top:14px' },
         el('button', { class: 'btn primary', onclick: () => go('/new') },
           'Start from a script'))));
@@ -1810,7 +1810,7 @@ const GROUPS = [
   ['voice', 'Narration cache', 'generated audio — regenerating costs GPU time'],
   ['visuals', 'Visual choices', 'which clip belongs to which scene, and your picks'],
   ['work', 'Working files', 'intermediate clips; always safe to remove'],
-  ['sheets', 'The sheets themselves', 'DELETES THE PROJECT — scripts and translations'],
+  ['sheets', 'The sheets themselves', 'DELETES THE PROJECT — main script and narration files'],
 ];
 
 async function askDelete(id) {
@@ -1820,7 +1820,7 @@ async function askDelete(id) {
   const confirmBox = el('input', { type: 'text', placeholder: `type ${id} to confirm` });
   const confirmWrap = el('div', { style: 'display:none;margin-top:12px' },
     el('div', { class: 'sub', style: 'margin-bottom:5px;color:var(--bad)' },
-      'This removes the scripts and translations. It cannot be undone.'),
+      'This removes the main script and narration files. It cannot be undone.'),
     confirmBox);
 
   const go = el('button', { class: 'btn danger', disabled: true }, 'Delete');

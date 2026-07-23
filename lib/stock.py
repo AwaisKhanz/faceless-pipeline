@@ -547,7 +547,7 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     if failed:
         log(f"\n{len(failed)} scene(s) had no usable match: "
             f"{[n for n, _ in failed]}")
-        log("Edit those 'ALT / search' lines in the master sheet and re-run 'stock'.")
+        log("Edit those 'ALT / search' lines in the main script and re-run 'stock'.")
 
     if weak:
         log(f"\n{len(weak)} scene(s) matched only weakly: {weak}")

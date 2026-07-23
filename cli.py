@@ -38,10 +38,10 @@ HELP = """
 
   Working on a video
     faceless new    --script my.txt --id video06     script -> production sheets
-    faceless visuals --sheet sheets/video06_MASTER_production_sheet.md
-    faceless voice   --sheet sheets/video06_MASTER_production_sheet.md --lang en
-    faceless render  --sheet sheets/video06_MASTER_production_sheet.md --lang en --captions
-    faceless all     --sheet sheets/video06_MASTER_production_sheet.md --lang en --yes
+    faceless visuals --sheet sheets/video06_main_script.md
+    faceless voice   --sheet sheets/video06_main_script.md --lang en
+    faceless render  --sheet sheets/video06_main_script.md --lang en --captions
+    faceless all     --sheet sheets/video06_main_script.md --lang en --yes
 
   Voices
     faceless voices --lang en          list and choose reference clips

@@ -71,13 +71,13 @@ def main() -> int:
     written = compose.write_files(res, pl.sheets_dir("vid"))
     sdir = tmp / "projects" / "vid" / "sheets"
     check("sheets dir exists under projects/", sdir.is_dir())
-    check("master written there",
-          (sdir / "vid_MASTER_production_sheet.md").exists())
+    check("main script written there",
+          (sdir / "vid_main_script.md").exists())
     check("nothing left in a flat sheets/ dir", (tmp / "sheets").exists(), False)
 
     print("\n  paths_for derives work/ + out/ in the same project folder:")
-    master = sdir / "vid_MASTER_production_sheet.md"
-    p = pl.paths_for(master, "en")
+    main_script = sdir / "vid_main_script.md"
+    p = pl.paths_for(main_script, "en")
     check("picks under projects/vid/work/",
           str(p["picks"]).endswith("projects/vid/work/picks.json"))
     check("mp4 under projects/vid/out/",
@@ -117,8 +117,8 @@ def main() -> int:
     rep = pl.migrate_layout()
     check("migration reported the project", rep["projects"], [pid])
     base = tmp2 / "projects" / pid
-    check("master moved",
-          (base / "sheets" / f"{pid}_MASTER_production_sheet.md").exists())
+    check("main script moved",
+          (base / "sheets" / f"{pid}_main_script.md").exists())
     check("narration moved",
           (base / "sheets" / f"{pid}_GERMAN_narration.md").exists())
     check("picks moved and de-prefixed", (base / "work" / "picks.json").exists())

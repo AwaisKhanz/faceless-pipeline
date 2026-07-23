@@ -32,7 +32,7 @@ class Scene:
     note: str = ""
     hero: bool = False
     # The routing signal. `generate()` builds Scenes with these two, and
-    # render_master writes them into the sheet as `Domain:` and `Fallbacks:`
+    # render_main_script writes them into the sheet as `Domain:` and `Fallbacks:`
     # lines. They were added to the constructor and the renderer but not here,
     # so every sheet build crashed with "unexpected keyword argument 'domain'".
     # Defaulted, so an old caller that omits them still works.
@@ -58,8 +58,8 @@ def esc(s: str) -> str:
 
 # ---------------------------------------------------------------- rendering
 
-def render_master(plan: dict, scenes: list[Scene], pid: str, lang: str = "en") -> str:
-    """The master sheet: only what the pipeline reads plus a little context.
+def render_main_script(plan: dict, scenes: list[Scene], pid: str, lang: str = "en") -> str:
+    """The main script: only what the pipeline reads plus a little context.
 
     Deliberately lean. Everything here is either parsed by lib/sheet.py (the
     scene blocks) or a short human note; the old settings tables, act summaries,
@@ -69,10 +69,10 @@ def render_master(plan: dict, scenes: list[Scene], pid: str, lang: str = "en") -
     L: list[str] = []
     add = L.append
 
-    # The master carries the structure language's own narration. Record which
-    # language that is so the rest of the app never has to assume English — a
-    # project can start in German or Spanish and still read correctly.
-    add(f"<!-- master-lang: {lang} -->")
+    # The main script carries the structure language's own narration. Record
+    # which language that is so the rest of the app never has to assume English —
+    # a project can start in German or Spanish and still read correctly.
+    add(f"<!-- main-lang: {lang} -->")
     add(f"# {plan.get('title_en', pid)}")
     add(f"_{len(scenes)} scenes · language: {lang} · "
         f"generated {datetime.now():%Y-%m-%d}_")
@@ -105,12 +105,12 @@ def render_master(plan: dict, scenes: list[Scene], pid: str, lang: str = "en") -
     return "\n".join(L) + "\n"
 
 
-def render_translation(scenes: list[Scene], lang: str, lines: list[str],
+def render_narration(scenes: list[Scene], lang: str, lines: list[str],
                        pid: str) -> str:
-    """A per-language narration file: the master's scenes, this language's words.
+    """A per-language narration file: the main script's scenes, this language's words.
 
-    Lean, like the master. Only the `EN:` / `<LANG>:` lines are read (by
-    lib/sheet.parse_translation); the reference line is labelled EN whatever the
+    Lean, like the main script. Only the `EN:` / `<LANG>:` lines are read (by
+    lib/sheet.parse_narration); the reference line is labelled EN whatever the
     structure language is, because the parser keys on it. Titles/tags are written
     on demand (the Publish button), not baked in here."""
     code = lang.upper()
@@ -118,7 +118,7 @@ def render_translation(scenes: list[Scene], lang: str, lines: list[str],
     L: list[str] = []
     add = L.append
     add(f"# {name} narration — {pid}")
-    add(f"_{len(scenes)} scenes · same scene numbers as the master, so the "
+    add(f"_{len(scenes)} scenes · same scene numbers as the main script, so the "
         f"pictures are shared_")
     add("")
     add("---")
@@ -253,13 +253,13 @@ def _language_sheet(scenes: list[Scene], pid: str, lang: str,
     generated on demand from the Publish button, not baked into the sheet."""
     name = LANG_NAMES.get(lang, lang.upper())
     return (f"{pid}_{name.upper()}_narration.md",
-            render_translation(scenes, lang, lines, pid))
+            render_narration(scenes, lang, lines, pid))
 
 
 def generate(scripts: dict[str, str], pid: str, key: str,
              model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
              on_warn=lambda *_: None) -> Result:
-    """Per-language scripts in → production sheets out. No translation.
+    """Per-language scripts in → main script + narration files out. No translation.
 
     `scripts` maps language code -> that language's pasted script. The first
     present language (English by preference) is the STRUCTURE language: its
@@ -291,11 +291,11 @@ def generate(scripts: dict[str, str], pid: str, key: str,
     scenes = split_into_scenes(struct_script, plan, key, model, res, tick, on_warn)
     res.scenes = scenes
 
-    # The structure language's narration IS the master — no separate sheet for
-    # it. Titles/descriptions/tags are written on demand (the Publish button), so
-    # generating them here would be a wasted LLM call.
-    tick(f"writing the {struct_name} master sheet")
-    res.files[f"{pid}_MASTER_production_sheet.md"] = render_master(plan, scenes, pid, struct)
+    # The structure language's narration IS the main script — no separate sheet
+    # for it. Titles/descriptions/tags are written on demand (the Publish button),
+    # so generating them here would be a wasted LLM call.
+    tick(f"writing the {struct_name} main script")
+    res.files[f"{pid}_main_script.md"] = render_main_script(plan, scenes, pid, struct)
 
     # Every other language: segment its pasted script onto the shared scenes.
     for lang in others:
@@ -314,16 +314,16 @@ def add_language(sheet: Path, lang: str, script: str, key: str,
                  on_warn=lambda *_: None) -> Result:
     """Compose ONE more language onto an existing project's shared scenes.
 
-    Reads the finished master (its scenes and visuals are fixed), segments the
-    pasted script onto them, and returns just that language's narration sheet.
-    Nothing about the master or the other languages is touched.
+    Reads the finished main script (its scenes and visuals are fixed), segments
+    the pasted script onto them, and returns just that language's narration sheet.
+    Nothing about the main script or the other languages is touched.
     """
     import lib.sheet as sheetlib
     res = Result()
-    pid = sheet.stem.replace("_MASTER_production_sheet", "").replace("_MASTER", "")
+    pid = sheet.stem.replace("_main_script", "")
     scenes = [Scene(n=s.n, narration=s.narration, media=s.media, query=s.query,
                     domain=getattr(s, "domain", ""), hero=getattr(s, "hero", False))
-              for s in sheetlib.parse_master(sheet)]
+              for s in sheetlib.parse_main_script(sheet)]
     res.scenes = scenes
     plan = {"title_en": pid, "spine_phrase": ""}
 

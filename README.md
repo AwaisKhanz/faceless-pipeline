@@ -240,7 +240,7 @@ spelled the same on both.
 Paste a finished script, name it (`video06`), tick the languages, click
 **Generate the sheets**.
 
-Gemini splits it into scenes and writes the master sheet, the German and Spanish
+Gemini splits it into scenes and writes the main script, the German and Spanish
 narration files, and the YouTube packages. They appear in the dropdown below.
 
 - **Your words are never rewritten.** Gemini only decides *where to cut*. Every section
@@ -491,9 +491,9 @@ python3 make_video.py voices --lang de
 python3 make_video.py benchtts --lang en
 
 python3 make_video.py generate --script ~/Desktop/script06.txt --id video06 --langs en,de,es
-python3 make_video.py stock  --sheet sheets/video06_MASTER_production_sheet.md
-python3 make_video.py voice  --sheet sheets/video06_MASTER_production_sheet.md --lang de
-python3 make_video.py render --sheet sheets/video06_MASTER_production_sheet.md --lang de --captions
+python3 make_video.py stock  --sheet sheets/video06_main_script.md
+python3 make_video.py voice  --sheet sheets/video06_main_script.md --lang de
+python3 make_video.py render --sheet sheets/video06_main_script.md --lang de --captions
 ```
 
 Useful flags: `--music music/piano.mp3`, `--no-zoom` (faster), `--redo 12,45,78`,
@@ -506,7 +506,7 @@ Useful flags: `--music music/piano.mp3`, `--no-zoom` (faster), `--redo 12,45,78`
 ## Your sheet is the video
 
 Every scene is three facts: what's said, what to show, and whether that's a photo or a
-clip. Everything downstream is mechanical translation of those rows.
+clip. Everything downstream is a mechanical rendering of those rows.
 
 ```
 **S1 ⬜** · IMAGE
@@ -514,7 +514,7 @@ clip. Everything downstream is mechanical translation of those rows.
 - ALT / search: `senior lying awake in a dark bedroom, eyes open`
 ```
 
-Drop new sheets into `sheets/`; they appear in the dropdown. Translation files named like
+Drop new sheets into `sheets/`; they appear in the dropdown. Narration files named like
 `video06_GERMAN_narration.md` are detected automatically.
 
 ## Nothing is ever wasted
@@ -709,7 +709,7 @@ tools/check_ui.mjs  renders every view headlessly to catch breakage
 cli.py              the `faceless` command
 pyproject.toml      declares that command (deliberately no dependencies)
 
-sheets/             master sheets + translation files
+sheets/             main script + narration files
 voices_refs/        reference clips for voice cloning
 music/              background tracks
 cache/stock/        downloaded photos and clips (shared across languages)

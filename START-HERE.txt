@@ -178,11 +178,11 @@ OR DO IT ALL FROM THE COMMAND LINE
     faceless voices --lang en          list/choose reference clips
 
     faceless new     --script my_script.txt --id video06
-    faceless visuals --sheet sheets\\video06_MASTER_production_sheet.md
-    faceless voice   --sheet sheets\\video06_MASTER_production_sheet.md --lang en
-    faceless render  --sheet sheets\\video06_MASTER_production_sheet.md --lang en --captions
+    faceless visuals --sheet sheets\\video06_main_script.md
+    faceless voice   --sheet sheets\\video06_main_script.md --lang en
+    faceless render  --sheet sheets\\video06_main_script.md --lang en --captions
 
-    faceless all     --sheet sheets\\video06_MASTER_production_sheet.md --lang en --yes
+    faceless all     --sheet sheets\\video06_main_script.md --lang en --yes
 
 (macOS: use forward slashes in paths. The command itself is identical.)
 

@@ -1,4 +1,4 @@
-"""Parse the master production sheet and translation narration files."""
+"""Parse the main script and the per-language narration files."""
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,8 +44,8 @@ HERO_HINTS = ("title card", "Arthur", "piano teacher", "key beat",
               "share beat", "next-episode", "motif")
 
 
-def parse_master(path: Path) -> list[Scene]:
-    """Read the master production sheet -> ordered list of Scenes (English)."""
+def parse_main_script(path: Path) -> list[Scene]:
+    """Read the main script -> ordered list of Scenes (structure language)."""
     scenes: list[Scene] = []
     cur: dict | None = None
     for raw in Path(path).read_text(encoding="utf-8").splitlines():
@@ -109,8 +109,8 @@ def _unescape(s: str) -> str:
              .replace("‘", "'").replace("’", "'").strip())
 
 
-def parse_translation(path: Path, lang: str) -> dict[int, str]:
-    """Read a translation narration file -> {scene_number: narration}."""
+def parse_narration(path: Path, lang: str) -> dict[int, str]:
+    """Read a per-language narration file -> {scene_number: narration}."""
     lang = lang.upper()
     out: dict[int, str] = {}
     pending: int | None = None
@@ -127,40 +127,40 @@ def parse_translation(path: Path, lang: str) -> dict[int, str]:
     return out
 
 
-_MLANG_RE = re.compile(r"master-lang:\s*([a-z]{2})", re.I)
+_MLANG_RE = re.compile(r"main-lang:\s*([a-z]{2})", re.I)
 
 
-def master_lang(master: Path) -> str:
-    """Which language the master sheet's own narration is written in. Recorded as
+def main_lang(main_script: Path) -> str:
+    """Which language the main script's own narration is written in. Recorded as
     an HTML comment at the top; older sheets without it are English."""
     try:
-        head = Path(master).read_text(encoding="utf-8", errors="ignore")[:400]
+        head = Path(main_script).read_text(encoding="utf-8", errors="ignore")[:400]
     except Exception:
         return "en"
     m = _MLANG_RE.search(head)
     return m.group(1).lower() if m else "en"
 
 
-def load(master: Path, lang: str, translation: Path | None = None) -> list[Scene]:
-    """Master sheet + optional translation -> scenes in the requested language."""
-    scenes = parse_master(master)
-    # The master carries ITS OWN language's narration directly — which may be
-    # German or Spanish, not just English. Reading that language needs no
-    # translation file; only OTHER languages do.
-    if lang.lower() == master_lang(master):
+def load(main_script: Path, lang: str, narration: Path | None = None) -> list[Scene]:
+    """Main script + optional narration file -> scenes in the requested language."""
+    scenes = parse_main_script(main_script)
+    # The main script carries ITS OWN language's narration directly — which may
+    # be German or Spanish, not just English. Reading that language needs no
+    # narration file; only OTHER languages do.
+    if lang.lower() == main_lang(main_script):
         return scenes
-    if translation is None:
+    if narration is None:
         raise SystemExit(
-            f"Language '{lang}' needs a translation file. "
-            f"Pass --translation path/to/videoNN_{lang.upper()}_narration.md"
+            f"Language '{lang}' needs a narration file. "
+            f"Pass --narration path/to/videoNN_{lang.upper()}_narration.md"
         )
-    tr = parse_translation(translation, lang)
+    tr = parse_narration(narration, lang)
     missing = [s.n for s in scenes if s.n not in tr]
     if missing:
         raise SystemExit(
-            f"Translation file is missing {len(missing)} scenes: {missing[:12]}"
+            f"Narration file is missing {len(missing)} scenes: {missing[:12]}"
             f"{' ...' if len(missing) > 12 else ''}\n"
-            f"Every scene in the master sheet needs a matching {lang.upper()}: line."
+            f"Every scene in the main script needs a matching {lang.upper()}: line."
         )
     for s in scenes:
         s.narration = tr[s.n]
@@ -169,7 +169,7 @@ def load(master: Path, lang: str, translation: Path | None = None) -> list[Scene
 
 def _validate(scenes: list[Scene], path) -> None:
     if not scenes:
-        raise SystemExit(f"No scenes found in {path}. Is this a master production sheet?")
+        raise SystemExit(f"No scenes found in {path}. Is this a main script?")
     nums = [s.n for s in scenes]
     expected = list(range(1, len(scenes) + 1))
     if nums != expected:
