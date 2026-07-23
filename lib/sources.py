@@ -514,6 +514,11 @@ def europeana(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     if not key:
         raise SourceError("no europeana_key in config.json")
 
+    # Every character is percent-encoded (quote, not quote_plus, so spaces become
+    # %20). The earlier version marked space and " as "safe", which left them
+    # literal in the URL and made the whole request malformed — Europeana replied
+    # HTTP 400. The colons, slashes and quotes inside the RIGHTS filter are
+    # encoded too; Europeana decodes them back, so the Lucene syntax still works.
     qs = urllib.parse.urlencode({
         "wskey": key, "query": query,
         "qf": 'RIGHTS:("http://creativecommons.org/publicdomain/zero/1.0/" OR '
@@ -522,7 +527,7 @@ def europeana(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
         "thumbnail": "true",
         "profile": "rich",
         "rows": min(max(want * 4, 20), 50),
-    }, safe=":()/\" ")
+    }, quote_via=urllib.parse.quote)
     qs += "&qf=TYPE%3AIMAGE"       # urlencode cannot repeat a key
     data = _json(f"https://api.europeana.eu/record/v2/search.json?{qs}")
 
