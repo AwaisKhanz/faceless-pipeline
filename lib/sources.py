@@ -1456,9 +1456,17 @@ def usable(cfg: dict) -> set:
     half-configured install degrades to "fewer places to look" rather than an
     error mid-run. Several of these need no key at all, which is why the
     pipeline still finds pictures with an empty config.json.
+
+    `disable_sources` in config drops named sources entirely — a speed lever for
+    a source that always fails or is slow on your network (e.g. Openverse behind
+    an ISP block): it is never queried, so no requests are wasted failing it.
     """
+    off = {str(n).strip().lower()
+           for n in (cfg.get("disable_sources") or []) if str(n).strip()}
     ok = set()
     for name, src in REGISTRY.items():
+        if name in off:
+            continue
         if src.needs_key:
             if cfg.get(src.needs_key):
                 ok.add(name)

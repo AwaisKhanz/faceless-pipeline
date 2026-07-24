@@ -221,6 +221,13 @@ def main() -> int:
     bad += not bare
     print(f"    {'ok' if bare else '!!'}  {sorted(bare)}")
 
+    print("\n  disable_sources drops named sources (a per-network speed lever):")
+    dropped = S.usable({"disable_sources": ["openverse", "Wikimedia"]})
+    ok_drop = ("openverse" not in dropped and "wikimedia" not in dropped
+               and "met" in dropped)
+    bad += not ok_drop
+    print(f"    {'ok' if ok_drop else '!!'}  openverse & wikimedia removed, rest kept")
+
     print("\n  a model topic routes ANY subject, even one the words miss:")
     full = {"nasa", "smithsonian", "openverse", "loc", "wikimedia",
             "pexels", "pixabay"}
