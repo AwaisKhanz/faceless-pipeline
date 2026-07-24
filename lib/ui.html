@@ -688,6 +688,15 @@ async function viewProject(id) {
           if (r.started) go('/activity'); else e.target.disabled = false;
         }
       }, st.assets ? 'Re-source all' : 'Find visuals'),
+      el('button', {
+        class: 'btn',
+        title: 'Find visuals, then voice and render every language — no stops.',
+        onclick: async e => {
+          e.target.disabled = true;
+          const r = await api('/api/source', { id: p.id, auto: true });
+          if (r.started) go('/queue'); else e.target.disabled = false;
+        }
+      }, 'Auto-process the rest'),
       st.assets ? el('button', { class: 'btn', onclick: () => go('/review/' + p.id) },
         'Review & swap pictures') : null,
       el('button', { class: 'btn', onclick: () => viewScript(p.id) }, 'View script'),

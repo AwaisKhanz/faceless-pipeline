@@ -1174,7 +1174,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/source":
             pid = b.get("id")
-            job = enqueue(pid, "source", {"pid": pid, "redo": b.get("redo") or None})
+            # auto=true chains straight on to voice+render (Auto-process the rest).
+            job = enqueue(pid, "source", {"pid": pid, "redo": b.get("redo") or None},
+                          auto=bool(b.get("auto")))
             return self._json({"started": True, "job": job.id})
 
         if path == "/api/regenerate":
@@ -1480,8 +1482,13 @@ def _auto_next(job) -> None:
         SCHED.enqueue(job.project, "source", {"pid": job.project, "redo": None},
                       auto=True)
     elif nxt == "run":
+        # Build every language the project has, not just the main one — a project
+        # with German and Spanish narration should come out the far end with all
+        # three videos. Empty falls back to the main language inside the worker.
+        proj = pl.find_project(job.project)
+        langs = [l["code"] for l in (proj or {}).get("languages", [])]
         SCHED.enqueue(job.project, "run",
-                      {"pid": job.project, "langs": [], "steps": ["voice", "render"],
+                      {"pid": job.project, "langs": langs, "steps": ["voice", "render"],
                        "captions": True, "music": None, "zoom": True, "voices": {},
                        "force": False, "master": True}, auto=True)
 
