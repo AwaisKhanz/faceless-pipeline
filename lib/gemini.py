@@ -758,28 +758,43 @@ def scenes_for_section(section: str, ctx: dict, key: str, model: str,
     # person, so the picture is actually them (from photo archives).
     if ctx.get("name_people"):
         people_rule = """
-NAMED PEOPLE — THIS VIDEO IS ABOUT A REAL PERSON, SO FEATURE THEM
-This is a biography / feature about a real named person. The viewer wants to SEE
-that person — do NOT illustrate the whole video with generic b-roll.
+NAMED PEOPLE — THIS IS A BIOGRAPHY OF A REAL PERSON
+The viewer wants to SEE the real person — but NOT the same headshot every scene.
+The fastest way to make a biography look cheap is to put the same portrait on
+ten lines in a row. Sort each scene into ONE of two kinds and treat it that way:
 
-  FEATURE THE PERSON in MOST scenes. Whenever a scene is about them, their life,
-  role, company or achievement, PUT THEIR NAME in the query with a light context:
-    "Elon Musk speaking at a conference"     NOT  "a successful entrepreneur"
-    "Elon Musk at a Tesla car"               NOT  "a modern electric car"
-    "Elon Musk at a rocket launch"           NOT  "a rocket on a launchpad"
-    "Imran Khan addressing a crowd"          NOT  "a politician giving a speech"
-  Keep it FINDABLE: the person's full name + ONE simple context word. Not a
-  complex staged scene.
+  PERSON beat — the line is about the person themselves: who they are, what they
+  did, a moment in their life. PUT THEIR NAME in the query, with a DIFFERENT
+  context every time so a different photo is pulled. Vary the setting, era or
+  action, and NEVER repeat a query across scenes:
+    "Elon Musk speaking on stage"      "Elon Musk interview"
+    "Elon Musk at Tesla factory"       "Elon Musk press conference"
+  Keep it SHORT and findable — the full name plus one or two plain words. The
+  photo archives match short phrases; a long staged description returns nothing.
 
-  ALWAYS make the FIRST fallback a plain photo of the person — e.g.
-  "Elon Musk portrait" — so even if the specific shot is missing you still get
-  THEM, never a stranger.
+  THING beat — the line is about a company, product, idea, industry or place, not
+  the person (e.g. "the world's first trillionaire", "artificial intelligence",
+  "digital payments", "electric vehicles", "aerospace"). Use plain topical b-roll
+  with NO person in it:
+    "stock market trading floor"       "server racks in a data center"
+    "contactless card payment"         "electric car on a highway"
+  Do NOT put the person in a THING beat — that repetition is exactly what makes a
+  biography look like one face on a loop.
 
-  Use pure topical b-roll with NO person (a rocket, a car, a server room) ONLY
-  for a beat that is genuinely not about the person — a pure abstract idea or an
-  establishing place. Prefer the person otherwise.
+BALANCE: roughly alternate the two so the video breathes — a person shot, then a
+thing, then the person again. Do not make every scene a portrait; only the beats
+truly ABOUT the person should show their face.
 
-Use the person's full, correct name every time."""
+FALLBACKS follow the beat:
+  - a PERSON beat falls back to a simpler, DIFFERENT person query (last resort:
+    the bare name, e.g. "Elon Musk"). Never reuse the same person query — and
+    never "<name> portrait" — on more than one scene.
+  - a THING beat falls back to a plainer version of the SAME b-roll, never a
+    person.
+
+If you are unsure which kind a beat is, PUT THEIR NAME only when the line names
+them or their direct action; otherwise use the thing b-roll. Use the person's
+full, correct name every time you name them. No two scenes may share a query."""
     else:
         people_rule = """
 NAMED PEOPLE
