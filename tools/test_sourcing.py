@@ -240,9 +240,10 @@ def main() -> int:
     stock._SRC.down_sources = lambda: ["wikimedia"]
 
     def failing_fetch(query, media, cache, pk, xk, index, sources=None, cfg=None):
-        # wikimedia crosses the fail limit during this scene's ladder
+        # wikimedia crosses the fail limit during this scene's ladder, with a
+        # network-block reason (a reset), not a rate limit
         for _ in range(stock._SRC.FAIL_LIMIT):
-            stock._SRC.note_failure("wikimedia")
+            stock._SRC.note_failure("wikimedia", "Connection reset by peer")
         return {"path": f"/d/{index}", "src": "pexels", "query": query,
                 "media": media, "score": None, "credit": "", "page": "", "license": ""}
     stock.fetch = failing_fetch
@@ -252,9 +253,30 @@ def main() -> int:
                     Path(tempfile.mkdtemp()), "PK", "XK", log=dl.append, cfg={})
     dls = "\n".join(dl)
     check("names the disabled source", "wikimedia" in dls and "disabled" in dls)
-    check("explains it will be skipped for the run", "rest of this run" in dls)
+    check("a network block reads as unreachable", "unreachable" in dls)
     stock._SRC._FAILS.clear()
     stock._SRC._JUST_DOWN.clear()
+
+    # A rate-limited source (429) gets a DIFFERENT, accurate notice — the fix is
+    # to ask less often or add a token, not to blame the network.
+    def rate_limited_fetch(query, media, cache, pk, xk, index, sources=None, cfg=None):
+        for _ in range(stock._SRC.FAIL_LIMIT):
+            stock._SRC.note_failure("openverse", "HTTP 429 Too Many Requests — rate-limiting you")
+        return {"path": f"/r/{index}", "src": "pexels", "query": query,
+                "media": media, "score": None, "credit": "", "page": "", "license": ""}
+    stock.fetch = rate_limited_fetch
+    stock._SRC.route = lambda *a, **k: ["pexels", "openverse"]
+    stock._SRC.usable = lambda cfg: {"pexels", "openverse"}
+    rl = []
+    stock.fetch_all([SimpleNamespace(n=1, media="IMAGE", query="anything",
+                                     fallbacks=[], domain="x", topic="tech")],
+                    Path(tempfile.mkdtemp()), "PK", "XK", log=rl.append, cfg={})
+    rls = "\n".join(rl)
+    check("a rate limit reads as rate-limited, not unreachable",
+          "rate-limit" in rls.lower() and "unreachable" not in rls)
+    stock._SRC._FAILS.clear()
+    stock._SRC._JUST_DOWN.clear()
+    stock._SRC._LAST_REASON.clear()
 
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")

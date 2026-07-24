@@ -152,6 +152,23 @@ def _get(url: str, headers: dict | None = None) -> bytes:
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
                 return r.read()
+        except urllib.error.HTTPError as e:
+            last = e
+            # 429 (too many requests) and 503 (temporarily unavailable) mean
+            # "slow down / try again", NOT a refusal — so back off and retry,
+            # honouring Retry-After when the server sends it. Openverse rate-
+            # limits anonymous callers tightly, and search_all_sources can hit it
+            # several times a scene; without this, one busy scene tripped the
+            # circuit breaker and lost the source for the whole run.
+            if e.code in (429, 503) and attempt < 3:
+                ra = e.headers.get("Retry-After") if e.headers else None
+                try:
+                    wait = float(ra)
+                except (TypeError, ValueError):
+                    wait = 2.0 * attempt
+                time.sleep(min(wait, 10.0))
+                continue
+            break
         except Exception as e:
             last = e
             # A READ TIMEOUT usually means a slow archive (the Library of
@@ -165,10 +182,16 @@ def _get(url: str, headers: dict | None = None) -> bytes:
             break
 
     msg = str(last)
-    # A reset can be an agent-based block OR the network refusing the host
-    # outright, and the two look identical here. Do not assert either: point at
-    # the command that can actually tell them apart.
-    if "reset" in msg.lower() or "forcibly closed" in msg.lower():
+    code = getattr(last, "code", None)
+    # Name the cause precisely, because the fix is completely different for each.
+    if code == 429:
+        msg = ("HTTP 429 Too Many Requests — this source is rate-limiting you. "
+               "It is reachable; you just asked too often. Search fewer sources "
+               "(turn search_all_sources off) or add this source's API token.")
+    elif "reset" in msg.lower() or "forcibly closed" in msg.lower():
+        # A reset can be an agent-based block OR the network refusing the host
+        # outright, and the two look identical here. Do not assert either: point
+        # at the command that can actually tell them apart.
         msg += (" — the connection was dropped. That is either this network "
                 "refusing the host, or the API refusing this client. Run "
                 "'faceless sources' to find out which.")
@@ -1104,28 +1127,33 @@ def explain(domain: str, media: str, available: set, query: str = "",
 # ends, and nothing should need clearing by hand to notice that.
 
 _FAILS: dict[str, int] = {}
-_JUST_DOWN: list[str] = []          # crossed into "down" since last drained
+_JUST_DOWN: list[tuple] = []        # (name, reason) crossed into "down"
+_LAST_REASON: dict[str, str] = {}   # most recent failure message per source
 FAIL_LIMIT = 3
 
 
-def note_failure(name: str) -> None:
+def note_failure(name: str, reason: str = "") -> None:
     _FAILS[name] = _FAILS.get(name, 0) + 1
+    if reason:
+        _LAST_REASON[name] = reason
     if _FAILS[name] == FAIL_LIMIT:                  # crossed the line just now
-        _JUST_DOWN.append(name)
+        _JUST_DOWN.append((name, _LAST_REASON.get(name, "")))
 
 
 def note_success(name: str) -> None:
     _FAILS.pop(name, None)
+    _LAST_REASON.pop(name, None)
 
 
 def is_down(name: str) -> bool:
     return _FAILS.get(name, 0) >= FAIL_LIMIT
 
 
-def drain_newly_down() -> list[str]:
-    """Sources that just crossed into 'down', reported once. The caller (the live
-    sourcing log) drains this each scene so a source disappearing from later
-    scenes is announced the moment it happens, never silently."""
+def drain_newly_down() -> list[tuple]:
+    """Sources that just crossed into 'down', as (name, reason), reported once.
+    The caller (the live sourcing log) drains this each scene so a source
+    disappearing from later scenes is announced the moment it happens, with WHY
+    — a rate limit and a network block need completely different fixes."""
     out = _JUST_DOWN[:]
     _JUST_DOWN.clear()
     return out
@@ -1231,8 +1259,8 @@ def search(name: str, query: str, media: str, want: int, cfg: dict) -> list[Hit]
         raise SourceError(f"no such source: {name}")
     try:
         hits = src.search(query, media, want, cfg) or []
-    except SourceError:
-        note_failure(name)
+    except SourceError as e:
+        note_failure(name, str(e))            # keep WHY, for an accurate notice
         raise
     note_success(name)
     # Second pass for sources that DO report dimensions. The ones that do not

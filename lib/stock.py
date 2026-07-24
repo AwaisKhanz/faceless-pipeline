@@ -651,10 +651,16 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         # Announce any source the circuit breaker just disabled, the instant it
         # happens. Otherwise a source (e.g. Wikimedia blocked on this network)
         # simply vanishes from later scenes' "searched" line with no explanation.
-        for nm in _SRC.drain_newly_down():
-            log(f"  ⚠ {nm} disabled for the rest of this run after "
-                f"{_SRC.FAIL_LIMIT} failed requests — unreachable on this network "
-                f"(run 'faceless sources' to check).")
+        for nm, reason in _SRC.drain_newly_down():
+            if "429" in reason or "rate-limit" in reason.lower():
+                log(f"  ⚠ {nm} disabled for the rest of this run after "
+                    f"{_SRC.FAIL_LIMIT} rate-limit responses — it is reachable, "
+                    f"you just asked too often. Turn search_all_sources off, or "
+                    f"add {nm}'s API token, then re-source.")
+            else:
+                log(f"  ⚠ {nm} disabled for the rest of this run after "
+                    f"{_SRC.FAIL_LIMIT} failed requests — unreachable on this "
+                    f"network (run 'faceless sources' to check).")
 
         # THE STEP-BY-STEP VIEW (source_log: "full"). Before announcing the pick,
         # walk the scene out loud: its header, then each query with every source's
