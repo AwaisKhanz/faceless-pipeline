@@ -330,6 +330,49 @@ def smithsonian(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
 # Openverse is also the only source so far that reports width and height at
 # search time, so the size floor can be applied before anything is downloaded.
 
+# Minted access token, cached with its expiry. The client_id/secret in config
+# are the PERMANENT credential; this token is short-lived and refreshed from them
+# on demand — the same shape as the Vertex token flow, so nothing in config ever
+# expires. Anonymous access still works; this just lifts the rate limit.
+_OV_TOKEN: dict = {}          # {"access": str, "exp": epoch}
+
+
+def _ov_access_token(cfg: dict) -> str:
+    """A Bearer token for Openverse, or '' for anonymous access.
+
+    Priority: an explicit openverse_token (a token you pasted) wins. Otherwise, if
+    openverse_client_id and openverse_client_secret are set, exchange them for an
+    access token via the client-credentials flow and cache it until it expires.
+    Any failure degrades quietly to anonymous — a bad token must never take the
+    whole source down, only cost you the higher rate limit."""
+    static = cfg.get("openverse_token")
+    if static:
+        return str(static)
+    cid = cfg.get("openverse_client_id")
+    csec = cfg.get("openverse_client_secret")
+    if not (cid and csec):
+        return ""                         # no credentials → anonymous
+    now = time.time()
+    if _OV_TOKEN.get("access") and _OV_TOKEN.get("exp", 0) > now + 60:
+        return _OV_TOKEN["access"]        # still valid
+    body = urllib.parse.urlencode({
+        "grant_type": "client_credentials",
+        "client_id": str(cid), "client_secret": str(csec)}).encode()
+    req = urllib.request.Request(
+        "https://api.openverse.org/v1/auth_tokens/token/", data=body,
+        headers={"User-Agent": user_agent(),
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            tok = json.loads(r.read())
+    except Exception:
+        _OV_TOKEN.update(access="", exp=now + 300)   # back off, retry in 5 min
+        return ""
+    access = tok.get("access_token") or ""
+    _OV_TOKEN.update(access=access, exp=now + float(tok.get("expires_in") or 0))
+    return access
+
+
 def openverse(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     if media == "VIDEO":
         raise SourceError("Openverse indexes images and audio, not video")
@@ -345,11 +388,25 @@ def openverse(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
         params["license"] = "cc0,pdm"     # CC0 and Public Domain Mark only
     qs = urllib.parse.urlencode(params)
     headers = {}
-    if cfg.get("openverse_token"):
-        # Optional. Anonymous access works but is rate-limited more tightly.
-        headers["Authorization"] = f"Bearer {cfg['openverse_token']}"
+    token = _ov_access_token(cfg)
+    if token:
+        # Authenticated calls get a far higher rate limit — the whole reason to
+        # register. Anonymous (no token) still works, just throttled tightly.
+        headers["Authorization"] = f"Bearer {token}"
 
-    data = _json(f"https://api.openverse.org/v1/images/?{qs}", headers)
+    url = f"https://api.openverse.org/v1/images/?{qs}"
+    try:
+        data = _json(url, headers)
+    except SourceError as e:
+        # Token expired mid-run? Mint a fresh one once and retry, so a long run
+        # never dies on an expiry it could have refreshed through.
+        if token and "401" in str(e):
+            _OV_TOKEN.clear()
+            token = _ov_access_token(cfg)
+            headers["Authorization"] = f"Bearer {token}" if token else ""
+            data = _json(url, headers)
+        else:
+            raise
     out: list[Hit] = []
 
     for r in (data.get("results") or []):

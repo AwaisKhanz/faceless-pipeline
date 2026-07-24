@@ -213,6 +213,44 @@ def main() -> int:
     feed(LOC)
     check("LoC back to 1 usable under strict", len(S.loc("x", "IMAGE", 5, {})), 1)
 
+    print("\n  Openverse auth: credentials mint a token, anonymous still works:")
+    S._OV_TOKEN.clear()
+    check("no credentials → anonymous (empty token)", S._ov_access_token({}), "")
+    check("an explicit openverse_token wins as-is",
+          S._ov_access_token({"openverse_token": "PASTED"}), "PASTED")
+
+    class _Resp:                                 # a minimal urlopen() result
+        def __init__(self, b): self.b = b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return self.b
+    orig_urlopen = S.urllib.request.urlopen
+    S.urllib.request.urlopen = lambda req, timeout=None: _Resp(
+        b'{"access_token": "MINTED", "expires_in": 3600}')
+    try:
+        S._OV_TOKEN.clear()
+        creds = {"openverse_client_id": "cid", "openverse_client_secret": "sec"}
+        check("client_id/secret are exchanged for a token",
+              S._ov_access_token(creds), "MINTED")
+        check("the minted token is cached", S._OV_TOKEN.get("access"), "MINTED")
+        cap: dict = {}
+
+        def cap_json(url, headers=None):
+            cap["h"] = headers or {}
+            return {"results": []}
+        S._json = cap_json
+        S.openverse("elon musk", "IMAGE", 3, creds)
+        check("openverse sends the minted token as a Bearer header",
+              cap["h"].get("Authorization"), "Bearer MINTED")
+        S._json = lambda url, headers=None: (cap.update(h=headers or {}),
+                                             {"results": []})[1]
+        S.openverse("x", "IMAGE", 3, {})
+        check("anonymous call sends no Authorization header",
+              "Authorization" in cap["h"], False)
+    finally:
+        S.urllib.request.urlopen = orig_urlopen
+        S._OV_TOKEN.clear()
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
