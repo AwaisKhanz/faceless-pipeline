@@ -385,6 +385,27 @@ def main() -> int:
     check("every routed source is queried, in routed order", det.get("sources"), order)
     check("a url shared across sources is deduped (5 hits -> 4)", det.get("pooled"), 4)
 
+    # ── scoring downloads run in parallel and skip a dead thumbnail ──────────
+    print("\n  scoring fetches thumbnails in parallel, skipping dead ones:")
+
+    def flaky_get(url, headers=None, timeout=None, retries=3):
+        if "dead" in url:
+            raise stock.StockError("unreachable")     # a slow/dead thumbnail
+        return b"IMG"
+    stock._get = flaky_get
+    stock._BYTES.clear()
+
+    class _Scorer:
+        def relevance(self, q, items):
+            return {u: 0.7 for u, _ in items}         # score whatever downloaded
+    stock.vision.get_scorer = lambda cfg: _Scorer()
+    pool = [{"url": "http://ok/1", "thumb": "http://ok/1.jpg"},
+            {"url": "http://dead/2", "thumb": "http://dead/2.jpg"},
+            {"url": "http://ok/3", "thumb": "http://ok/3.jpg"}]
+    rel = stock._relevance(pool, "q", "IMAGE", {})
+    check("a dead thumbnail is skipped, the rest still scored",
+          sorted(rel.keys()), ["http://ok/1", "http://ok/3"])
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

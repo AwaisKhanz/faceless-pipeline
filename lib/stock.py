@@ -15,6 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 import subprocess
+import threading
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -51,16 +52,25 @@ _SAFETY_QUERIES = ["dark abstract background", "soft light background",
 # flat over a 115-scene run.
 _BYTES: "OrderedDict[str, bytes]" = OrderedDict()
 _BYTES_CAP = 64
+_BYTES_LOCK = threading.Lock()      # the cache is read/written from scoring threads
+
+# Scoring downloads run in parallel and fail fast — a thumbnail that is slow to
+# answer is skipped rather than waited on, because it is one of many candidates.
+_SCORE_TIMEOUT = 8                  # seconds per scoring thumbnail (vs 30 for a winner)
+_SCORE_WORKERS_IMAGE = 16           # concurrent thumbnail downloads for image scenes
+_SCORE_WORKERS_VIDEO = 6            # fewer for video: each spawns an ffmpeg stream
 
 
-def _fetch_bytes(url: str) -> bytes:
-    if url in _BYTES:
-        _BYTES.move_to_end(url)
-        return _BYTES[url]
-    b = _get(url)
-    _BYTES[url] = b
-    while len(_BYTES) > _BYTES_CAP:
-        _BYTES.popitem(last=False)
+def _fetch_bytes(url: str, timeout: int | None = None, retries: int = 3) -> bytes:
+    with _BYTES_LOCK:
+        if url in _BYTES:
+            _BYTES.move_to_end(url)
+            return _BYTES[url]
+    b = _get(url, timeout=timeout, retries=retries)   # network OUTSIDE the lock
+    with _BYTES_LOCK:
+        _BYTES[url] = b
+        while len(_BYTES) > _BYTES_CAP:
+            _BYTES.popitem(last=False)
     return b
 
 
@@ -68,14 +78,16 @@ class StockError(RuntimeError):
     pass
 
 
-def _get(url: str, headers: dict | None = None) -> bytes:
+def _get(url: str, headers: dict | None = None,
+         timeout: int | None = None, retries: int = 3) -> bytes:
     req = urllib.request.Request(url, headers={**UA, **(headers or {})})
-    for attempt in range(1, 4):
+    to = timeout or TIMEOUT
+    for attempt in range(1, retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            with urllib.request.urlopen(req, timeout=to) as r:
                 return r.read()
         except Exception as e:
-            if attempt == 3:
+            if attempt == retries:
                 raise StockError(f"{type(e).__name__}: {e}")
             time.sleep(1.5 * attempt)
     raise StockError("unreachable")
@@ -441,20 +453,35 @@ def _relevance(pool: list[dict], query: str, media: str,
     scorer = vision.get_scorer(cfg or {})
     if scorer is None:
         return {}
-    items: list[tuple[str, bytes]] = []
-    for h in pool:
+
+    # Fetch every candidate's thumbnail AT ONCE. This used to be a sequential
+    # loop, and a single slow or dead thumbnail — retried three times at the full
+    # 30s timeout — could stall a whole scene for minutes. Now the downloads run
+    # in parallel AND fail fast: a scoring thumbnail is one of ~30 candidates, so
+    # if it doesn't answer in a few seconds it is skipped, not waited on. Only the
+    # eventual winner is downloaded properly (with full retries) later.
+    def _grab(h: dict):
         try:
             if media == "IMAGE":
                 # A small web-size copy is plenty for CLIP (it works at 224px).
-                raw = _fetch_bytes(h.get("thumb") or h["url"])
+                raw = _fetch_bytes(h.get("thumb") or h["url"],
+                                   timeout=_SCORE_TIMEOUT, retries=1)
             elif h.get("thumb"):
-                raw = _fetch_bytes(h["thumb"])         # a poster frame, if given
+                raw = _fetch_bytes(h["thumb"], timeout=_SCORE_TIMEOUT, retries=1)
             else:
                 raw = _video_frame(h["url"])           # else pull one frame
-            if raw:
-                items.append((h["url"], raw))
-        except StockError:
-            continue
+            return (h["url"], raw) if raw else None
+        except Exception:
+            return None                                # unscorable: keep tech order
+
+    workers = _SCORE_WORKERS_VIDEO if media == "VIDEO" else _SCORE_WORKERS_IMAGE
+    n = min(len(pool), workers)
+    if n > 1:
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            fetched = list(ex.map(_grab, pool))
+    else:
+        fetched = [_grab(h) for h in pool]
+    items = [x for x in fetched if x]
     return scorer.relevance(query, items) if items else {}
 
 
@@ -471,7 +498,7 @@ def _video_frame(url: str) -> bytes:
             ["ffmpeg", "-nostdin", "-ss", "1", "-i", url,
              "-frames:v", "1", "-vf", "scale=384:-1",
              "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
-            capture_output=True, timeout=45)
+            capture_output=True, timeout=25)     # a frame comes fast or not at all
         return r.stdout if r.returncode == 0 and r.stdout else b""
     except Exception:
         return b""
