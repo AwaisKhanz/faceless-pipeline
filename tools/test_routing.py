@@ -242,6 +242,27 @@ def main() -> int:
     print(f"    {'ok' if len(S.CANON_TOPICS) == len(S.TOPICS) else '!!'}  "
           f"CANON_TOPICS mirrors TOPICS ({len(S.CANON_TOPICS)})")
 
+    print("\n  all_sources casts the widest net (for named people etc.):")
+    allset = {"nasa", "smithsonian", "openverse", "loc", "wikimedia",
+              "europeana", "pexels", "pixabay"}
+    smart = S.route("people", "IMAGE", allset, "elon musk greeting camera")
+    wide = S.route("people", "IMAGE", allset, "elon musk greeting camera",
+                   all_sources=True)
+    want_img = {n for n in allset if S.REGISTRY[n].can("IMAGE")}
+    bad += not (len(smart) <= S.MAX_SOURCES)
+    print(f"    {'ok' if len(smart) <= S.MAX_SOURCES else '!!'}  smart route capped: {smart}")
+    bad += not (set(wide) == want_img)
+    print(f"    {'ok' if set(wide) == want_img else '!!'}  wide asks every capable source")
+    reached = "wikimedia" in wide and "wikimedia" not in smart
+    bad += not reached
+    print(f"    {'ok' if reached else '!!'}  wikimedia reached in wide, missed in smart")
+    bad += not (wide[0] in ("pexels", "pixabay"))
+    print(f"    {'ok' if wide[0] in ('pexels','pixabay') else '!!'}  best-first order kept: {wide[0]} leads")
+    widev = S.route("people", "VIDEO", allset, "person walking", all_sources=True)
+    vid_ok = all(S.REGISTRY[n].can("VIDEO") for n in widev)
+    bad += not vid_ok
+    print(f"    {'ok' if vid_ok else '!!'}  wide VIDEO stays video-capable only: {widev}")
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

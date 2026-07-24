@@ -44,6 +44,8 @@
   "clip_min": 0.45,
   "_source_log": "How much per-scene detail the live Output shows while sourcing. Default (any value but \"full\") gives a clean result line plus the top few candidates. Set \"full\" to list EVERY scored candidate for every scene — the complete firehose.",
   "source_log": "",
+  "_search_all_sources": "Off by default: each scene is sent only to the few libraries that match its subject (fast, fewer requests). Set true to ask EVERY reachable library for every scene and let visual-matching pick the best across all of them — this catches things topic-routing misses (a named public figure like a politician lives on Wikimedia/Openverse, not on stock, but reads as 'people'). Costs more requests per scene and can hit the free stock hourly limits on long videos; everything is cached, so re-sourcing is free.",
+  "search_all_sources": false,
   "_expand_queries": "Uses your Gemini key to generate a few concrete alternative image searches per scene, so a weak or abstract line (e.g. a 'hypnogram') still finds a real photo. \"auto\" is on when a Gemini key is set; \"off\" uses only the queries in the sheet. Cached per project, so a re-source costs nothing.",
   "expand_queries": "auto",
   "_align": "Word-by-word caption timing. \"auto\" uses torchaudio's built-in forced alignment (free, local, on your GPU, NO extra install — it rides the same torchaudio the voice engine uses) so each spoken word lights up in time; \"off\" falls back to estimated timing from word length. Captions render either way.",

@@ -974,12 +974,19 @@ MAX_SOURCES = 4
 
 
 def route(domain: str, media: str, available: set, query: str = "",
-          topic: str = "") -> list[str]:
+          topic: str = "", all_sources: bool = False) -> list[str]:
     """Which sources to ask for this scene, best first.
 
     `available` is the set usable right now, so a source whose key is missing
     is simply not offered and a half-configured install degrades to "fewer
     places to look" rather than an error.
+
+    `all_sources` casts the widest net: EVERY capable, reachable source is asked
+    (still ordered best-first by subject), and the pool is compared by CLIP. This
+    catches the cases topic-routing misses — a named public figure lives on
+    Wikimedia/Openverse, not on stock, but reads as `people` and would otherwise
+    never reach the archives. The cost is more requests per scene, so it is
+    opt-in (config `search_all_sources`).
 
     `topic` is an OPTIONAL canonical topic (one of CANON_TOPICS) — normally the
     label the scene generator's model assigned. It is how routing scales beyond
@@ -1047,12 +1054,16 @@ def route(domain: str, media: str, available: set, query: str = "",
         # Earning a place and being ordered within it are separate questions.
         # An archive with no topic overlap holds nothing for this scene and is
         # not asked at all — the bonus must not sneak it back in, which is why
-        # it is added only after the gate.
+        # it is added only after the gate. In all_sources mode the gate is off:
+        # every capable source is asked, a zero-overlap one just sorting last.
         if score > 0:
             scored.append((score + src.reliability, name))
+        elif all_sources:
+            scored.append((src.reliability, name))
 
     scored.sort(key=lambda t: (-t[0], t[1]))
-    return [n for _, n in scored[:MAX_SOURCES]]
+    cap = len(scored) if all_sources else MAX_SOURCES
+    return [n for _, n in scored[:cap]]
 
 
 def explain(domain: str, media: str, available: set, query: str = "",

@@ -508,6 +508,11 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     # "full" lists EVERY scored candidate per scene; anything else keeps the
     # clean top-6 view. Set "source_log": "full" in config.json for the firehose.
     full_log = str(cfg.get("source_log", "")).strip().lower() in ("full", "all", "verbose")
+    # Ask EVERY capable source per scene (then CLIP picks), rather than the top
+    # few by subject. Catches named people / off-topic subjects the topic router
+    # would miss. More requests per scene, so it is opt-in.
+    all_sources = str(cfg.get("search_all_sources", "")).strip().lower() \
+        in ("1", "true", "yes", "on", "all")
 
     for i, s in enumerate(scenes):
         if on_progress:
@@ -519,7 +524,8 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         # canonical bucket, which routes any subject even when its words are not
         # in the vocabulary.
         route = _SRC.route(getattr(s, "domain", ""), s.media, have,
-                           query=" ".join(ladder), topic=getattr(s, "topic", ""))
+                           query=" ".join(ladder), topic=getattr(s, "topic", ""),
+                           all_sources=all_sources)
         got = None
         got_rel = -1.0
         notes: list[str] = []
