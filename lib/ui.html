@@ -1059,7 +1059,9 @@ const Q_STATUS = {
   done: { label: 'Done', cls: 'ok' }, error: { label: 'Error', cls: 'bad' },
   canceled: { label: 'Canceled', cls: 'none' },
 };
-const Q_WAIT = ['running', 'approve', 'queued', 'interrupted'];
+const Q_WAIT = ['running', 'approve', 'queued', 'interrupted'];  // "needs attention" (badge)
+const Q_ACTIVE = ['running', 'queued', 'interrupted'];          // actually in the pipeline
+const Q_TERMINAL = ['done', 'error', 'canceled'];
 
 function qPill(st) {
   const m = Q_STATUS[st] || { label: st, cls: 'none' };
@@ -1078,22 +1080,30 @@ async function qAct(url, id, btn) {
 }
 
 function qRow(j) {
-  const wait = Q_WAIT.includes(j.status);
   const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
   const when = j.started ? fmtT((j.ended || Date.now() / 1000) - j.started)
     : (j.status === 'queued' ? 'waiting' : '—');
   const acts = [];
-  if (j.status === 'running' || j.status === 'approve')
-    acts.push(el('button', { class: 'btn sm', onclick: () => go('/activity/' + j.id) }, 'Watch'));
-  if (wait)
+  if (j.status === 'approve') {
+    // The work is done — the only thing left is YOU looking at it. Offer to
+    // open the review page, and to dismiss the row once you're happy.
     acts.push(el('button', {
-      class: 'btn sm danger',
-      onclick: e => qAct('/api/cancel', j.id, e.target)
-    }, j.status === 'queued' ? 'Remove' : 'Stop'));
-  else
+      class: 'btn sm', onclick: () => go('/review/' + encodeURIComponent(j.project))
+    }, 'Review'));
+    acts.push(el('button', {
+      class: 'btn sm', onclick: e => qAct('/api/job/remove', j.id, e.target)
+    }, 'Dismiss'));
+  } else if (Q_ACTIVE.includes(j.status)) {
+    if (j.status === 'running')
+      acts.push(el('button', { class: 'btn sm', onclick: () => go('/activity/' + j.id) }, 'Watch'));
+    acts.push(el('button', {
+      class: 'btn sm danger', onclick: e => qAct('/api/cancel', j.id, e.target)
+    }, j.status === 'running' ? 'Stop' : 'Remove'));
+  } else {
     acts.push(el('button', {
       class: 'btn sm', onclick: e => qAct('/api/job/remove', j.id, e.target)
     }, 'Clear'));
+  }
 
   return el('div', { class: 'card', style: 'padding:14px 16px;margin-bottom:10px' },
     el('div', { class: 'row', style: 'gap:12px;align-items:center' },
@@ -1112,6 +1122,9 @@ function qRow(j) {
     j.status === 'running' && (j.label || j.total) ? el('div', {
       class: 'mono sub', style: 'margin-top:6px'
     }, (j.label || '') + (j.total ? ` · ${j.done}/${j.total}` : '')) : null,
+    j.status === 'approve' && j.label ? el('div', {
+      class: 'sub', style: 'margin-top:6px'
+    }, j.label) : null,
     j.status === 'error' && j.error ? el('div', {
       class: 'mono', style: 'margin-top:8px;color:var(--bad);font-size:13px'
     }, j.error) : null);
@@ -1127,15 +1140,22 @@ function paintQueue() {
   const v = $('#view'); v.innerHTML = '';
   const q = S.queue || { jobs: [] };
   const jobs = q.jobs || [];
-  const waiting = jobs.filter(j => Q_WAIT.includes(j.status));
-  const done = jobs.filter(j => !Q_WAIT.includes(j.status)).reverse();  // newest first
+  // Three distinct things, so they don't get muddled: work still running or
+  // queued; work that's DONE its job and is only waiting for you to look
+  // (review); and work that's fully finished.
+  const active = jobs.filter(j => Q_ACTIVE.includes(j.status));
+  const review = jobs.filter(j => j.status === 'approve');
+  const done = jobs.filter(j => Q_TERMINAL.includes(j.status)).reverse();  // newest first
+
+  const bits = [];
+  if (active.length) bits.push(`${active.length} running or waiting`);
+  if (review.length) bits.push(`${review.length} ready for you to review`);
+  const sub = bits.length
+    ? `${bits.join(' · ')} — runs ${q.max_concurrent > 1 ? q.max_concurrent + ' at a time' : 'one at a time'}, and survives a refresh or restart.`
+    : 'Nothing running. New work you start from any project lands here.';
 
   v.append(el('div', { class: 'head' },
-    el('div', { class: 'grow' }, el('h1', {}, 'Queue'),
-      el('p', {}, waiting.length
-        ? `${waiting.length} in progress or waiting — runs ${q.max_concurrent > 1
-          ? q.max_concurrent + ' at a time' : 'one at a time'}, and survives a refresh or restart.`
-        : 'Nothing running. New work you start from any project lands here.')),
+    el('div', { class: 'grow' }, el('h1', {}, 'Queue'), el('p', {}, sub)),
     done.length ? el('button', {
       class: 'btn sm', onclick: async e => { e.target.disabled = true; await api('/api/queue/clear', {}); await refreshQueue(); }
     }, 'Clear finished') : null));
@@ -1149,13 +1169,18 @@ function paintQueue() {
         el('button', { class: 'btn', onclick: () => go('/') }, 'Go to the dashboard'))));
     return;
   }
-  if (waiting.length) {
-    v.append(el('div', { class: 'sub', style: 'margin:4px 0 10px' }, 'In progress & waiting'));
-    waiting.forEach(j => v.append(qRow(j)));
-  }
+  const section = (label, hint, rows) => {
+    v.append(el('div', { style: 'margin:4px 0 10px' },
+      el('span', { class: 'sub' }, label),
+      hint ? el('span', { class: 'sub', style: 'margin-left:8px;color:var(--ink3)' }, hint) : null));
+    rows.forEach(j => v.append(qRow(j)));
+  };
+  if (active.length) section('In progress & waiting', '', active);
+  if (review.length) section('Ready to review',
+    'each one already found its pictures — open it, then Dismiss when you\'re happy', review);
   if (done.length) {
-    v.append(el('div', { class: 'sub', style: 'margin:18px 0 10px' }, 'Finished'));
-    done.forEach(j => v.append(qRow(j)));
+    if (active.length || review.length) v.append(el('div', { style: 'height:8px' }));
+    section('Finished', '', done);
   }
 }
 
