@@ -308,8 +308,12 @@ def expand_queries(scenes: list[dict], key: str,
     `scenes` is [{"n", "query", "narration"}, ...]. Returns {n: [phrase, ...]}.
     Best effort: any failure returns {} and the caller keeps the original
     queries. Chunked so one bad scene can't cost the whole video its expansions.
+
+    Does NOT gate on `key`: local Ollama and Vertex-via-ADC both authenticate
+    with an EMPTY key, and whether an LLM is configured was already decided by
+    the caller (LLM.available). `call()` routes to the right backend by `model`.
     """
-    if not scenes or not key:
+    if not scenes:
         return {}
     out: dict[int, list[str]] = {}
     CH = 40

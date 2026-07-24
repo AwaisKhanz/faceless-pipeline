@@ -208,6 +208,16 @@ def main() -> int:
     check("vertex model -> vertex backend, SA path threaded",
           (rv["ok"], rv["key"]), ("vertex", "keys/sa.json"))
 
+    print("\n  query expansion works on keyless providers (Ollama, Vertex-ADC):")
+    # expand_queries used to bail on an empty key, which silently disabled it for
+    # local Ollama and Vertex-via-ADC (both authenticate with no key). It must
+    # route by the model string, not gate on the key.
+    G.call = lambda prompt, schema, key, model, system="", temperature=0.4: \
+        {"scenes": [{"scene": 1, "queries": ["dawn over a city", "sunrise skyline"]}]}
+    got = G.expand_queries([{"n": 1, "query": "city at dawn", "narration": "morning"}],
+                           key="", model="vertex:proj|us-central1|gemini-2.5-flash")
+    check("empty key still expands (Vertex ADC / Ollama)", got, {1: ["dawn over a city", "sunrise skyline"]})
+
     print("\n  the parser tolerates fenced / prefixed JSON (free models):")
     check("plain JSON", LLM._json_loads('{"a": 1}'), {"a": 1})
     check("```json fenced", LLM._json_loads('```json\n{"a": 1}\n```'), {"a": 1})

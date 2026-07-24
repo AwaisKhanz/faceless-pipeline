@@ -672,9 +672,10 @@ def build_metadata(sheet: Path, lang: str, cfg: dict) -> dict:
 def _expand_scene_queries(scenes, p, cfg: dict, on_progress=lambda *_: None) -> None:
     """Attach LLM-generated alternative image queries to each scene's fallbacks.
 
-    Needs a Gemini key; a no-op without one, so it never blocks sourcing. Results
-    are cached in the project's work folder keyed by the scene's own query, so a
-    re-source spends no tokens and only genuinely new/changed scenes are sent.
+    Runs on whatever LLM is configured (Gemini, Vertex, Ollama, …); a no-op when
+    none is, so it never blocks sourcing. Results are cached in the project's work
+    folder keyed by the scene's own query, so a re-source spends no tokens and
+    only genuinely new/changed scenes are sent.
     The extra phrases go to the END of `fallbacks`, keeping the human-written
     query and any existing fallbacks first.
     """
