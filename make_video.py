@@ -227,7 +227,8 @@ def step_generate(a) -> None:
         banner(f"Generating the {pl.LANG_NAMES.get(lang, lang)} sheet for '{pid}'")
         res = compose.generate({lang: text}, pid, key,
                                model=model, on_progress=bar,
-                               on_warn=lambda m: print(f"\n  ⚠ {m}"))
+                               on_warn=lambda m: print(f"\n  ⚠ {m}"),
+                               name_people=pl._flag(cfg.get("name_real_people")))
     written = compose.write_files(res, sdir, overwrite=a.overwrite)
     banner("Written")
     rel = sdir.relative_to(ROOT)

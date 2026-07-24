@@ -658,8 +658,7 @@ RULES FOR ALL THREE QUERIES
     light if it matters.
   - No abstractions, no "concept of", no feelings, no metaphors, no brand
     names, no requests for text or logos in the image.
-  - Never name a real living person. For historical figures prefer the era,
-    place or object over the face.
+  - (Naming real people is governed by the PEOPLE rule injected below.)
   - safety_query must be something free stock certainly has. When in doubt make
     it a plain landscape, texture, sky, room or hands.
 
@@ -747,13 +746,34 @@ def scenes_for_section(section: str, ctx: dict, key: str, model: str,
     recurring = "\n".join(f"- {r['name']}: {r['look']}"
                           for r in ctx.get("recurring", [])) or "- (none)"
     topics = ", ".join(CANON_TOPICS)
+    # Whether the search query may NAME a real person. Off (default) is the
+    # faceless mode — a scene about a person becomes a generic filmable stand-in.
+    # On is biography mode — a scene about a named person searches for THAT
+    # person, so the picture is actually them (from photo archives).
+    if ctx.get("name_people"):
+        people_rule = """
+NAMED PEOPLE — THIS VIDEO IS ABOUT REAL PEOPLE
+When a scene is about a specific, real, named person, PUT THEIR NAME in the
+search query — that is the whole point of the video. Add a concrete setting or
+action so it is still a findable photo:
+  "Elon Musk speaking at a conference"   NOT  "a successful entrepreneur"
+  "Imran Khan addressing a crowd"        NOT  "a politician giving a speech"
+Use the person's full, correct name. Only fall back to a generic description for
+scenes that are NOT about a specific person (an abstract idea, a place, a thing).
+The fallback/safety queries may stay generic so an empty result is impossible."""
+    else:
+        people_rule = """
+NAMED PEOPLE
+Never name a real living person in a query; use a generic, filmable description
+instead. For historical figures prefer the era, place or object over the face."""
     p = f"""Split the following SECTION of a video script into scenes.
 
 VIDEO: {ctx.get('title_en', '')}
 VISUAL STYLE: {ctx.get('visual_style', '')}
 RECURRING PEOPLE (cast them consistently):
 {recurring}
-{SPLIT_RULES}{extra}
+{SPLIT_RULES}{people_rule}
+{extra}
 
 CANONICAL TOPIC (`topic` field)
 Set `topic` for each scene to the ONE canonical topic that best fits what its

@@ -55,11 +55,20 @@ VERSION = "1.0"
 DEFAULT_CONTACT = "https://github.com/AwaisKhanz/faceless-pipeline"
 _contact = DEFAULT_CONTACT
 
+# License policy. Default (False) accepts ONLY CC0 / public-domain — the safe
+# slice that needs no credit and no share-alike. Set config "image_licenses":
+# "all" to accept EVERYTHING these open archives return (CC BY, CC BY-SA, …),
+# which is what a biography of a real person needs. The user then owns the
+# attribution/terms; the credits block is still generated for the description.
+_accept_any = False
+
 
 def configure(cfg: dict) -> None:
-    """Adopt the contact address from config, if one is set."""
-    global _contact
-    _contact = (cfg or {}).get("contact") or DEFAULT_CONTACT
+    """Adopt the contact address and license policy from config, if set."""
+    global _contact, _accept_any
+    cfg = cfg or {}
+    _contact = cfg.get("contact") or DEFAULT_CONTACT
+    _accept_any = str(cfg.get("image_licenses", "")).strip().lower() in ("all", "any", "*")
 
 
 def user_agent() -> str:
@@ -269,7 +278,7 @@ def smithsonian(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
                         .get("online_media") or {}).get("media") or []
         for m in media_blocks:
             rights = str(m.get("usage", {}).get("access", "")).upper()
-            if rights != "CC0":
+            if not _accept_any and rights != "CC0":
                 continue                       # only the unencumbered slice
             url = m.get("content") or m.get("thumbnail") or ""
             if not url:
@@ -302,14 +311,16 @@ def openverse(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     if media == "VIDEO":
         raise SourceError("Openverse indexes images and audio, not video")
 
-    qs = urllib.parse.urlencode({
+    params = {
         "q": query,
         "page_size": min(max(want * 3, 10), 40),
-        "license": "cc0,pdm",         # CC0 and Public Domain Mark only
         "size": "large",
         "aspect_ratio": "wide",       # 16:9 timeline; portrait scans waste it
         "mature": "false",
-    })
+    }
+    if not _accept_any:
+        params["license"] = "cc0,pdm"     # CC0 and Public Domain Mark only
+    qs = urllib.parse.urlencode(params)
     headers = {}
     if cfg.get("openverse_token"):
         # Optional. Anonymous access works but is rate-limited more tightly.
@@ -320,7 +331,7 @@ def openverse(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
 
     for r in (data.get("results") or []):
         lic = (r.get("license") or "").lower()
-        if lic not in ("cc0", "pdm"):
+        if not _accept_any and lic not in ("cc0", "pdm"):
             continue                   # belt and braces over the filter above
         url = r.get("url") or ""
         if not url:
@@ -384,7 +395,7 @@ def wikimedia(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
         blob = " ".join(field(k) for k in
                         ("License", "LicenseShortName", "UsageTerms",
                          "Copyrighted", "Permission"))
-        if _NOT_OK.search(blob) or not _PD_OK.search(blob):
+        if not _accept_any and (_NOT_OK.search(blob) or not _PD_OK.search(blob)):
             continue                   # anything not plainly PD/CC0 is dropped
 
         url = info.get("thumburl") or info.get("url") or ""
@@ -458,7 +469,7 @@ def loc(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
             " ".join(v) if isinstance(v, list) else str(v)
             for k, v in r.items()
             if "rights" in k.lower() and v)
-        if _LOC_BLOCK.search(blob) or not _LOC_FREE.search(blob):
+        if not _accept_any and (_LOC_BLOCK.search(blob) or not _LOC_FREE.search(blob)):
             continue
 
         urls = [u for u in (r.get("image_url") or []) if isinstance(u, str)]
@@ -519,15 +530,17 @@ def europeana(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     # literal in the URL and made the whole request malformed — Europeana replied
     # HTTP 400. The colons, slashes and quotes inside the RIGHTS filter are
     # encoded too; Europeana decodes them back, so the Lucene syntax still works.
-    qs = urllib.parse.urlencode({
+    params = {
         "wskey": key, "query": query,
-        "qf": 'RIGHTS:("http://creativecommons.org/publicdomain/zero/1.0/" OR '
-              '"http://creativecommons.org/publicdomain/mark/1.0/")',
         "media": "true",           # only records that actually have a file
         "thumbnail": "true",
         "profile": "rich",
         "rows": min(max(want * 4, 20), 50),
-    }, quote_via=urllib.parse.quote)
+    }
+    if not _accept_any:
+        params["qf"] = ('RIGHTS:("http://creativecommons.org/publicdomain/zero/1.0/" '
+                        'OR "http://creativecommons.org/publicdomain/mark/1.0/")')
+    qs = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
     qs += "&qf=TYPE%3AIMAGE"       # urlencode cannot repeat a key
     data = _json(f"https://api.europeana.eu/record/v2/search.json?{qs}")
 
@@ -537,7 +550,7 @@ def europeana(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     out: list[Hit] = []
     for r in (data.get("items") or []):
         rights = " ".join(r.get("rights") or [])
-        if not _EU_FREE.search(rights):
+        if not _accept_any and not _EU_FREE.search(rights):
             continue               # belt and braces over the qf filter
 
         # edmIsShownBy is the real file at the providing institution;
@@ -633,12 +646,14 @@ def internet_archive(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
         colls = _as_set(doc.get("collection"))
 
         # The gate. Restrictive CC is a hard no even if a collection would
-        # otherwise vouch for it — the item's own licence wins.
-        if _IA_BLOCK.search(lic):
-            continue
-        free = bool(_IA_FREE.search(lic)) or bool(colls & _IA_SAFE_COLLECTIONS)
-        if not free:
-            continue
+        # otherwise vouch for it — the item's own licence wins. Skipped entirely
+        # under image_licenses: "all".
+        if not _accept_any:
+            if _IA_BLOCK.search(lic):
+                continue
+            free = bool(_IA_FREE.search(lic)) or bool(colls & _IA_SAFE_COLLECTIONS)
+            if not free:
+                continue
 
         ident = doc.get("identifier")
         if not ident:

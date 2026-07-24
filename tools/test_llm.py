@@ -208,6 +208,20 @@ def main() -> int:
     check("vertex model -> vertex backend, SA path threaded",
           (rv["ok"], rv["key"]), ("vertex", "keys/sa.json"))
 
+    print("\n  name_real_people flips the search rule (biography vs faceless):")
+    cap = {}
+
+    def cap_call(prompt, schema, key, model, system="", temperature=0.4):
+        cap["p"] = prompt
+        return {"scenes": []}
+    G.call = cap_call
+    G.scenes_for_section("Elon Musk founded SpaceX.", {"name_people": True}, "k", "m")
+    check("biography mode names the real person",
+          "PUT THEIR NAME" in cap["p"] and "Never name a real living person" not in cap["p"])
+    G.scenes_for_section("A rocket launches.", {"name_people": False}, "k", "m")
+    check("faceless default never names a living person",
+          "Never name a real living person" in cap["p"])
+
     print("\n  query expansion works on keyless providers (Ollama, Vertex-ADC):")
     # expand_queries used to bail on an empty key, which silently disabled it for
     # local Ollama and Vertex-via-ADC (both authenticate with no key). It must

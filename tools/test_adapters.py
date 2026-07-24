@@ -197,6 +197,22 @@ def main() -> int:
         check("Internet Archive refuses IMAGE (stills come from elsewhere)",
               True, True)
 
+    print("\n  image_licenses='all' relaxes the gate (biography mode, opt-in):")
+    S.configure({"image_licenses": "all"})
+    check("policy flag on", S._accept_any, True)
+    feed(LOC)
+    # a=free, b=restricted, c=no-note now all pass the LICENCE gate; d is still
+    # dropped for size and e for access_restricted — those are not licence gates.
+    check("LoC now keeps restricted + un-noted (size/access still apply)",
+          len(S.loc("x", "IMAGE", 5, {})), 3)
+    feed(EU)
+    check("Europeana now keeps CC BY and CC BY-SA too",
+          len(S.europeana("x", "IMAGE", 5, {"europeana_key": "k"})), 4)
+    S.configure({})                              # reset — strict for anything after
+    check("strict restored after reset", S._accept_any, False)
+    feed(LOC)
+    check("LoC back to 1 usable under strict", len(S.loc("x", "IMAGE", 5, {})), 1)
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

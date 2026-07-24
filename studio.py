@@ -265,7 +265,8 @@ def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
             scripts, pid, LLM.key_for(cfg),
             model=LLM.model_for(cfg),
             on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
-            on_warn=lambda m: log(f"  ⚠ {m}"))
+            on_warn=lambda m: log(f"  ⚠ {m}"),
+            name_people=pl._flag(cfg.get("name_real_people")))
 
         sdir = pl.sheets_dir(pid)
         written = compose.write_files(res, sdir, overwrite=overwrite)

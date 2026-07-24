@@ -311,7 +311,7 @@ def _language_sheet(scenes: list[Scene], pid: str, lang: str,
 
 def generate(scripts: dict[str, str], pid: str, key: str,
              model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
-             on_warn=lambda *_: None) -> Result:
+             on_warn=lambda *_: None, name_people: bool = False) -> Result:
     """Per-language scripts in → main script + narration files out. No translation.
 
     `scripts` maps language code -> that language's pasted script. The first
@@ -319,6 +319,10 @@ def generate(scripts: dict[str, str], pid: str, key: str,
     script is split into scenes, which define the shared visuals. Every other
     language's pasted script is segmented onto those same scenes, so all
     languages share one set of pictures and one scene numbering.
+
+    `name_people` (biography mode) lets a scene about a specific named person
+    search for THAT person instead of a generic stand-in. It rides on the plan
+    dict into scene generation, so no extra plumbing.
     """
     res = Result()
     present = ([l for l in STRUCT_ORDER if scripts.get(l, "").strip()]
@@ -339,6 +343,7 @@ def generate(scripts: dict[str, str], pid: str, key: str,
 
     tick("reading the script")
     plan = G.plan(struct_script, key, model)
+    plan["name_people"] = bool(name_people)      # rides into scenes_for_section
     res.plan = plan
 
     scenes = split_into_scenes(struct_script, plan, key, model, res, tick, on_warn)
