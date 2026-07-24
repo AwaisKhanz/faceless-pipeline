@@ -26,6 +26,8 @@ sys.path.insert(0, str(ROOT))
 
 from lib import stock, sources as SRC, vision, pipeline as pl  # noqa: E402
 
+_REAL_FETCH = stock.fetch          # captured before any test reassigns stock.fetch
+
 
 def main() -> int:
     bad = 0
@@ -350,6 +352,38 @@ def main() -> int:
     check("clip band top raised so matches stop pegging at 100%",
           vision._band_of(vision.BASE32), (0.15, 0.35))
     check("siglip has its own band", vision._family_of(vision.SIGLIP_SO400M), "siglip")
+
+    # ── sources are queried in parallel, merged deterministically ───────────
+    print("\n  a scene's sources are fetched in parallel, order + dedup kept:")
+
+    class _H:
+        def __init__(self, url, src):
+            self.url, self.src = url, src
+            self.ext, self.credit, self.page, self.license, self.thumb = \
+                ".jpg", src, "", "cc0", ""
+            self.width, self.height = 1600, 900
+
+    def one_hit(name, query, media, want, cfg):
+        # nasa and loc deliberately return the SAME url, to prove cross-source dedup
+        url = "http://dup/x" if name in ("nasa", "loc") else f"http://{name}/a"
+        return [_H(url, name)]
+    stock._SRC.search = one_hit
+    stock._SRC.REGISTRY = {n: 1 for n in ("nasa", "loc", "wikimedia")}
+    stock._pexels = lambda q, m, k, w: [{"url": "http://pexels/a", "ext": ".jpg",
+        "src": "pexels", "credit": "", "page": "", "license": "", "thumb": "",
+        "width": 1600, "height": 900}]
+    stock._pixabay = lambda q, m, k, w: [{"url": "http://pixabay/a", "ext": ".jpg",
+        "src": "pixabay", "credit": "", "page": "", "license": "", "thumb": "",
+        "width": 1600, "height": 900}]
+    stock.vision.get_scorer = lambda cfg, log=None: None
+    stock._fetch_bytes = lambda url: b"x"
+    stock._pixel_width = lambda f: 1600
+    order = ["pexels", "pixabay", "nasa", "loc", "wikimedia"]
+    meta = _REAL_FETCH("q", "IMAGE", Path(tempfile.mkdtemp()), "PK", "XK", 0,
+                       sources=order, cfg={})
+    det = meta.get("_detail", {})
+    check("every routed source is queried, in routed order", det.get("sources"), order)
+    check("a url shared across sources is deduped (5 hits -> 4)", det.get("pooled"), 4)
 
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0

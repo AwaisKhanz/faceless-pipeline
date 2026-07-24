@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import subprocess
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import sources as _SRC
@@ -284,7 +285,14 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     # downloaded, so a wide net stays cheap.
     order = sources or ["pexels", "pixabay"]
     want = index + POOL          # depth per source; grows when a swap bumps index
-    for name in order:           # route() already caps how many sources this is
+    # Query every routed source AT ONCE. Each is a blocking network call, so
+    # doing them one after another made an all_sources scene wait out the SUM of
+    # every source's latency — with eight archives, and slow ones like the
+    # Library of Congress, that is many seconds per scene. In parallel the scene
+    # waits only for the slowest source, not the total. Results are merged back
+    # in the routed order, so dedup and telemetry stay deterministic; only the
+    # winner is downloaded, later and on the main thread.
+    def _query_source(name: str):
         try:
             if name == "pexels" and pexels_key:
                 got = _pexels(query, media, pexels_key, want)
@@ -299,9 +307,19 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
                     for h in _SRC.search(name, query, media, want, cfg or {})]
             else:
                 got = []
+            return name, got, None
         except Exception as e:
-            errors.append(f"{name}: {e}")
-            got = []
+            return name, [], f"{name}: {e}"
+
+    if len(order) > 1:
+        with ThreadPoolExecutor(max_workers=min(len(order), 8)) as ex:
+            per_source = list(ex.map(_query_source, order))    # keeps input order
+    else:
+        per_source = [_query_source(n) for n in order]
+
+    for name, got, err in per_source:        # merge in the routed order
+        if err:
+            errors.append(err)
         for h in got:
             u = h.get("url")
             if u and u not in seen:           # dedupe: the same file appears on
