@@ -286,7 +286,7 @@ def main() -> int:
     import lib.imagen as IM
     IM.available = lambda cfg: True
 
-    def gen_asset(gen, s, cache, cfg, used):
+    def gen_asset(gen, s, cache, cfg, used, log=lambda *_: None):
         return {"path": f"/gen/{s.n}", "src": "imagen", "query": s.query,
                 "media": "IMAGE", "credit": "AI-generated (Imagen)", "page": "",
                 "license": "AI-generated", "score": None, "generated": True}

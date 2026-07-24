@@ -566,21 +566,32 @@ def _emit_rung(log, query, detail, label, picked: bool, scorer_on: bool) -> None
     log(f"      → {pooled} pooled · {scored} scored{tail}{dupe}")
 
 
-def _generate_one(gen, s, cache: Path, cfg: dict, used: set) -> dict | None:
+def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
+                  log=lambda *_: None) -> dict | None:
     """Generate ONE image for a scene and return an asset dict, or None on any
     failure so the caller falls back to search. The file is named by a hash of
     the prompt, so an identical prompt reuses the picture already made — a
-    re-source never pays for the same generation twice."""
+    re-source never pays for the same generation twice.
+
+    Retries once: the Gemini image model occasionally replies with TEXT instead
+    of a picture, and a second attempt usually returns the image. A genuine block
+    (safety, or a named real person) fails both times and is reported, so the
+    caller can search instead — the scene is never left empty."""
     subject = s.query or getattr(s, "text", "") or ""
     prompt = gen.prompt_for(subject, cfg)
     if not prompt.strip():
         return None
     slug = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16]
     dest = cache / f"gen_{slug}.png"
-    try:
-        gen.image(prompt, cfg, dest)
-    except Exception:
-        return None                        # generation failed → let search handle it
+    for attempt in (1, 2):
+        try:
+            gen.image(prompt, cfg, dest)
+            break
+        except Exception as e:
+            if attempt == 2:
+                log(f"  ⚠ S{s.n:>3} could not generate ({str(e)[:64]}) — "
+                    f"searching instead")
+                return None
     path = str(dest)
     if path in used:
         return None                        # already on screen elsewhere
@@ -690,7 +701,7 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         # ALL mode: generate instead of searching. A generation failure falls
         # through to a normal search, so a scene is never left empty by it.
         if gen_mode == "all" and can_gen:
-            a = _generate_one(_gen, s, cache, cfg, used)
+            a = _generate_one(_gen, s, cache, cfg, used, log)
             if a:
                 used.add(a["path"])
                 out[s.n] = a
@@ -793,7 +804,7 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             if got is not None and got_rel is None:
                 below = False               # found but unscored — keep it
             if below:
-                a = _generate_one(_gen, s, cache, cfg, used)
+                a = _generate_one(_gen, s, cache, cfg, used, log)
                 if a:
                     used.add(a["path"])
                     out[s.n] = a
