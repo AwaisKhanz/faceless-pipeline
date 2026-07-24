@@ -25,12 +25,20 @@ nothing more.
 from __future__ import annotations
 
 import json
+import os
+import time
 import urllib.error
 import urllib.request
 
 DEFAULT_HOST = "http://localhost:11434"
 _OLLAMA = "ollama:"
 _OPENAI_PREFIX = "openai:"
+_VERTEX = "vertex:"
+# Vertex AI (Gemini on Google Cloud) authenticates with a Cloud OAuth token, not
+# an API key. The service-account JSON (or Application Default Credentials) is the
+# permanent credential; google-auth mints and auto-refreshes the short-lived token
+# from it, so nothing here is ever renewed by hand.
+_VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _TIMEOUT = 600          # a big local model on a long prompt is slow; be patient
 
 # OpenAI-compatible cloud providers. name -> (base_url, key field, model field).
@@ -90,7 +98,7 @@ def _json_loads(content: str):
 def provider(cfg: dict | None) -> str:
     """Which backend the config asks for. 'gemini' unless a known other is set."""
     p = _s(cfg, "llm", "gemini").lower()
-    return p if (p == "ollama" or p in _OPENAI) else "gemini"
+    return p if (p in ("ollama", "vertex") or p in _OPENAI) else "gemini"
 
 
 def host(cfg: dict | None) -> str:
@@ -102,6 +110,10 @@ def available(cfg: dict | None) -> bool:
     p = provider(cfg)
     if p == "ollama":
         return bool(_s(cfg, "ollama_model"))
+    if p == "vertex":
+        # The service-account JSON is optional (ADC can supply credentials), so a
+        # project and a model are the minimum. The token is proven at call time.
+        return bool(_s(cfg, "vertex_project") and _s(cfg, "vertex_model"))
     if p in _OPENAI:
         _, kf, mf = _OPENAI[p]
         return bool(_s(cfg, kf) and _s(cfg, mf))
@@ -109,10 +121,14 @@ def available(cfg: dict | None) -> bool:
 
 
 def key_for(cfg: dict | None) -> str:
-    """The API key to pass down. Empty for Ollama (local, no key)."""
+    """The credential to pass down. Empty for Ollama (local) and for Vertex when
+    it uses Application Default Credentials; otherwise the API key, or — for
+    Vertex — the PATH to the service-account JSON."""
     p = provider(cfg)
     if p == "ollama":
         return ""
+    if p == "vertex":
+        return _s(cfg, "vertex_service_account")     # "" => ADC / env var
     if p in _OPENAI:
         return _s(cfg, _OPENAI[p][1])
     return _s(cfg, "gemini_key")
@@ -125,6 +141,11 @@ def model_for(cfg: dict | None) -> str:
     if p == "ollama":
         name = _s(cfg, "ollama_model")
         return f"{_OLLAMA}{host(cfg)}|{name}" if name else ""
+    if p == "vertex":
+        proj = _s(cfg, "vertex_project")
+        loc = _s(cfg, "vertex_location", "us-central1") or "us-central1"
+        name = _s(cfg, "vertex_model")
+        return f"{_VERTEX}{proj}|{loc}|{name}" if (proj and name) else ""
     if p in _OPENAI:
         base, _, mf = _OPENAI[p]
         name = _s(cfg, mf)
@@ -138,6 +159,10 @@ def is_ollama(model: str | None) -> bool:
 
 def is_openai(model: str | None) -> bool:
     return bool(model) and model.startswith(_OPENAI_PREFIX)
+
+
+def is_vertex(model: str | None) -> bool:
+    return bool(model) and model.startswith(_VERTEX)
 
 
 def _parse(model: str, prefix: str, default_head: str) -> tuple[str, str]:
@@ -278,6 +303,134 @@ def openai_complete(model: str, key: str, prompt: str, schema: dict,
     raise LLMError(f"{name} gave no usable JSON after {retries} tries. {last}")
 
 
+# ─────────────────────────────────────────────── the Vertex AI backend (Gemini)
+#
+# Gemini on Vertex is the same request/response shape as the AI Studio API — the
+# only differences are the endpoint (a Cloud aiplatform host, with the project and
+# region in the path) and the auth (a Cloud OAuth Bearer token instead of ?key=).
+# So this reuses the same schema objects and JSON parsing; only the transport
+# differs. Selecting "vertex" bills against the Google Cloud project (and its
+# $300 free credit); the existing AI Studio "gemini" provider is untouched.
+
+_VERTEX_CREDS: dict = {}          # credential-source -> cached google-auth creds
+
+
+def _parse_vertex(model: str) -> tuple[str, str, str]:
+    """'vertex:<project>|<location>|<model>' -> (project, location, model)."""
+    project, _, rest = model[len(_VERTEX):].partition("|")
+    location, _, name = rest.partition("|")
+    return project, (location or "us-central1"), (name or "gemini-2.5-flash")
+
+
+def _vertex_token(sa_path: str) -> str:
+    """A valid Cloud access token, minted and auto-refreshed by google-auth.
+
+    The permanent credential is the service-account JSON at `sa_path`; an empty
+    path falls back to Application Default Credentials (the GOOGLE_APPLICATION_
+    CREDENTIALS env var, or `gcloud auth application-default login`). The 1-hour
+    token is refreshed here whenever it has expired, so nothing is renewed by hand.
+    """
+    try:
+        import google.auth
+        from google.auth.transport.requests import Request
+        from google.oauth2 import service_account
+    except ImportError:
+        raise LLMError(
+            "Vertex AI needs the google-auth library. Install it once:\n"
+            "    pip install google-auth\n"
+            "then set \"llm\": \"vertex\" in config.json.") from None
+
+    cache_key = sa_path or "__adc__"
+    creds = _VERTEX_CREDS.get(cache_key)
+    if creds is None:
+        if sa_path:
+            if not os.path.exists(sa_path):
+                raise LLMError(
+                    f"Service-account file not found: {sa_path}\n"
+                    f"Check \"vertex_service_account\" in config.json.")
+            creds = service_account.Credentials.from_service_account_file(
+                sa_path, scopes=[_VERTEX_SCOPE])
+        else:
+            creds, _ = google.auth.default(scopes=[_VERTEX_SCOPE])
+        _VERTEX_CREDS[cache_key] = creds
+    if not creds.valid:
+        creds.refresh(Request())
+    return creds.token
+
+
+def vertex_complete(model: str, key: str, prompt: str, schema: dict,
+                    system: str = "", temperature: float = 0.4,
+                    retries: int = 3) -> dict:
+    """One structured-JSON completion from Gemini on Vertex AI.
+
+    `key` is the PATH to the service-account JSON (or "" for ADC). Same schema and
+    JSON handling as the other providers; raises a clear LLMError rather than junk.
+    """
+    project, location, name = _parse_vertex(model)
+    if not project:
+        raise LLMError("Vertex AI needs a project — set \"vertex_project\".")
+    host_ = ("aiplatform.googleapis.com" if location == "global"
+             else f"{location}-aiplatform.googleapis.com")
+    url = (f"https://{host_}/v1/projects/{project}/locations/{location}"
+           f"/publishers/google/models/{name}:generateContent")
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": schema,
+            "temperature": temperature,
+            "maxOutputTokens": 65536,
+        },
+    }
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+    data = json.dumps(body).encode("utf-8")
+
+    token = _vertex_token(key)
+    last = ""
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json",
+                                         "Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+                payload = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:400]
+            if e.code in (401, 403) and attempt == 1:
+                # Token expired mid-run, or a stale cache — force a fresh mint.
+                _VERTEX_CREDS.pop(key or "__adc__", None)
+                token = _vertex_token(key)
+                last = f"re-authenticated after {e.code}"
+                continue
+            if e.code == 429:
+                last = "rate limited"
+                time.sleep(8 * attempt)
+                continue
+            raise LLMError(
+                f"Vertex AI returned {e.code} for {name} in {project}/{location}:\n"
+                f"{detail}") from None
+        except urllib.error.URLError as e:
+            raise LLMError(
+                f"Could not reach Vertex AI ({e.reason}). Check the network and "
+                f"that the region '{location}' is right.") from None
+        except Exception as e:                        # noqa: BLE001
+            last = f"{type(e).__name__}: {e}"
+            continue
+        cands = payload.get("candidates") or []
+        if not cands:
+            last = f"no candidates: {payload.get('promptFeedback', payload)}"
+            continue
+        parts = (cands[0].get("content") or {}).get("parts") or []
+        text = "".join(p.get("text", "") for p in parts)
+        try:
+            return _json_loads(text)
+        except Exception:
+            last = "the model did not return valid JSON"
+            continue
+    raise LLMError(f"Vertex AI gave no usable JSON after {retries} tries. {last}")
+
+
 # ─────────────────────────────────────────────────────── status (doctor/UI)
 
 def capability(cfg: dict | None = None) -> dict:
@@ -302,6 +455,23 @@ def capability(cfg: dict | None = None) -> dict:
                     "reason": f"model not pulled — run: ollama pull {m}"}
         return {"provider": "ollama", "ok": True, "model": m, "host": h,
                 "installed": installed, "reason": "ready"}
+
+    if p == "vertex":
+        proj, m = _s(cfg, "vertex_project"), _s(cfg, "vertex_model")
+        loc = _s(cfg, "vertex_location", "us-central1") or "us-central1"
+        sa = _s(cfg, "vertex_service_account")
+        if not proj:
+            return {"provider": "vertex", "ok": False, "model": m,
+                    "reason": "set vertex_project in config.json"}
+        if not m:
+            return {"provider": "vertex", "ok": False, "model": "",
+                    "reason": "set vertex_model (e.g. gemini-2.5-flash)"}
+        if sa and not os.path.exists(sa):
+            return {"provider": "vertex", "ok": False, "model": m,
+                    "reason": f"service-account file not found: {sa}"}
+        cred = os.path.basename(sa) if sa else "application default credentials"
+        return {"provider": "vertex", "ok": True, "model": m,
+                "host": f"{proj} · {loc} · {cred}", "reason": "ready"}
 
     if p in _OPENAI:
         base, kf, mf = _OPENAI[p]

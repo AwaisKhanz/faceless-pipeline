@@ -111,6 +111,12 @@ def call(prompt: str, schema: dict, key: str, model: str = DEFAULT_MODEL,
         from . import llm
         return llm.openai_complete(model, key, prompt, schema, system=system,
                                    temperature=temperature)
+    if str(model).startswith("vertex:"):
+        # Gemini on Vertex AI (Google Cloud). `key` is the path to the
+        # service-account JSON (or "" for Application Default Credentials).
+        from . import llm
+        return llm.vertex_complete(model, key, prompt, schema, system=system,
+                                   temperature=temperature)
     model = resolve_model(key, model)
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],

@@ -3,6 +3,14 @@
 # config.example.json is the safe template — that one IS tracked.
 config.json
 
+# Google Cloud service-account key for Vertex AI. This is a PRIVATE KEY — never
+# commit it. Keep the JSON in keys/ (ignored) and point vertex_service_account
+# at it, or store it outside the repo entirely.
+keys/
+*service-account*.json
+*service_account*.json
+*-sa.json
+
 # ── Generated and downloadable ──────────────────────────────────────────────
 # All of this rebuilds itself from the sheets. Committing it would push the
 # repo into the gigabytes and GitHub rejects any single file over 100 MB.

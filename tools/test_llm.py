@@ -146,6 +146,68 @@ def main() -> int:
     check("available with key+model", LLM.available(orc), True)
     check("capability ready", LLM.capability(orc)["ok"], True)
 
+    print("\n  Vertex AI (Gemini on Google Cloud) selection + routing:")
+    vtx = {"llm": "vertex", "vertex_project": "my-proj",
+           "vertex_location": "us-central1", "vertex_model": "gemini-2.5-flash",
+           "vertex_service_account": "keys/sa.json"}
+    check("llm=vertex selects vertex", LLM.provider(vtx), "vertex")
+    check("vertex model_for encodes project|location|model", LLM.model_for(vtx),
+          "vertex:my-proj|us-central1|gemini-2.5-flash")
+    check("vertex key_for returns the SA path", LLM.key_for(vtx), "keys/sa.json")
+    check("vertex available needs project+model", LLM.available(vtx), True)
+    check("vertex without a project is unavailable",
+          LLM.available({"llm": "vertex", "vertex_model": "gemini-2.5-flash"}), False)
+    check("is_vertex detects the routed string", LLM.is_vertex(LLM.model_for(vtx)), True)
+    check("_parse_vertex splits the three parts",
+          LLM._parse_vertex("vertex:p|europe-west4|gemini-2.5-pro"),
+          ("p", "europe-west4", "gemini-2.5-pro"))
+    check("_parse_vertex defaults location + model",
+          LLM._parse_vertex("vertex:p"), ("p", "us-central1", "gemini-2.5-flash"))
+
+    print("\n  the Vertex call hits the aiplatform endpoint with a Bearer token:")
+    LLM._vertex_token = lambda sa: "TOK-123"           # skip real google-auth
+    vcap = {}
+
+    def fake_vtx(req, timeout=0):
+        vcap["url"] = req.full_url
+        vcap["auth"] = req.headers.get("Authorization")
+        vcap["body"] = json.loads(req.data)
+        return _Resp({"candidates": [{"content": {"parts": [
+            {"text": json.dumps({"scenes": [1]})}]}}]})
+    LLM.urllib.request.urlopen = fake_vtx
+    out = LLM.vertex_complete("vertex:my-proj|us-central1|gemini-2.5-flash",
+                              "keys/sa.json", "prompt", {"type": "object"},
+                              system="sys", temperature=0.2)
+    check("hit the regional generateContent url", vcap["url"],
+          "https://us-central1-aiplatform.googleapis.com/v1/projects/my-proj/"
+          "locations/us-central1/publishers/google/models/"
+          "gemini-2.5-flash:generateContent")
+    check("bearer token set", vcap["auth"], "Bearer TOK-123")
+    check("sent responseSchema",
+          vcap["body"]["generationConfig"]["responseSchema"], {"type": "object"})
+    check("carried the system instruction",
+          vcap["body"]["systemInstruction"]["parts"][0]["text"], "sys")
+    check("parsed the candidate JSON", out, {"scenes": [1]})
+    LLM.vertex_complete("vertex:my-proj|global|gemini-2.5-flash", "", "p", {}, temperature=0.1)
+    check("global location drops the region prefix",
+          vcap["url"].startswith("https://aiplatform.googleapis.com/v1/projects/"
+                                 "my-proj/locations/global/"), True)
+
+    print("\n  vertex capability + gemini.call dispatch:")
+    check("capability ok with project+model via ADC",
+          LLM.capability({"llm": "vertex", "vertex_project": "p",
+                          "vertex_model": "gemini-2.5-flash"})["ok"], True)
+    check("capability flags a missing service-account file",
+          LLM.capability(vtx)["ok"], False)            # keys/sa.json doesn't exist
+    check("capability names the provider",
+          LLM.capability({"llm": "vertex", "vertex_project": "p",
+                          "vertex_model": "m"})["provider"], "vertex")
+    LLM.vertex_complete = lambda model, key, prompt, schema, system="", temperature=0.4: \
+        {"ok": "vertex", "key": key}
+    rv = G.call("p", {}, "keys/sa.json", "vertex:proj|us-central1|gemini-2.5-flash")
+    check("vertex model -> vertex backend, SA path threaded",
+          (rv["ok"], rv["key"]), ("vertex", "keys/sa.json"))
+
     print("\n  the parser tolerates fenced / prefixed JSON (free models):")
     check("plain JSON", LLM._json_loads('{"a": 1}'), {"a": 1})
     check("```json fenced", LLM._json_loads('```json\n{"a": 1}\n```'), {"a": 1})
