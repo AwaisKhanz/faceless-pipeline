@@ -357,7 +357,8 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
         traceback.print_exc()
 
 
-def run_sourcing(pid: str, redo: list[int] | None) -> None:
+def run_sourcing(pid: str, redo: list[int] | None,
+                 skip_review: bool = False) -> None:
     try:
         proj = pl.find_project(pid)
         if proj is None:
@@ -410,20 +411,26 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
         missing = [s.n for s in scenes if s.n not in assets]
         placeheld = sorted(n for n, a in assets.items()
                            if isinstance(a, dict) and a.get("placeholder"))
+        # In the hands-off chain there is no review stop, so this job finishes
+        # 'done' and the pipeline moves straight on to voice+render. On its own
+        # it stops at 'approve' (Needs review) so you can look before rendering.
+        end_stage = "done" if skip_review else "approve"
         if missing:
-            set_job(stage="approve", label=f"ready — {len(missing)} scene(s) still empty")
+            set_job(stage=end_stage, label=f"ready — {len(missing)} scene(s) still empty")
             log(f"⚠ {len(missing)} scene(s) still have NO picture: {missing}")
             log("  Reword their search line in the sheet, or swap them in review, "
                 "before rendering.")
         elif placeheld:
-            set_job(stage="approve",
+            set_job(stage=end_stage,
                     label=f"ready — {len(placeheld)} placeholder(s)")
             log(f"⚠ {len(placeheld)} scene(s) got a neutral placeholder (no real "
                 f"match found): {placeheld}")
             log("  The video will build. Swap these in review for a better shot.")
         else:
-            set_job(stage="approve", label="ready for review")
-            log("Visuals ready — review them below.")
+            set_job(stage=end_stage, label="ready for review")
+            log("Visuals ready." if skip_review else "Visuals ready — review them below.")
+        if skip_review:
+            log("Auto-process: continuing to voice + render (no review stop).")
     except Exception as e:
         set_job(stage="error", error=str(e))
         log(f"ERROR: {e}")
@@ -1197,9 +1204,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/source":
             pid = b.get("id")
-            # auto=true chains straight on to voice+render (Auto-process the rest).
-            job = enqueue(pid, "source", {"pid": pid, "redo": b.get("redo") or None},
-                          auto=bool(b.get("auto")))
+            # auto=true chains straight on to voice+render (Auto-process the rest),
+            # so it skips the review stop and finishes 'done' to trigger the chain.
+            auto = bool(b.get("auto"))
+            job = enqueue(pid, "source",
+                          {"pid": pid, "redo": b.get("redo") or None,
+                           "skip_review": auto}, auto=auto)
             return self._json({"started": True, "job": job.id})
 
         if path == "/api/regenerate":
@@ -1502,7 +1512,8 @@ def _auto_next(job) -> None:
         return
     nxt = AUTO_CHAIN.get(job.kind)
     if nxt == "source":
-        SCHED.enqueue(job.project, "source", {"pid": job.project, "redo": None},
+        SCHED.enqueue(job.project, "source",
+                      {"pid": job.project, "redo": None, "skip_review": True},
                       auto=True)
     elif nxt == "run":
         # Build every language the project has, not just the main one — a project
