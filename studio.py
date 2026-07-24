@@ -98,6 +98,8 @@ JOB = {
     "warnings": [],
     # Timing, so the interface can show real numbers instead of a spinner.
     "started": None,       # epoch seconds, whole job
+    "ended": None,         # epoch seconds when it left a running stage; freezes
+                           # the elapsed clock so it stops when the job is done
     "step_started": None,  # epoch seconds, current step
     "steps": [],           # [{name, lang, seconds, items}] as each one finishes
     "eta": None,           # seconds remaining in this step, or None
@@ -111,6 +113,15 @@ LOCK = threading.Lock()
 def set_job(**kw) -> None:
     with LOCK:
         JOB.update(kw)
+        # Freeze (or release) the elapsed clock on any stage change. Entering a
+        # running stage clears the end stamp; leaving one for a terminal stage
+        # (done, error, approve, idle) stamps the moment it finished, so the UI
+        # can stop the timer instead of counting up forever.
+        if "stage" in kw:
+            if kw["stage"] in RUNNING:
+                JOB["ended"] = None
+            elif JOB.get("started") and JOB.get("ended") is None:
+                JOB["ended"] = time.time()
 
 
 def begin_job(project: str, langs: list[str], stage: str) -> None:
@@ -118,7 +129,7 @@ def begin_job(project: str, langs: list[str], stage: str) -> None:
     with LOCK:
         JOB.update(stage=stage, project=project, langs=langs, label="",
                    done=0, total=0, log=[], error="", outputs=[], warnings=[],
-                   started=time.time(), step_started=time.time(),
+                   started=time.time(), ended=None, step_started=time.time(),
                    steps=[], eta=None, rate=None, lang=None, cancel=False)
 
 
@@ -213,6 +224,8 @@ def _guarded(fn, *a) -> None:
         with LOCK:
             if JOB["stage"] in RUNNING:
                 JOB["stage"] = "done"               # never leave it hanging
+                if JOB.get("started") and JOB.get("ended") is None:
+                    JOB["ended"] = time.time()      # and stop the clock
 
 
 def start_thread(fn, *a) -> bool:

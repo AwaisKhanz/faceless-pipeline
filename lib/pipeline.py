@@ -760,10 +760,43 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
     # a clip already on screen — and this used to call stock.fetch directly,
     # which quietly meant none of that ran.
     keep = {n: a for n, a in assets.items() if n not in {s.n for s in todo}}
-    fresh = stock.fetch_all(
-        todo, p["stockcache"], cfg.get("pexels_key"), cfg.get("pixabay_key"),
-        picks=picks, log=log, cfg=cfg, already=keep,
-        on_progress=on_progress)
+
+    # Persist the whole sourcing log to the project so it survives the run and
+    # can be read later — the live Output panel only keeps the last few hundred
+    # lines. Every line the pipeline logs is teed to work/sourcing.log verbatim.
+    log_path = p["base"].parent / "sourcing.log"
+    _logf = None
+    try:
+        _logf = log_path.open("w", encoding="utf-8")
+        _logf.write(f"Sourcing log · {time.strftime('%Y-%m-%d %H:%M:%S')} · "
+                    f"{len(todo)} scene(s)\n")
+    except Exception:
+        _logf = None
+    user_log = log
+
+    def log(msg):                       # tee: live panel + the saved file
+        user_log(msg)
+        if _logf is not None:
+            try:
+                _logf.write(str(msg).rstrip("\n") + "\n")
+                _logf.flush()
+            except Exception:
+                pass
+
+    try:
+        rel_log = log_path.relative_to(ROOT)
+    except ValueError:
+        rel_log = log_path
+    try:
+        fresh = stock.fetch_all(
+            todo, p["stockcache"], cfg.get("pexels_key"), cfg.get("pixabay_key"),
+            picks=picks, log=log, cfg=cfg, already=keep,
+            on_progress=on_progress)
+    finally:
+        if _logf is not None:
+            _logf.write(f"\nSaved {rel_log}\n")
+            _logf.close()
+    log(f"Full step-by-step log saved to {rel_log}")
     assets.update(fresh)
 
     p["assets"].write_text(

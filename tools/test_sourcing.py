@@ -199,6 +199,11 @@ def main() -> int:
                     log=j3.append, cfg={"clip_min": 0.45, "source_log": "full"})
     j3s = "\n".join(j3)
     check("source_log 'full' lists every candidate", "all:" in j3s and "more)" not in j3s)
+    check("full view opens a per-scene header", "Scene 5" in j3s)
+    check("full view narrates each query step by step",
+          "search:" in j3s and "fallback 1:" in j3s)
+    check("full view lists every source with its count per query",
+          j3s.count("sources:") >= 2)
 
     # ── biography mode drops stock on people scenes ─────────────────────────
     print("\n  biography mode drops stock on people scenes (real person wins):")

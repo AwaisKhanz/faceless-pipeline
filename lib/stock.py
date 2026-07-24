@@ -487,6 +487,40 @@ def _detail_line(detail: dict | None, full: bool = False) -> str:
     return "       " + " · ".join(parts)
 
 
+def _emit_scene_header(log, s) -> None:
+    """Open a scene's step-by-step block (source_log: 'full'): a blank line, then
+    what this scene is and what it wants on screen."""
+    topic = getattr(s, "topic", "") or "—"
+    text = (getattr(s, "text", "") or s.query or "").strip()
+    log("")
+    log(f"── Scene {s.n} · {s.media.lower()} · {topic}")
+    if text:
+        log(f"   narration: \"{text[:72]}\"")
+
+
+def _emit_rung(log, query, detail, label, picked: bool, scorer_on: bool) -> None:
+    """One rung of the ladder, step by step: the query, then EVERY source it hit
+    with how many results each returned, then how many were pooled/scored and the
+    best match. Nothing condensed — this is the 'show me everything' view."""
+    log(f"   {label}: \"{query[:60]}\"")
+    if not detail:
+        log("      → no source returned anything for this query")
+        return
+    order = detail.get("sources") or []
+    counts = detail.get("counts") or {}
+    per = "  ".join(f"{name} {counts.get(name, 0)}" for name in order) or "stock"
+    log(f"      sources: {per}")
+    pooled = detail.get("pooled", 0)
+    scored = detail.get("scored", 0)
+    ranked = detail.get("ranked") or []
+    tail = ""
+    if scorer_on and ranked and ranked[0][1] is not None:
+        bs, br = ranked[0]
+        tail = f" · best {bs} {int(br * 100)}%"
+    dupe = "" if picked else " · (all already used elsewhere)"
+    log(f"      → {pooled} pooled · {scored} scored{tail}{dupe}")
+
+
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
               picks: dict[int, int] | None = None, log=print,
               cfg: dict | None = None, already: dict | None = None,
@@ -559,11 +593,13 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         best_below_eff = -1.0
         notes: list[str] = []
         rungs: list = []            # (query, rel) for each rung tried — the ladder
+        rung_log: list = []         # (query, detail, picked) for the full step view
 
         for rung, query in enumerate(ladder):
             # Walk a few matches deep so a duplicate can be stepped over
             # without giving up on this query.
             pick = None
+            rdetail = None
             for bump in range(4):
                 try:
                     hit = fetch(query, s.media, cache, pexels_key, pixabay_key,
@@ -572,10 +608,13 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                     if bump == 0:
                         notes.append(f"{query[:34]!r}: {e}")
                     break                       # this query is exhausted
+                if rdetail is None:
+                    rdetail = hit.get("_detail")   # telemetry for THIS query's search
                 if hit["path"] in used:
                     continue                    # already on screen elsewhere
                 pick = hit
                 break
+            rung_log.append((query, rdetail, pick is not None))
             if pick is None:
                 continue                        # nothing usable from this query
 
@@ -616,6 +655,16 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             log(f"  ⚠ {nm} disabled for the rest of this run after "
                 f"{_SRC.FAIL_LIMIT} failed requests — unreachable on this network "
                 f"(run 'faceless sources' to check).")
+
+        # THE STEP-BY-STEP VIEW (source_log: "full"). Before announcing the pick,
+        # walk the scene out loud: its header, then each query with every source's
+        # result count and the best match. This is the "show me everything, in
+        # order" log — one scene fully narrated before the next begins.
+        if full_log:
+            _emit_scene_header(log, s)
+            for idx, (q, det, picked) in enumerate(rung_log):
+                label = "search" if idx == 0 else f"fallback {idx}"
+                _emit_rung(log, q, det, label, picked, scorer_on)
 
         if got is None:
             # The scene's own ladder found nothing real. An empty scene breaks
@@ -670,9 +719,13 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         sym = "~" if weak_pick else "✓"
         pct = f"{got_rel * 100:.0f}%" if (scorer_on and got_rel is not None) else "  —"
         topic = f" · {s.topic}" if getattr(s, "topic", "") else ""
+        note = "  (weak — below the match bar; worth a manual swap)" if weak_pick else ""
         log(f"{sym} S{s.n:>3} {s.media.lower():<5} · {got['src']:<11} "
-            f"{pct:>4} · \"{got['query'][:46]}\"{topic}")
-        if len(rungs) > 1:                         # a genuine fallback happened
+            f"{pct:>4} · \"{got['query'][:46]}\"{topic}{note}")
+        # In the full step-by-step view the ladder was already narrated rung by
+        # rung above, so the compact "ladder:" line would just repeat it. Keep it
+        # for the default (compact) view, where it is the only trace of a fallback.
+        if not full_log and len(rungs) > 1:        # a genuine fallback happened
             steps = []
             for q, r in rungs:
                 mark = " ✓" if q == got["query"] else ""

@@ -960,7 +960,7 @@ function paintRun() {
     el('div', { class: 'stats' },
       el('div', { class: 'stat' }, el('b', {}, pct + '%'), el('span', {}, 'complete')),
       el('div', { class: 'stat' }, el('b', {}, (j.done ?? 0) + '/' + (j.total ?? 0)), el('span', {}, 'items')),
-      el('div', { class: 'stat' }, el('b', {}, j.started ? fmtT(Date.now() / 1000 - j.started) : '—'),
+      el('div', { class: 'stat' }, el('b', {}, j.started ? fmtT((j.ended || Date.now() / 1000) - j.started) : '—'),
         el('span', {}, 'elapsed')),
       el('div', { class: 'stat' }, el('b', {}, busy && j.eta != null ? fmtT(j.eta) : '—'),
         el('span', {}, 'remaining')),
