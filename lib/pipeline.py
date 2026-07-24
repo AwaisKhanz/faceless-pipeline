@@ -868,6 +868,71 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
     return {"generated": generated, "failed": failed, "assets": assets}
 
 
+def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
+                    on_progress=noop, log=noop) -> dict:
+    """Generate a Veo video clip for each scene in `which` — the MANUAL, capped,
+    expensive path. Only ever called from the review page, one clip at a time,
+    and never more than `veo_max` per run so a slip of the finger can't spend the
+    whole credit. A refused clip keeps the scene's current picture and is
+    reported. The renderer treats any .mp4 asset as a video, so nothing else in
+    the build needs to change.
+    """
+    from . import veo
+    if not veo.available(cfg):
+        raise SystemExit(
+            "Video generation needs \"vertex_project\" in config.json — the same "
+            "Vertex setup the LLM uses. Add it, then try again.")
+
+    cap = max(1, int(cfg.get("veo_max") or 2))
+    p = paths_for(sheet, "en")
+    p["stockcache"].mkdir(parents=True, exist_ok=True)
+    p["assets"].parent.mkdir(parents=True, exist_ok=True)
+    assets: dict[int, dict] = {}
+    if p["assets"].exists():
+        assets = {int(k): v for k, v in
+                  json.loads(p["assets"].read_text(encoding="utf-8")).items()}
+    picks: dict[int, int] = {}
+    if p["picks"].exists():
+        picks = {int(k): v for k, v in
+                 json.loads(p["picks"].read_text(encoding="utf-8")).items()}
+
+    by_n = {s.n: s for s in scenes}
+    want = [n for n in which if n in by_n]
+    skipped = want[cap:]                              # beyond the per-run cap
+    want = want[:cap]
+    generated: list[int] = []
+    failed: list[tuple] = []
+
+    for i, n in enumerate(want):
+        s = by_n[n]
+        on_progress(i + 1, len(want), f"S{n} rendering video (1–2 min)")
+        picks[n] = picks.get(n, 0) + 1               # fresh take, new filename
+        prompt = veo.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
+        dest = p["stockcache"] / f"veo_{n}_{picks[n]}.mp4"
+        try:
+            veo.video(prompt, cfg, dest,
+                      on_wait=lambda i=i: on_progress(i + 1, len(want),
+                                                      f"S{want[i]} rendering video…"))
+        except Exception as e:
+            failed.append((n, str(e)))
+            log(f"✗ S{n:>3} · could not generate video · {str(e)[:80]}")
+            continue
+        assets[n] = {"path": str(dest), "src": "veo", "query": s.query,
+                     "media": "VIDEO", "credit": "AI-generated (Veo)", "page": "",
+                     "license": "AI-generated", "score": None, "generated": True}
+        generated.append(n)
+        log(f"✦ S{n:>3} video · generated · \"{(s.query or '')[:46]}\"")
+
+    p["assets"].write_text(
+        json.dumps({str(k): v for k, v in assets.items()}, indent=2),
+        encoding="utf-8")
+    p["picks"].write_text(
+        json.dumps({str(k): v for k, v in picks.items()}, indent=2),
+        encoding="utf-8")
+    return {"generated": generated, "failed": failed, "skipped": skipped,
+            "assets": assets}
+
+
 def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
                    on_progress=noop) -> list[Path]:
     """`voice` names a reference clip, overriding the one saved for this language."""

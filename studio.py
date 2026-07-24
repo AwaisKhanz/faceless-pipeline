@@ -450,6 +450,48 @@ def run_regenerate(pid: str, which: list[int]) -> None:
         traceback.print_exc()
 
 
+def run_regenerate_video(pid: str, which: list[int]) -> None:
+    """Manually generate Veo video clips for the scenes marked in review. Capped,
+    slow (a minute or two each), and expensive — so it is never automatic."""
+    try:
+        proj = pl.find_project(pid)
+        sheet = Path(proj["sheet"])
+        cfg = pl.load_config()
+        mlang = pl.main_lang(sheet)
+        scenes = pl.load_scenes(sheet, mlang, None)
+        begin_job(pid, [mlang], "stock")
+        set_job(total=len(which or []))
+        log(f"Generating video for {len(which or [])} scene(s) — Veo takes a "
+            f"minute or two each.")
+
+        def onp(d, t, m):
+            progress(d, t, m)
+
+        res = pl.generate_videos(scenes, sheet, cfg, which or [],
+                                 on_progress=onp, log=log)
+        end_step()
+        gen, failed, skipped = res["generated"], res["failed"], res["skipped"]
+        if skipped:
+            log(f"Held back {len(skipped)} scene(s) past the per-run cap "
+                f"(veo_max): {skipped}. Run again to do more.")
+        if failed:
+            set_job(stage="approve",
+                    label=f"video: {len(gen)} done, {len(failed)} could not")
+            log(f"⚠ {len(failed)} scene(s) could not be generated (a safety filter "
+                f"or a named real person): {[n for n, _ in failed]} — kept their "
+                f"current picture.")
+        else:
+            set_job(stage="approve", label=f"generated {len(gen)} video clip(s)")
+            log("Done — the new clips are below.")
+    except SystemExit as e:
+        set_job(stage="error", error=str(e))
+        log(f"ERROR: {e}")
+    except Exception as e:
+        set_job(stage="error", error=str(e))
+        log(f"ERROR: {e}")
+        traceback.print_exc()
+
+
 def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
               zoom: bool, voices: dict[str, str], master: bool = True) -> None:
     try:
@@ -1118,6 +1160,13 @@ class Handler(BaseHTTPRequestHandler):
             if not scenes:
                 return self._json({"error": "no scenes to generate"}, 400)
             ok = start_thread(run_regenerate, b.get("id"), scenes)
+            return self._json({"started": ok})
+
+        if path == "/api/regenerate_video":
+            scenes = [int(n) for n in (b.get("scenes") or []) if str(n).isdigit()]
+            if not scenes:
+                return self._json({"error": "no scenes to generate"}, 400)
+            ok = start_thread(run_regenerate_video, b.get("id"), scenes)
             return self._json({"started": ok})
 
         if path == "/api/build":

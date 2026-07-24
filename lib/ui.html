@@ -1636,6 +1636,20 @@ async function viewReview(id) {
     }
   }, 'Generate with AI') : null;
 
+  // Video generation (Veo) — the expensive one, so it always asks first and is
+  // capped server-side by veo_max. Only offered when Vertex is configured.
+  const vidBtn = d.generate_on ? el('button', {
+    class: 'btn', disabled: true, style: 'margin-left:8px', onclick: async e => {
+      if (!rejected.size) return;
+      if (!confirm(`Generate ${rejected.size} AI video clip(s) with Veo?\n\n`
+        + `Veo costs roughly $1–3 per clip and takes a minute or two each. `
+        + `It is capped per run by veo_max in config.`)) return;
+      e.target.disabled = true;
+      const r = await api('/api/regenerate_video', { id, scenes: [...rejected] });
+      if (r.started) go('/activity'); else e.target.disabled = false;
+    }
+  }, 'Generate video') : null;
+
   // The buttons only mean something once at least one picture is marked, so they
   // stay disabled until then — no more "swap" with an empty selection.
   const syncSwap = () => {
@@ -1647,8 +1661,13 @@ async function viewReview(id) {
       genBtn.textContent = rejected.size
         ? `Generate with AI (${rejected.size})` : 'Generate with AI';
     }
+    if (vidBtn) {
+      vidBtn.disabled = rejected.size === 0;
+      vidBtn.textContent = rejected.size
+        ? `Generate video (${rejected.size})` : 'Generate video';
+    }
     count.textContent = rejected.size
-      ? `${rejected.size} marked — search again or generate`
+      ? `${rejected.size} marked — search again, or generate image / video`
       : 'Click any weak or wrong picture to mark it';
   };
 
@@ -1658,7 +1677,7 @@ async function viewReview(id) {
       `${placeholders.length} placeholder`) : null,
     weak.length ? el('span', { class: 'pill part' }, `${weak.length} weak`) : null,
     d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no picture`) : null,
-    swapBtn, genBtn)));
+    swapBtn, genBtn, vidBtn)));
 
   v.append(el('div', { class: 'thumbs' }, items.map(s => {
     const p = pct(s);
