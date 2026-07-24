@@ -1082,12 +1082,12 @@ def route(domain: str, media: str, available: set, query: str = "",
 
 
 def explain(domain: str, media: str, available: set, query: str = "",
-            topic: str = "") -> str:
+            topic: str = "", all_sources: bool = False) -> str:
     """Human-readable reason for a route, for `faceless sources` and debugging."""
     found = topics_in(domain, query)
     if topic in TOPICS:
         found = found | {topic}
-    r = route(domain, media, available, query, topic)
+    r = route(domain, media, available, query, topic, all_sources)
     topic_s = ", ".join(sorted(found)) or "no recognised topic"
     return f"{topic_s} -> {r}"
 

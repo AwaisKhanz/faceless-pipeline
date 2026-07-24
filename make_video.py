@@ -359,8 +359,14 @@ def main() -> None:
             print("  browser agent works      -> our User-Agent is the problem")
             print("  everything resets        -> TLS, proxy, or something in between")
 
+        all_src = pl._flag(cfg.get("search_all_sources"))
+        accept_any = str(cfg.get("image_licenses", "")).strip().lower() \
+            in ("all", "any", "*")
         banner("Routing")
         print(f"  {len(SRC.TOPICS)} topics, {len(SRC._WORD2TOPIC)} words recognised.")
+        mode = ("EVERY source per scene (search_all_sources on)" if all_src
+                else "the best few sources per scene by subject (default)")
+        print(f"  Mode: {mode}.")
         print(f"  Scene tags are free text — anything sensible works.\n")
         for dom, q, media in (
                 ("astrophysics", "spiral galaxy in deep space", "IMAGE"),
@@ -368,18 +374,24 @@ def main() -> None:
                 ("dinosaurs", "fossil skeleton in a museum", "IMAGE"),
                 ("modern medicine", "surgeon in an operating room", "IMAGE"),
                 ("daily life", "older woman making tea at home", "IMAGE"),
+                ("named person", "Elon Musk speaking at a conference", "IMAGE"),
                 ("sport", "runners crossing a finish line", "IMAGE"),
                 # The two that show motion routing: modern goes to stock, the
                 # archival one earns Internet Archive the third slot.
                 ("modern life", "friends laughing in a cafe", "VIDEO"),
                 ("wartime", "1930s newsreel of a city street", "VIDEO"),
                 ("(anything unknown)", "wibble flurb", "IMAGE")):
-            print(f"  {dom:<18}{media:<6} {SRC.explain(dom, media, have, q)}")
+            print(f"  {dom:<18}{media:<6} {SRC.explain(dom, media, have, q, all_sources=all_src)}")
         print(f"\n  Routing is frozen by tools/test_routing.py — run that after")
         print(f"  changing the vocabulary. It is offline and free.")
         print(f"\n  Sheets carry a 'Domain:' line per scene; blank routes to stock.")
-        print(f"  Only CC0 and public-domain material is accepted — nothing here")
-        print(f"  needs crediting or restricts commercial use.")
+        if accept_any:
+            print(f"  Licenses: image_licenses=\"all\" — EVERYTHING these archives")
+            print(f"  return is accepted (you own attribution/terms; credits are")
+            print(f"  still written to the description).")
+        else:
+            print(f"  Licenses: strict — only CC0 and public-domain material is")
+            print(f"  accepted. Set image_licenses=\"all\" to take everything.")
         return
 
     if a.step == "voices":
