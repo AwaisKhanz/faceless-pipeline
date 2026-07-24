@@ -1,18 +1,19 @@
-"""Image generation via Vertex AI Imagen.
+"""Image generation via Vertex AI — Gemini image models ("Nano Banana").
 
-A companion to the search sources: instead of finding a photo, this generates one
-from the scene's own words. It reuses the Vertex service-account token minted in
-lib.llm, so the same credentials that power the LLM also make pictures — nothing
-new to configure beyond turning it on.
+Google retired the standalone Imagen `:predict` models in 2026 and folded image
+generation into the Gemini models, called through the ordinary `:generateContent`
+endpoint (the same one the LLM uses) with an IMAGE response modality. The picture
+comes back as a base64 part in the response. The module name stays `imagen` for
+familiarity; the model underneath is now e.g. gemini-2.5-flash-image.
 
 Deliberate limits, because generation costs money and the point is control:
-  - ONE image per call (sampleCount=1), never a pool.
+  - ONE image per call, never a batch.
   - 16:9, sized for the timeline.
   - Cached by prompt: an identical prompt reuses the file it already made, so a
     re-source never pays twice.
-  - NEVER used for a real named person. Imagen will not render a specific public
-    figure, and a biography needs the real face — so the caller keeps person
-    scenes on the photo archives and only generates concept / b-roll beats.
+  - NEVER used for a real named person. A biography needs the real face, so the
+    caller keeps person scenes on the photo archives and only generates concept /
+    b-roll beats.
 
 The pipeline decides WHEN to call this (config `generate`: off / mixed / all);
 this module only knows HOW.
@@ -27,10 +28,11 @@ from pathlib import Path
 
 from . import llm
 
-# Imagen is regional; `global` (used for Gemini) is not a valid Imagen endpoint,
-# so generation has its own location, defaulting to a region that always has it.
-DEFAULT_LOCATION = "us-central1"
-DEFAULT_MODEL = "imagen-3.0-generate-002"
+# These are Gemini models on the same generateContent endpoint as the LLM, so
+# they run on the "global" location the LLM already uses. Override in config.
+DEFAULT_LOCATION = "global"
+DEFAULT_MODEL = "gemini-2.5-flash-image"       # "Nano Banana", ~$0.039/image
+DEFAULT_ASPECT = "16:9"
 DEFAULT_STYLE = ("cinematic documentary photograph, natural light, realistic, "
                  "high detail, shallow depth of field")
 TIMEOUT = 120                              # a generation is slower than a search
@@ -58,17 +60,41 @@ def prompt_for(query: str, cfg: dict | None = None) -> str:
 
 
 def _endpoint(project: str, location: str, model: str) -> str:
-    return (f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
-            f"/locations/{location}/publishers/google/models/{model}:predict")
+    host = ("aiplatform.googleapis.com" if location == "global"
+            else f"{location}-aiplatform.googleapis.com")
+    return (f"https://{host}/v1/projects/{project}/locations/{location}"
+            f"/publishers/google/models/{model}:generateContent")
 
 
-def _predict(url: str, body: dict, token: str) -> dict:
+def _generate(url: str, body: dict, token: str) -> dict:
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         return json.loads(r.read())
+
+
+def _first_image(out: dict) -> str:
+    """The base64 image bytes from the first image part of a generateContent
+    response, or '' if the model returned only text (or nothing)."""
+    for cand in (out.get("candidates") or []):
+        for part in ((cand.get("content") or {}).get("parts") or []):
+            blob = part.get("inlineData") or part.get("inline_data") or {}
+            if blob.get("data"):
+                return blob["data"]
+    return ""
+
+
+def _reason(out: dict) -> str:
+    """Why no image came back — a safety block reads far better than 'empty'."""
+    fb = out.get("promptFeedback") or {}
+    if fb.get("blockReason"):
+        return f"blocked: {fb['blockReason']}"
+    cands = out.get("candidates") or []
+    if cands and cands[0].get("finishReason") not in (None, "STOP"):
+        return f"stopped: {cands[0]['finishReason']}"
+    return "no image in the response (the model may have replied with text only)"
 
 
 def image(prompt: str, cfg: dict, dest: Path) -> Path:
@@ -87,6 +113,7 @@ def image(prompt: str, cfg: dict, dest: Path) -> Path:
     location = cfg.get("generate_location") or DEFAULT_LOCATION
     model = cfg.get("generate_model") or DEFAULT_MODEL
     sa_path = cfg.get("vertex_service_account") or ""
+    aspect = cfg.get("generate_aspect") or DEFAULT_ASPECT
 
     try:
         token = llm._vertex_token(sa_path)
@@ -94,17 +121,19 @@ def image(prompt: str, cfg: dict, dest: Path) -> Path:
         raise GenError(str(e)) from None
 
     body = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {
-            "sampleCount": 1,              # exactly one image — never a pool
-            "aspectRatio": "16:9",
-            "personGeneration": cfg.get("generate_person") or "allow_adult",
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageConfig": {"aspectRatio": aspect},
         },
     }
     url = _endpoint(project, location, model)
 
+    def _call(b: dict, tok: str) -> dict:
+        return _generate(url, b, tok)
+
     try:
-        out = _predict(url, body, token)
+        out = _call(body, token)
     except urllib.error.HTTPError as e:
         detail = ""
         try:
@@ -114,23 +143,26 @@ def image(prompt: str, cfg: dict, dest: Path) -> Path:
         if e.code in (401, 403):           # token expired mid-run: mint once more
             llm._VERTEX_CREDS.clear()
             try:
-                out = _predict(url, body, llm._vertex_token(sa_path))
+                out = _call(body, llm._vertex_token(sa_path))
             except Exception as e2:
-                raise GenError(f"Imagen auth failed: {e2}") from None
+                raise GenError(f"image auth failed: {e2}") from None
+        elif e.code == 400 and "imageConfig" in detail:
+            # Older model that doesn't accept imageConfig — retry without it.
+            body["generationConfig"].pop("imageConfig", None)
+            try:
+                out = _call(body, token)
+            except Exception as e2:
+                raise GenError(f"image HTTP 400: {e2}") from None
         elif e.code == 429:
-            raise GenError("Imagen is rate-limiting (429) — try again shortly.") from None
+            raise GenError("image model is rate-limiting (429) — try again shortly.") from None
         else:
-            raise GenError(f"Imagen HTTP {e.code}: {detail}") from None
+            raise GenError(f"image HTTP {e.code}: {detail}") from None
     except Exception as e:
-        raise GenError(f"Imagen request failed: {e}") from None
+        raise GenError(f"image request failed: {e}") from None
 
-    preds = out.get("predictions") or []
-    b64 = preds[0].get("bytesBase64Encoded") if preds else ""
+    b64 = _first_image(out)
     if not b64:
-        # A safety block returns no image but a reason — surface it plainly.
-        reason = (preds[0].get("raiFilteredReason") if preds else "") \
-            or "no image returned (possibly a safety filter)"
-        raise GenError(f"Imagen produced nothing: {reason}")
+        raise GenError(f"image model produced nothing: {_reason(out)}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(base64.b64decode(b64))

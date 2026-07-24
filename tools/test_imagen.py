@@ -36,42 +36,48 @@ def main() -> int:
     cap = {}
     tiny = base64.b64encode(b"\x89PNG\r\n\x1a\nFAKE").decode()
 
-    def fake_predict(url, body, token):
+    def fake_generate(url, body, token):
         cap.update(url=url, body=body, token=token)
-        return {"predictions": [{"bytesBase64Encoded": tiny, "mimeType": "image/png"}]}
-    im._predict = fake_predict
+        return {"candidates": [{"content": {"parts": [
+            {"inlineData": {"mimeType": "image/png", "data": tiny}}]}}]}
+    im._generate = fake_generate
 
-    cfg = {"vertex_project": "proj", "generate_location": "us-central1",
+    cfg = {"vertex_project": "proj", "generate_location": "global",
            "vertex_service_account": ""}
     dest = Path(tempfile.mkdtemp()) / "g.png"
     out = im.image("a rocket launch", cfg, dest)
     check("writes the image file", out.exists() and out.stat().st_size > 0)
-    check("endpoint targets project + region",
-          "projects/proj/locations/us-central1" in cap["url"])
-    check("endpoint targets the default model",
-          "imagen-3.0-generate-002:predict" in cap["url"])
-    check("asks for exactly ONE image", cap["body"]["parameters"]["sampleCount"], 1)
-    check("asks for 16:9", cap["body"]["parameters"]["aspectRatio"], "16:9")
+    check("endpoint targets the project", "projects/proj/locations/global" in cap["url"])
+    check("endpoint uses generateContent (Gemini image API)",
+          cap["url"].endswith(":generateContent"))
+    check("endpoint targets the default Gemini image model",
+          "gemini-2.5-flash-image" in cap["url"])
+    check("asks for an IMAGE modality",
+          "IMAGE" in cap["body"]["generationConfig"]["responseModalities"])
+    check("asks for 16:9",
+          cap["body"]["generationConfig"]["imageConfig"]["aspectRatio"], "16:9")
     check("passes the bearer token", cap["token"], "TOK")
 
     # caching: a second call for the same dest must NOT hit the API
     def boom(*a, **k):
         raise AssertionError("should have used the cached file")
-    im._predict = boom
+    im._generate = boom
     out2 = im.image("a rocket launch", cfg, dest)
     check("a re-run reuses the cached file, no second call", out2 == dest)
 
-    # an empty prediction (safety filter) -> GenError, not a broken file
-    im._predict = lambda url, body, token: {"predictions": [{"raiFilteredReason": "blocked"}]}
+    # a text-only reply (no image part / safety) -> GenError, not a broken file
+    im._generate = lambda url, body, token: {
+        "candidates": [{"content": {"parts": [{"text": "sorry"}]},
+                        "finishReason": "IMAGE_SAFETY"}]}
     try:
         im.image("x", cfg, Path(tempfile.mkdtemp()) / "g2.png")
-        check("empty prediction raises", False)
+        check("a reply with no image raises", False)
     except im.GenError:
-        check("empty prediction raises GenError", True)
+        check("a reply with no image raises GenError", True)
 
     # missing project -> GenError before any network call
     try:
-        im.image("x", {"generate_location": "us-central1"},
+        im.image("x", {"generate_location": "global"},
                  Path(tempfile.mkdtemp()) / "g3.png")
         check("missing project raises", False)
     except im.GenError:

@@ -49,8 +49,10 @@ def main(argv: list[str]) -> int:
     except imagen.GenError as e:
         print(f"✗ Could not generate: {e}\n")
         print("Common causes:")
-        print("  • Imagen isn't enabled on the project (enable 'Vertex AI API').")
-        print("  • The region has no Imagen — keep generate_location at us-central1.")
+        print("  • A 404 usually means the model name — Google retired the old")
+        print("    Imagen models in 2026. Use a Gemini image model like")
+        print("    gemini-2.5-flash-image (the current default).")
+        print("  • If \"global\" 404s, set generate_location to us-central1.")
         print("  • The service account lacks the 'Vertex AI User' role.")
         return 1
 
