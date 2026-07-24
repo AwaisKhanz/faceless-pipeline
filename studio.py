@@ -9,6 +9,7 @@ browser is just a nicer front end for the same pipeline the CLI uses.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import mimetypes
 import os
@@ -86,168 +87,182 @@ UI = ROOT / "lib" / "ui.html"
 
 # ------------------------------------------------------------------- job state
 
-JOB = {
-    "stage": "idle",      # idle | generate | stock | voice | render | done | error
-    "label": "",
-    "done": 0, "total": 0,
-    "log": [],
-    "error": "",
-    "outputs": [],
-    "project": None,
-    "langs": [],
-    "warnings": [],
-    # Timing, so the interface can show real numbers instead of a spinner.
-    "started": None,       # epoch seconds, whole job
-    "ended": None,         # epoch seconds when it left a running stage; freezes
-                           # the elapsed clock so it stops when the job is done
-    "step_started": None,  # epoch seconds, current step
-    "steps": [],           # [{name, lang, seconds, items}] as each one finishes
-    "eta": None,           # seconds remaining in this step, or None
-    "rate": None,          # items per second in this step
-    "lang": None,          # language currently being worked on
-    "cancel": False,       # set by /api/cancel, checked between items
-}
-LOCK = threading.Lock()
+# Every unit of background work is a persistent Job (lib/jobs.py). The studio is
+# a thin layer over a JobStore + Scheduler: enqueue jobs and a small worker pool
+# runs them in order — surviving a browser refresh AND a server restart. The
+# existing workers are unchanged: set_job / log / progress report into the
+# CURRENT job via a thread-local, so each worker thread updates its own Job.
+from lib import jobs  # noqa: E402
+
+STORE = jobs.JobStore(ROOT / "work" / "queue.json")
+SCHED = None                       # jobs.Scheduler, built in main() after workers
+_CUR = threading.local()           # per-thread current job id
+
+RUNNING = ("generate", "stock", "voice", "render")     # studio 'stage' names
+_STAGE_STATUS = {"generate": jobs.RUNNING, "stock": jobs.RUNNING,
+                 "voice": jobs.RUNNING, "render": jobs.RUNNING,
+                 "approve": jobs.APPROVE, "done": jobs.DONE, "error": jobs.ERROR}
+
+
+def _cur_id():
+    return getattr(_CUR, "job_id", None)
 
 
 def set_job(**kw) -> None:
-    with LOCK:
-        JOB.update(kw)
-        # Freeze (or release) the elapsed clock on any stage change. Entering a
-        # running stage clears the end stamp; leaving one for a terminal stage
-        # (done, error, approve, idle) stamps the moment it finished, so the UI
-        # can stop the timer instead of counting up forever.
-        if "stage" in kw:
-            if kw["stage"] in RUNNING:
-                JOB["ended"] = None
-            elif JOB.get("started") and JOB.get("ended") is None:
-                JOB["ended"] = time.time()
+    """Update the CURRENT job. A studio 'stage' is translated to a queue status
+    (and the elapsed clock frozen/released) so the queue and the old Activity
+    screen stay in step."""
+    jid = _cur_id()
+    if jid is None:
+        return
+    if "stage" in kw:
+        st = _STAGE_STATUS.get(kw["stage"])
+        if st:
+            kw["status"] = st
+        job = STORE.get(jid)
+        if kw["stage"] in RUNNING:
+            kw["ended"] = None
+        elif job and job.started and job.ended is None:
+            kw["ended"] = time.time()
+    STORE.update(jid, **kw)
 
 
 def begin_job(project: str, langs: list[str], stage: str) -> None:
-    """Reset the board for a new run. Called once, before any work starts."""
-    with LOCK:
-        JOB.update(stage=stage, project=project, langs=langs, label="",
-                   done=0, total=0, log=[], error="", outputs=[], warnings=[],
-                   started=time.time(), ended=None, step_started=time.time(),
-                   steps=[], eta=None, rate=None, lang=None, cancel=False)
+    """Start the CURRENT job: stamp it running and clear any last-run state."""
+    jid = _cur_id()
+    if jid is None:
+        return
+    args = dict(STORE.get(jid).args)
+    args["langs"] = langs
+    STORE.update(jid, project=project, args=args, stage=stage,
+                 status=jobs.RUNNING, label="", done=0, total=0, log=[], error="",
+                 outputs=[], steps=[], started=time.time(), ended=None,
+                 step_started=time.time(), eta=None, rate=None, lang=None,
+                 cancel=False, force_save=True)
 
 
 def begin_step(stage: str, lang: str | None = None) -> None:
-    with LOCK:
-        JOB.update(stage=stage, lang=lang, step_started=time.time(),
-                   done=0, total=0, eta=None, rate=None, label="")
+    jid = _cur_id()
+    if jid is None:
+        return
+    STORE.update(jid, stage=stage, status=jobs.RUNNING, lang=lang,
+                 step_started=time.time(), done=0, total=0, eta=None, rate=None,
+                 label="", ended=None)
 
 
 def end_step(items: int = 0) -> None:
-    """Record how long the step took, so the UI can show a per-step breakdown."""
-    with LOCK:
-        t0 = JOB.get("step_started") or time.time()
-        JOB["steps"].append({"name": JOB["stage"], "lang": JOB.get("lang"),
-                             "seconds": round(time.time() - t0, 1),
-                             "items": items or JOB.get("done", 0)})
+    """Record how long the step took, for the per-step breakdown."""
+    jid = _cur_id()
+    if jid is None:
+        return
+    job = STORE.get(jid)
+    t0 = job.step_started or time.time()
+    steps = list(job.steps)
+    steps.append({"name": job.stage, "lang": job.lang,
+                  "seconds": round(time.time() - t0, 1),
+                  "items": items or job.done})
+    STORE.update(jid, steps=steps)
 
 
 def log(msg: str) -> None:
-    with LOCK:
-        JOB["log"].append({"t": time.time(), "text": str(msg)})
-        del JOB["log"][:-600]
+    jid = _cur_id()
+    if jid is not None:
+        STORE.append_log(jid, str(msg))
 
 
 def progress(done: int, total: int, label: str = "") -> None:
-    """Record progress and work out a rate and ETA from it.
-
-    The estimate is based on elapsed time for THIS step only. Steps have wildly
-    different per-item costs — sourcing a photo is a download, voicing a line is
-    a GPU inference — so carrying a rate across them would produce a confidently
-    wrong number, which is worse than no number.
-    """
-    with LOCK:
-        JOB["done"], JOB["total"] = done, total
-        if label:
-            JOB["label"] = label
-        t0 = JOB.get("step_started")
-        if t0 and done > 0:
-            elapsed = time.time() - t0
-            rate = done / elapsed if elapsed > 0 else 0
-            JOB["rate"] = round(rate, 3) if rate else None
-            remaining = max(0, (total or 0) - done)
-            JOB["eta"] = round(remaining / rate) if rate > 0 and remaining else 0
-
-
-RUNNING = ("generate", "stock", "voice", "render")
-WORKER: list = [None]        # the one live worker thread, if any
+    """Record progress and a rate/ETA for THIS step (per-item costs differ wildly
+    between steps, so a rate is never carried across them)."""
+    jid = _cur_id()
+    if jid is None:
+        return
+    job = STORE.get(jid)
+    rate, eta = job.rate, job.eta
+    t0 = job.step_started
+    if t0 and done > 0:
+        elapsed = time.time() - t0
+        r = done / elapsed if elapsed > 0 else 0
+        rate = round(r, 3) if r else None
+        remaining = max(0, (total or 0) - done)
+        eta = round(remaining / r) if r > 0 and remaining else 0
+    STORE.update(jid, done=done, total=total, label=label or job.label,
+                 rate=rate, eta=eta)
 
 
 def busy() -> bool:
-    """Is a job genuinely running right now?
-
-    Checks the thread as well as the recorded stage. If a worker died without
-    tidying up, the stage alone would say 'running' forever and every later
-    action would be refused with 'something is already running' — which is
-    exactly what happened when a SystemExit escaped the old handler. Trusting
-    the stage alone made a single crash permanent; this makes it self-healing.
-    """
-    with LOCK:
-        stage = JOB["stage"]
-    if stage not in RUNNING:
-        return False
-    t = WORKER[0]
-    if t is not None and t.is_alive():
-        return True
-    # Stage says running, nothing is. Recover rather than stay wedged.
-    set_job(stage="error",
-            error=JOB.get("error") or
-            "The last job stopped unexpectedly and left no message. "
-            "It is safe to try again.")
-    log("The previous job ended without reporting why — state reset.")
-    return False
+    """Is any job running right now? No longer a gate — new work is queued."""
+    return any(j.status == jobs.RUNNING for j in STORE.jobs())
 
 
-def _guarded(fn, *a) -> None:
-    """Run a job and make sure the stage is never left mid-flight.
-
-    Catches BaseException deliberately, not Exception. Library code raises
-    SystemExit for user-facing problems (no reference clip chosen, malformed
-    sheet), and SystemExit does NOT inherit from Exception — so 'except
-    Exception' let the thread die silently with the job stuck at 'voice'.
-    A background worker should never disappear without saying why.
-    """
-    try:
-        fn(*a)
-    except BaseException as e:                      # noqa: BLE001 - deliberate
-        msg = str(e) or type(e).__name__
-        set_job(stage="error", error=msg)
-        log(f"ERROR: {msg}")
-        traceback.print_exc()
-    finally:
-        with LOCK:
-            if JOB["stage"] in RUNNING:
-                JOB["stage"] = "done"               # never leave it hanging
-                if JOB.get("started") and JOB.get("ended") is None:
-                    JOB["ended"] = time.time()      # and stop the clock
-
-
-def start_thread(fn, *a) -> bool:
-    if busy():
-        return False
-    with LOCK:
-        JOB["log"] = []
-        JOB["error"] = ""
-        JOB["cancel"] = False
-    t = threading.Thread(target=_guarded, args=(fn, *a), daemon=True)
-    WORKER[0] = t
-    t.start()
-    return True
+def enqueue(project: str, kind: str, args: dict, auto: bool = False):
+    """Add a job to the queue. The scheduler runs it when a worker slot frees."""
+    return SCHED.enqueue(project or "", kind, args, auto=auto)
 
 
 def cancelled() -> bool:
-    with LOCK:
-        return bool(JOB.get("cancel"))
+    """True when the running job has been asked to stop (checked between items)."""
+    jid = _cur_id()
+    if jid is None:
+        return False
+    job = STORE.get(jid)
+    return bool(job and job.cancel)
 
 
 class Cancelled(Exception):
     """Raised inside a job when the user asks it to stop."""
+
+
+def _status_payload(job) -> dict:
+    """The single active job the current Activity screen polls (backward-compat)."""
+    if job is None:
+        return {"stage": "idle", "status": "idle", "label": "", "done": 0,
+                "total": 0, "log": [], "error": "", "outputs": [], "project": None,
+                "langs": [], "started": None, "ended": None, "step_started": None,
+                "eta": None, "rate": None, "steps": [], "id": None}
+    d = job.to_dict()
+    d["langs"] = job.args.get("langs", [])
+    return d
+
+
+def _active_job():
+    """The job the Activity screen shows: the running one, else the most recently
+    finished so its result and log stay visible."""
+    js = STORE.jobs()
+    running = [j for j in js if j.status == jobs.RUNNING]
+    if running:
+        return running[-1]
+    shown = [j for j in js if j.status != jobs.QUEUED]
+    return shown[-1] if shown else None
+
+
+def _queue_payload() -> dict:
+    """Everything the Queue view needs: every job, newest activity first."""
+    return {"jobs": [{"id": j.id, "project": j.project, "kind": j.kind,
+                      "status": j.status, "stage": j.stage, "label": j.label,
+                      "done": j.done, "total": j.total, "auto": j.auto,
+                      "error": j.error, "created": j.created,
+                      "started": j.started, "ended": j.ended}
+                     for j in STORE.jobs()],
+            "max_concurrent": (SCHED.max_concurrent if SCHED else 1)}
+
+
+def _worker_wrapper(fn):
+    """Adapt a studio worker into a scheduler run-fn(job).
+
+    Binds the thread-local 'current job' so the worker's own set_job/log/progress
+    report into THIS job, then calls the worker with only the kwargs it declares —
+    begin_job stashes extras like 'langs' into args, and a resumed job must not
+    pass those to a worker that never accepted them.
+    """
+    params = set(inspect.signature(fn).parameters)
+
+    def run(job) -> None:
+        _CUR.job_id = job.id
+        try:
+            fn(**{k: v for k, v in job.args.items() if k in params})
+        finally:
+            _CUR.job_id = None
+    return run
 
 
 # ------------------------------------------------------------------ the work
@@ -983,8 +998,11 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         if path == "/api/status":
-            with LOCK:
-                return self._json(dict(JOB))
+            # Backward-compatible single-active-job view the Activity screen polls.
+            return self._json(_status_payload(_active_job()))
+
+        if path == "/api/queue":
+            return self._json(_queue_payload())
 
         if path == "/api/voices":
             pid = (q.get("id") or [""])[0]
@@ -1134,9 +1152,10 @@ class Handler(BaseHTTPRequestHandler):
             scripts = {k: v for k, v in scripts.items() if (v or "").strip()}
             if not scripts:
                 return self._json({"error": "Paste a script for at least one language."}, 400)
-            ok = start_thread(run_generate, scripts, b.get("id") or "video",
-                              bool(b.get("overwrite")))
-            return self._json({"started": ok})
+            pid = b.get("id") or "video"
+            job = enqueue(pid, "generate", {"scripts": scripts, "pid": pid,
+                                            "overwrite": bool(b.get("overwrite"))})
+            return self._json({"started": True, "job": job.id})
 
         if path == "/api/add_language":
             pid = b.get("id")
@@ -1145,37 +1164,41 @@ class Handler(BaseHTTPRequestHandler):
             if not (pid and lang and script):
                 return self._json(
                     {"error": "Need a project, a language and a pasted script."}, 400)
-            ok = start_thread(run_add_language, pid, lang, script,
-                              bool(b.get("overwrite")))
-            if not ok:
-                return self._json({"error": "something is already running"}, 409)
-            return self._json({"started": ok})
+            job = enqueue(pid, "add_language",
+                          {"pid": pid, "lang": lang, "script": script,
+                           "overwrite": bool(b.get("overwrite"))})
+            return self._json({"started": True, "job": job.id})
 
         if path == "/api/source":
-            ok = start_thread(run_sourcing, b.get("id"), b.get("redo") or None)
-            return self._json({"started": ok})
+            pid = b.get("id")
+            job = enqueue(pid, "source", {"pid": pid, "redo": b.get("redo") or None})
+            return self._json({"started": True, "job": job.id})
 
         if path == "/api/regenerate":
             scenes = [int(n) for n in (b.get("scenes") or []) if str(n).isdigit()]
             if not scenes:
                 return self._json({"error": "no scenes to generate"}, 400)
-            ok = start_thread(run_regenerate, b.get("id"), scenes)
-            return self._json({"started": ok})
+            job = enqueue(b.get("id"), "regenerate",
+                          {"pid": b.get("id"), "which": scenes})
+            return self._json({"started": True, "job": job.id})
 
         if path == "/api/regenerate_video":
             scenes = [int(n) for n in (b.get("scenes") or []) if str(n).isdigit()]
             if not scenes:
                 return self._json({"error": "no scenes to generate"}, 400)
-            ok = start_thread(run_regenerate_video, b.get("id"), scenes)
-            return self._json({"started": ok})
+            job = enqueue(b.get("id"), "regenerate_video",
+                          {"pid": b.get("id"), "which": scenes})
+            return self._json({"started": True, "job": job.id})
 
         if path == "/api/build":
-            ok = start_thread(run_build, b.get("id"), b.get("langs") or [],
-                              bool(b.get("captions", True)),
-                              b.get("music") and str(ROOT / "music" / b["music"]),
-                              bool(b.get("zoom", True)), b.get("voices") or {},
-                              bool(b.get("master", True)))
-            return self._json({"started": ok})
+            pid = b.get("id")
+            job = enqueue(pid, "build", {
+                "pid": pid, "langs": b.get("langs") or [],
+                "captions": bool(b.get("captions", True)),
+                "music": b.get("music") and str(ROOT / "music" / b["music"]),
+                "zoom": bool(b.get("zoom", True)), "voices": b.get("voices") or {},
+                "master": bool(b.get("master", True))})
+            return self._json({"started": True, "job": job.id})
 
         if path == "/api/run":
             steps = [x for x in (b.get("steps") or ["voice", "render"])
@@ -1187,14 +1210,12 @@ class Handler(BaseHTTPRequestHandler):
             pid = b.get("id") or b.get("project")
             if not pid:
                 return self._json({"error": "which project?"}, 400)
-            ok = start_thread(run_steps, pid,
-                              b.get("langs") or [], steps,
-                              bool(b.get("captions")), b.get("music") or None,
-                              b.get("zoom", True), b.get("voices") or {},
-                              bool(b.get("force")), bool(b.get("master", True)))
-            if not ok:
-                return self._json({"error": "something is already running"}, 409)
-            return self._json({"started": ok, "steps": steps})
+            job = enqueue(pid, "run", {
+                "pid": pid, "langs": b.get("langs") or [], "steps": steps,
+                "captions": bool(b.get("captions")), "music": b.get("music") or None,
+                "zoom": b.get("zoom", True), "voices": b.get("voices") or {},
+                "force": bool(b.get("force")), "master": bool(b.get("master", True))})
+            return self._json({"started": True, "job": job.id, "steps": steps})
 
         if path == "/api/delete":
             pid = b.get("id") or ""
@@ -1216,9 +1237,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(
                     {"error": "type the project name to confirm deleting it"}, 400)
 
-            if busy():
+            if any(j.project == pid and j.status in (jobs.RUNNING, jobs.QUEUED)
+                   for j in STORE.jobs()):
                 return self._json(
-                    {"error": "something is running — wait for it to finish"}, 409)
+                    {"error": "this project has a job running or queued — "
+                              "cancel it in the queue first"}, 409)
 
             res = pl.delete_project(Path(proj["sheet"]), proj["languages"], what)
             log(f"Deleted {res['count']} file(s) from {pid} "
@@ -1292,11 +1315,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"moved": moved, "count": len(moved)})
 
         if path == "/api/cancel":
-            if not busy():
+            # Cancel a specific job by id, or (no id) whatever is running now.
+            jid = b.get("job") or b.get("id")
+            if jid and SCHED and STORE.get(jid):
+                return self._json({"ok": SCHED.cancel(jid)})
+            running = [j for j in STORE.jobs() if j.status == jobs.RUNNING]
+            if not running:
                 return self._json({"ok": True, "note": "nothing was running"})
-            set_job(cancel=True)
-            log("Stop requested — finishing the current item, then stopping.")
+            for j in running:
+                SCHED.cancel(j.id)
             return self._json({"ok": True})
+
+        if path == "/api/job/remove":
+            jid = b.get("job") or b.get("id")
+            job = STORE.get(jid) if jid else None
+            if job is None:
+                return self._json({"error": "no such job"}, 404)
+            if job.status == jobs.RUNNING:
+                return self._json({"error": "cancel it first, then remove"}, 409)
+            return self._json({"ok": STORE.remove(jid)})
+
+        if path == "/api/queue/clear":
+            return self._json({"removed": STORE.clear_finished(), "ok": True})
 
         if path == "/api/reveal":
             target = pl.PROJECTS
@@ -1334,6 +1374,33 @@ class QuietServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+# kind -> the worker that runs it. Each is wrapped so the scheduler can bind the
+# thread-local current job and pass only the kwargs the worker declares.
+RUN_MAP = {
+    "generate": _worker_wrapper(run_generate),
+    "add_language": _worker_wrapper(run_add_language),
+    "source": _worker_wrapper(run_sourcing),
+    "regenerate": _worker_wrapper(run_regenerate),
+    "regenerate_video": _worker_wrapper(run_regenerate_video),
+    "build": _worker_wrapper(run_build),
+    "run": _worker_wrapper(run_steps),
+}
+
+
+def _start_scheduler() -> None:
+    """Load any saved queue and start running it. A job left mid-run by a crashed
+    server was reloaded as INTERRUPTED and is auto-resumed here (Phase 3 will make
+    max_concurrent resource-aware; today it is a small, safe cap)."""
+    global SCHED
+    cfg = pl.load_config()
+    try:
+        cap = int(cfg.get("max_concurrent_jobs") or 1)
+    except (TypeError, ValueError):
+        cap = 1
+    STORE.load()
+    SCHED = jobs.Scheduler(STORE, RUN_MAP, max_concurrent=max(1, cap), resume=True)
+
+
 def main(open_browser: bool = True) -> None:
     vx.ensure_folders()
     for d in ("projects", "cache/stock", "cache/voice", "cache/refs", "music"):
@@ -1346,6 +1413,8 @@ def main(open_browser: bool = True) -> None:
             f"({len(rep['projects'])} project(s))")
     if not UI.exists():
         sys.exit(f"Missing {UI} — the app files are incomplete.")
+
+    _start_scheduler()
 
     srv = QuietServer(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}/"
