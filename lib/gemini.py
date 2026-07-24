@@ -620,35 +620,41 @@ These queries are sent to free stock libraries (Pexels, Pixabay). They index
 LITERAL, PHOTOGRAPHIC descriptions of what is visible. They do not understand
 ideas, metaphors or feelings.
 
-Every scene needs three, in decreasing specificity. The pipeline tries `query`
-first and walks down until something returns:
+Every scene needs three, in decreasing specificity. The pipeline stays on
+`query` and only steps down when it finds nothing usable, so all three must
+show the SAME subject — a fallback that wanders off-topic just puts the wrong
+picture on screen. Keep the subject fixed; relax only how hard it is to find:
 
   query           the shot you actually want. Specific, filmable.
-  fallback_query  a looser version of the same idea. Drop the rarest element.
-  safety_query    plain, common footage that still fits the topic and will
-                  ALWAYS return results. This one must never come back empty.
+  fallback_query  the SAME subject and action, with ONE hard-to-find detail
+                  relaxed — a specific place, time of day or adjective dropped.
+                  It must still read as the same scene, not a broader topic.
+                  "a black hole" -> keep the black hole; don't become "space".
+  safety_query    the plainest shot of that same subject that free stock is
+                  certain to have. Still the same subject — just the common,
+                  unmissable version of it. This one must never come back empty.
 
 Worked examples:
 
   Narration: "supermassive black holes quietly consume matter"
     query           swirling accretion disk around a black hole in deep space
-    fallback_query  spiral galaxy slowly rotating against black starfield
-    safety_query    stars and nebula in deep space
+    fallback_query  glowing accretion disk around a black hole
+    safety_query    bright ring of light around a dark centre in space
 
   Narration: "your muscles recover and your body releases important hormones"
     query           person sleeping deeply in a dark bedroom, calm breathing
     fallback_query  adult asleep in bed at night, soft light
-    safety_query    empty bed in a quiet dark bedroom
+    safety_query    person asleep in bed
 
   Narration: "engineers built aqueducts that carried fresh water"
     query           roman stone aqueduct arches across a dry landscape
-    fallback_query  ancient stone arched bridge in sunlight
-    safety_query    old stone ruins in the countryside
+    fallback_query  tall roman aqueduct arches in sunlight
+    safety_query    old roman stone arches
 
   Narration: "repeated practice strengthens those pathways"
     query           person practising a musical instrument alone, concentrating
-    fallback_query  hands repeating a careful task at a desk
-    safety_query    student studying at a table
+    fallback_query  person playing a musical instrument indoors
+    safety_query    close-up of hands playing an instrument
 
 RULES FOR ALL THREE QUERIES
   - ENGLISH ALWAYS, even when the narration is German or Spanish. Stock

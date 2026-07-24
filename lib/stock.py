@@ -30,6 +30,13 @@ TIMEOUT = 30
 # than any kind of junk". Tunable in config.json as clip_min.
 DEFAULT_CLIP_MIN = 0.45
 
+# How much a looser fallback query must beat the scene's own query by, per step
+# down the ladder, before it is allowed to replace it. CLIP scores a short loose
+# phrase higher than a long specific one, so without this the off-scene fallback
+# wins on nearly every scene. At 0.12 a fallback has to be clearly, not
+# marginally, better — otherwise the shot the scene actually asked for is kept.
+_RUNG_PENALTY = 0.12
+
 # Last-resort queries when a scene's own ladder finds nothing at all. Free stock
 # always has neutral, atmospheric backgrounds, so these guarantee a scene can be
 # filled rather than left empty — an empty scene breaks the entire render. What
@@ -540,6 +547,9 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                 route = archives_only
         got = None
         got_rel = -1.0
+        best_below = None                       # best weak pick if nothing clears
+        best_below_rel = -1.0
+        best_below_eff = -1.0
         notes: list[str] = []
         rungs: list = []            # (query, rel) for each rung tried — the ladder
 
@@ -570,12 +580,27 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                 got, got_rel = pick, None
                 break
 
-            # Scoring is on: keep the most relevant candidate across the rungs,
-            # and only stop searching once one clears the bar.
-            if rel > got_rel:
+            # STAY ON THE SCENE'S OWN SHOT. The ladder runs specific → loose, and
+            # CLIP quietly scores a loose query higher than a specific one (a short
+            # generic phrase matches any photo better than a long exact one). Taking
+            # the global best across rungs therefore let the loose, off-scene
+            # fallback beat the on-scene primary almost every time. Two rules stop
+            # that: (1) the FIRST rung that clears the bar wins outright — since the
+            # primary is tried first, a good primary ends it before any fallback is
+            # even seen; (2) if nothing clears the bar, a looser rung must beat the
+            # earlier one by more than a per-step handicap to replace it, so the
+            # video only drifts off-scene when the fallback is clearly better.
+            if rel >= clip_min:
                 got, got_rel = pick, rel
-            if got_rel >= clip_min:
-                break                           # good enough — stop here
+                break                           # on-scene and good enough — take it
+            eff = rel - rung * _RUNG_PENALTY
+            if eff > best_below_eff:
+                best_below, best_below_rel, best_below_eff = pick, rel, eff
+
+        if got is None and best_below is not None:
+            # No rung cleared the bar: ship the most on-scene of the weak matches
+            # (the handicap already favoured the earlier, more specific queries).
+            got, got_rel = best_below, best_below_rel
 
         if got is None:
             # The scene's own ladder found nothing real. An empty scene breaks

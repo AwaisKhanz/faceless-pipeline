@@ -54,7 +54,8 @@ def main() -> int:
     SCORES = {
         "strong": 0.82, "weakA": 0.30,
         "wb1": 0.31, "strongB": 0.71, "wb2": 0.20,
-        "c1": 0.20, "c2": 0.30, "c3": 0.38,      # all below the 0.45 bar
+        "c1": 0.20, "c2": 0.30, "c3": 0.38,      # all weak; loosest scores highest
+        "e1": 0.15, "e2": 0.44,                  # all weak, but e2 clearly better
         "vidq": None,                            # a video with nothing to score
     }
     calls = []
@@ -75,7 +76,8 @@ def main() -> int:
     out = stock.fetch_all(
         [scene(1, "strong", ["weakA"]),                    # primary already good
          scene(2, "wb1", ["strongB", "wb2"]),              # escalates to fallback
-         scene(3, "c1", ["c2", "c3"]),                     # all weak -> best + flag
+         scene(3, "c1", ["c2", "c3"]),                     # all weak -> stay on-scene
+         scene(5, "e1", ["e2"]),                           # all weak, fallback clearer
          scene(4, "vidq", media="VIDEO")],                 # unscorable -> take it
         Path("/tmp"), "pk", "xk", log=lambda *a: None)
 
@@ -85,8 +87,15 @@ def main() -> int:
           ("weakA", 0) not in calls, True)
     check("escalates past a weak primary to a strong fallback",
           out[2]["query"], "strongB")
-    check("when every rung is weak, keeps the best of them",
-          out[3]["query"], "c3")
+    # When nothing clears the bar the on-scene primary is kept, even though the
+    # loosest fallback scores higher — CLIP flatters loose queries, and drifting
+    # off-scene for that is exactly what we do not want.
+    check("all rungs weak: stays on the on-scene primary",
+          out[3]["query"], "c1")
+    # ...unless a fallback is CLEARLY better (beyond the per-step handicap), in
+    # which case it still wins — the preference is a margin, not a lock.
+    check("all rungs weak: a clearly better fallback still wins",
+          out[5]["query"], "e2")
     check("an unscorable video is taken without escalating",
           out[4]["query"], "vidq")
 
