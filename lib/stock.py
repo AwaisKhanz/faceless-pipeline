@@ -61,6 +61,9 @@ _SCORE_WORKERS_IMAGE = 16           # concurrent thumbnail downloads for image s
 _SCORE_WORKERS_VIDEO = 8            # ffmpeg is cheap and the machine sits idle, so
                                     # score more clips at once — video is the slowest
                                     # scene type and it is all network waiting.
+_SCORE_LOCK = threading.Lock()      # one GPU scoring pass at a time when scenes run
+                                    # in parallel (source_workers); downloads still
+                                    # overlap — only the model forward is serialized.
 
 
 def _fetch_bytes(url: str, timeout: int | None = None, retries: int = 3) -> bytes:
@@ -484,7 +487,10 @@ def _relevance(pool: list[dict], query: str, media: str,
     else:
         fetched = [_grab(h) for h in pool]
     items = [x for x in fetched if x]
-    return scorer.relevance(query, items) if items else {}
+    if not items:
+        return {}
+    with _SCORE_LOCK:                  # only one scene on the GPU at a time
+        return scorer.relevance(query, items)
 
 
 def _video_frame(url: str) -> bytes:
@@ -672,221 +678,234 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     if gen_mode != "off" and _gen is None:
         log("  ⚠ generation is on but Vertex is not configured — searching only.")
         gen_mode = "off"
-    generated_n = 0
+    gen_count = [0]                     # images generated so far (mutable closure)
+    # PARALLEL SCENES. The machine sits idle during sourcing — it is all network
+    # waiting — so running several scenes at once is close to a linear speed-up.
+    # Opt-in via `source_workers` (1 = the old sequential behaviour, unchanged).
+    # Shared state is guarded: `used` (the anti-repeat set) via _claim, the GPU
+    # scorer via _SCORE_LOCK, and each scene's log lines are buffered and flushed
+    # together so a scene's block stays contiguous.
+    workers = max(1, int(cfg.get("source_workers") or 1))
+    _state_lock = threading.Lock()
+    _log_lock = threading.Lock()
+    _progress = [0]
 
-    for i, s in enumerate(scenes):
-        if on_progress:
-            on_progress(i + 1, len(scenes), f"S{s.n} {s.media.lower()}")
-        base = picks.get(s.n, 0)
-        ladder = [q for q in [s.query, *getattr(s, "fallbacks", [])] if q]
-        # The query text is as strong a signal as the tag: "roman aqueduct"
-        # says historical whatever the scene was labelled. `topic` is the model's
-        # canonical bucket, which routes any subject even when its words are not
-        # in the vocabulary.
-        route = _SRC.route(getattr(s, "domain", ""), s.media, have,
-                           query=" ".join(ladder), topic=getattr(s, "topic", ""),
-                           all_sources=all_sources)
-        # Biography mode + a people scene: drop stock so the real person (from the
-        # archives) wins over a generic stock look-alike. Only if archives remain.
-        real_person = (name_people and getattr(s, "topic", "") == "people"
-                       and s.media == "IMAGE")
-        if real_person:
-            archives_only = [r for r in route if r not in ("pexels", "pixabay")]
-            if archives_only:
-                route = archives_only
+    def _claim(path: str, mine: set) -> bool:
+        """Reserve a candidate path so no two scenes ever use the same file — the
+        anti-repeat guarantee, kept correct when scenes run in parallel. Returns
+        False when another scene already holds it (the caller tries the next)."""
+        if not path:
+            return False
+        with _state_lock:
+            if path in used:
+                return False
+            used.add(path)
+            mine.add(path)
+            return True
 
-        # Can this scene be generated? Never a real named person, never video
-        # (that is Veo, a later step), and never past the per-run cap.
-        can_gen = (_gen is not None and s.media == "IMAGE"
-                   and not real_person and generated_n < gen_cap)
+    def _source_scene(i, s) -> None:
+        lines: list = []
+        emit = lines.append             # buffer this scene's log; flush at the end
+        mine: set = set()               # paths this scene reserved
+        chosen = ""                     # the one it keeps (the rest are released)
+        try:
+            base = picks.get(s.n, 0)
+            ladder = [q for q in [s.query, *getattr(s, "fallbacks", [])] if q]
+            route = _SRC.route(getattr(s, "domain", ""), s.media, have,
+                               query=" ".join(ladder), topic=getattr(s, "topic", ""),
+                               all_sources=all_sources)
+            # Biography mode + a people scene: drop stock so the real person (from
+            # the archives) wins over a generic stock look-alike.
+            real_person = (name_people and getattr(s, "topic", "") == "people"
+                           and s.media == "IMAGE")
+            if real_person:
+                archives_only = [r for r in route if r not in ("pexels", "pixabay")]
+                if archives_only:
+                    route = archives_only
 
-        # ALL mode: generate instead of searching. A generation failure falls
-        # through to a normal search, so a scene is never left empty by it.
-        if gen_mode == "all" and can_gen:
-            a = _generate_one(_gen, s, cache, cfg, used, log)
-            if a:
-                used.add(a["path"])
-                out[s.n] = a
-                generated_n += 1
-                log(f"✦ S{s.n:>3} image · generated · \"{a['query'][:46]}\"")
-                continue
+            with _state_lock:
+                can_gen = (_gen is not None and s.media == "IMAGE"
+                           and not real_person and gen_count[0] < gen_cap)
 
-        got = None
-        got_rel = -1.0
-        best_below = None                       # best weak pick if nothing clears
-        best_below_rel = -1.0
-        best_below_eff = -1.0
-        notes: list[str] = []
-        rungs: list = []            # (query, rel) for each rung tried — the ladder
-        rung_log: list = []         # (query, detail, picked) for the full step view
+            # ALL mode: generate instead of searching. A generation failure falls
+            # through to a normal search, so a scene is never left empty by it.
+            if gen_mode == "all" and can_gen:
+                a = _generate_one(_gen, s, cache, cfg, used, emit)
+                if a and _claim(a["path"], mine):
+                    with _state_lock:
+                        out[s.n] = a
+                        gen_count[0] += 1
+                    chosen = a["path"]
+                    emit(f"✦ S{s.n:>3} image · generated · \"{a['query'][:46]}\"")
+                    return
 
-        for rung, query in enumerate(ladder):
-            # Walk a few matches deep so a duplicate can be stepped over
-            # without giving up on this query.
-            pick = None
-            rdetail = None
-            for bump in range(4):
-                try:
-                    hit = fetch(query, s.media, cache, pexels_key, pixabay_key,
-                                base + bump, sources=route, cfg=cfg)
-                except StockError as e:
-                    if bump == 0:
-                        notes.append(f"{query[:34]!r}: {e}")
-                    break                       # this query is exhausted
-                if rdetail is None:
-                    rdetail = hit.get("_detail")   # telemetry for THIS query's search
-                if hit["path"] in used:
-                    continue                    # already on screen elsewhere
-                pick = hit
-                break
-            rung_log.append((query, rdetail, pick is not None))
-            if pick is None:
-                continue                        # nothing usable from this query
+            got = None
+            got_rel = -1.0
+            best_below = None
+            best_below_rel = -1.0
+            best_below_eff = -1.0
+            notes: list = []
+            rungs: list = []
+            rung_log: list = []
 
-            rel = pick.get("score")
-            rungs.append((query, rel))          # record this rung for the ladder line
-            if not scorer_on or rel is None:
-                # No relevance signal (scoring off, or an unscorable video):
-                # first usable match wins, exactly as before.
-                got, got_rel = pick, None
-                break
-
-            # STAY ON THE SCENE'S OWN SHOT. The ladder runs specific → loose, and
-            # CLIP quietly scores a loose query higher than a specific one (a short
-            # generic phrase matches any photo better than a long exact one). Taking
-            # the global best across rungs therefore let the loose, off-scene
-            # fallback beat the on-scene primary almost every time. Two rules stop
-            # that: (1) the FIRST rung that clears the bar wins outright — since the
-            # primary is tried first, a good primary ends it before any fallback is
-            # even seen; (2) if nothing clears the bar, a looser rung must beat the
-            # earlier one by more than a per-step handicap to replace it, so the
-            # video only drifts off-scene when the fallback is clearly better.
-            if rel >= clip_min:
-                got, got_rel = pick, rel
-                break                           # on-scene and good enough — take it
-            eff = rel - rung * _RUNG_PENALTY
-            if eff > best_below_eff:
-                best_below, best_below_rel, best_below_eff = pick, rel, eff
-
-        if got is None and best_below is not None:
-            # No rung cleared the bar: ship the most on-scene of the weak matches
-            # (the handicap already favoured the earlier, more specific queries).
-            got, got_rel = best_below, best_below_rel
-
-        # Announce any source the circuit breaker just disabled, the instant it
-        # happens. Otherwise a source (e.g. Wikimedia blocked on this network)
-        # simply vanishes from later scenes' "searched" line with no explanation.
-        for nm, reason in _SRC.drain_newly_down():
-            if "429" in reason or "rate-limit" in reason.lower():
-                log(f"  ⚠ {nm} disabled for the rest of this run after "
-                    f"{_SRC.FAIL_LIMIT} rate-limit responses — it is reachable, "
-                    f"you just asked too often. Turn search_all_sources off, or "
-                    f"add {nm}'s API token, then re-source.")
-            else:
-                log(f"  ⚠ {nm} disabled for the rest of this run after "
-                    f"{_SRC.FAIL_LIMIT} failed requests — unreachable on this "
-                    f"network (run 'faceless sources' to check).")
-
-        # THE STEP-BY-STEP VIEW (source_log: "full"). Before announcing the pick,
-        # walk the scene out loud: its header, then each query with every source's
-        # result count and the best match. This is the "show me everything, in
-        # order" log — one scene fully narrated before the next begins.
-        if full_log:
-            _emit_scene_header(log, s)
-            for idx, (q, det, picked) in enumerate(rung_log):
-                label = "search" if idx == 0 else f"fallback {idx}"
-                _emit_rung(log, q, det, label, picked, scorer_on)
-
-        # MIXED mode: the scene was searched; if the best match is empty or below
-        # the generation bar, replace it with one image generated from the line.
-        # (With scoring off we cannot judge "below 60%", so only an outright empty
-        # scene is rescued.) Real-people scenes are excluded via can_gen.
-        if gen_mode == "mixed" and can_gen:
-            below = got is None or (got_rel is not None and got_rel < gen_min)
-            if got is not None and got_rel is None:
-                below = False               # found but unscored — keep it
-            if below:
-                a = _generate_one(_gen, s, cache, cfg, used, log)
-                if a:
-                    used.add(a["path"])
-                    out[s.n] = a
-                    generated_n += 1
-                    why = ("nothing found" if got is None
-                           else f"best match {int(got_rel * 100)}% < "
-                                f"{int(gen_min * 100)}%")
-                    log(f"✦ S{s.n:>3} image · generated ({why}) · "
-                        f"\"{a['query'][:46]}\"")
+            for rung, query in enumerate(ladder):
+                pick = None
+                rdetail = None
+                for bump in range(4):
+                    try:
+                        hit = fetch(query, s.media, cache, pexels_key, pixabay_key,
+                                    base + bump, sources=route, cfg=cfg)
+                    except StockError as e:
+                        if bump == 0:
+                            notes.append(f"{query[:34]!r}: {e}")
+                        break                   # this query is exhausted
+                    if rdetail is None:
+                        rdetail = hit.get("_detail")
+                    if not _claim(hit["path"], mine):
+                        continue                # already on screen elsewhere
+                    pick = hit
+                    break
+                rung_log.append((query, rdetail, pick is not None))
+                if pick is None:
                     continue
 
-        if got is None:
-            # The scene's own ladder found nothing real. An empty scene breaks
-            # the whole render, so fall back to a neutral background that free
-            # stock always has — always via the general stock providers, never a
-            # specialised source that would have no such thing. Flag it as a
-            # placeholder so it is obvious this one still needs a real picture.
-            for gq in _SAFETY_QUERIES:
-                for bump in range(3):
-                    try:
-                        hit = fetch(gq, s.media, cache, pexels_key, pixabay_key,
-                                    bump, sources=None, cfg=cfg)
-                    except StockError:
-                        break                       # this generic query is dry too
-                    if hit["path"] in used:
-                        continue                    # already on screen; try next
-                    got = hit
+                rel = pick.get("score")
+                rungs.append((query, rel))
+                if not scorer_on or rel is None:
+                    got, got_rel = pick, None
                     break
+
+                # Stay on the scene's own shot: the first rung to clear the bar
+                # wins outright; otherwise a looser rung must beat an earlier one
+                # by more than a per-step handicap. (See the long note in history.)
+                if rel >= clip_min:
+                    got, got_rel = pick, rel
+                    break
+                eff = rel - rung * _RUNG_PENALTY
+                if eff > best_below_eff:
+                    best_below, best_below_rel, best_below_eff = pick, rel, eff
+
+            if got is None and best_below is not None:
+                got, got_rel = best_below, best_below_rel
+
+            for nm, reason in _SRC.drain_newly_down():
+                if "429" in reason or "rate-limit" in reason.lower():
+                    emit(f"  ⚠ {nm} disabled for the rest of this run after "
+                         f"{_SRC.FAIL_LIMIT} rate-limit responses — it is reachable, "
+                         f"you just asked too often. Turn search_all_sources off, or "
+                         f"add {nm}'s API token, then re-source.")
+                else:
+                    emit(f"  ⚠ {nm} disabled for the rest of this run after "
+                         f"{_SRC.FAIL_LIMIT} failed requests — unreachable on this "
+                         f"network (run 'faceless sources' to check).")
+
+            if full_log:
+                _emit_scene_header(emit, s)
+                for idx, (q, det, picked) in enumerate(rung_log):
+                    label = "search" if idx == 0 else f"fallback {idx}"
+                    _emit_rung(emit, q, det, label, picked, scorer_on)
+
+            # MIXED mode: replace an empty or below-bar match with one generated
+            # image. (Scoring off → cannot judge "below 60%", so only rescue empty.)
+            if gen_mode == "mixed" and can_gen:
+                below = got is None or (got_rel is not None and got_rel < gen_min)
+                if got is not None and got_rel is None:
+                    below = False
+                if below:
+                    a = _generate_one(_gen, s, cache, cfg, used, emit)
+                    if a and _claim(a["path"], mine):
+                        with _state_lock:
+                            out[s.n] = a
+                            gen_count[0] += 1
+                        chosen = a["path"]
+                        why = ("nothing found" if got is None
+                               else f"best match {int(got_rel * 100)}% < "
+                                    f"{int(gen_min * 100)}%")
+                        emit(f"✦ S{s.n:>3} image · generated ({why}) · "
+                             f"\"{a['query'][:46]}\"")
+                        return
+
+            if got is None:
+                # Nothing real: fall back to a neutral background stock always has.
+                for gq in _SAFETY_QUERIES:
+                    for bump in range(3):
+                        try:
+                            hit = fetch(gq, s.media, cache, pexels_key, pixabay_key,
+                                        bump, sources=None, cfg=cfg)
+                        except StockError:
+                            break
+                        if not _claim(hit["path"], mine):
+                            continue
+                        got = hit
+                        break
+                    if got is not None:
+                        break
+
                 if got is not None:
-                    break
+                    got = dict(got)
+                    got.pop("_detail", None)
+                    got["placeholder"] = True
+                    got["score"] = None
+                    with _state_lock:
+                        out[s.n] = got
+                        placeholder.append(s.n)
+                    chosen = got["path"]
+                    emit(f"⚑ S{s.n:>3} {s.media.lower():<5} · placeholder · no real "
+                         f"match for \"{(s.query or '')[:40]}\"")
+                    return
 
-            if got is not None:
-                got = dict(got)
-                got.pop("_detail", None)
-                got["placeholder"] = True           # a fill, not a real match
-                got["score"] = None
-                used.add(got["path"])
+                with _state_lock:
+                    failed.append((s.n, "; ".join(notes) or "no match"))
+                emit(f"✗ S{s.n:>3} {s.media.lower():<5} · FAILED · "
+                     f"{notes[0] if notes else 'no match found'}")
+                return
+
+            weak_pick = scorer_on and got_rel is not None and got_rel < clip_min
+            detail = got.pop("_detail", None)
+            with _state_lock:
+                if weak_pick:
+                    weak.append(s.n)
                 out[s.n] = got
-                placeholder.append(s.n)
-                log(f"⚑ S{s.n:>3} {s.media.lower():<5} · placeholder · no real "
-                    f"match for \"{(s.query or '')[:40]}\"")
-                continue
+            chosen = got["path"]
+            sym = "~" if weak_pick else "✓"
+            pct = f"{got_rel * 100:.0f}%" if (scorer_on and got_rel is not None) else "  —"
+            topic = f" · {s.topic}" if getattr(s, "topic", "") else ""
+            note = "  (weak — below the match bar; worth a manual swap)" if weak_pick else ""
+            emit(f"{sym} S{s.n:>3} {s.media.lower():<5} · {got['src']:<11} "
+                 f"{pct:>4} · \"{got['query'][:46]}\"{topic}{note}")
+            if not full_log and len(rungs) > 1:
+                steps = []
+                for q, r in rungs:
+                    mark = " ✓" if q == got["query"] else ""
+                    rr = f"{int(r * 100)}%" if (scorer_on and r is not None) else "—"
+                    steps.append(f"\"{q[:30]}\" {rr}{mark}")
+                emit("       ladder: " + " → ".join(steps))
+            d2 = _detail_line(detail, full_log)
+            if d2:
+                emit(d2)
+        finally:
+            # Give back any candidates this scene reserved but did not keep, so
+            # another scene can use them (only the winner stays claimed).
+            extra = mine - ({chosen} if chosen else set())
+            if extra:
+                with _state_lock:
+                    used.difference_update(extra)
+            with _log_lock:              # flush this scene's block in one piece
+                for m in lines:
+                    log(m)
+            if on_progress:
+                with _state_lock:
+                    _progress[0] += 1
+                    done = _progress[0]
+                on_progress(done, len(scenes), f"S{s.n} {s.media.lower()}")
 
-            failed.append((s.n, "; ".join(notes) or "no match"))
-            log(f"✗ S{s.n:>3} {s.media.lower():<5} · FAILED · "
-                f"{notes[0] if notes else 'no match found'}")
-            continue
-
-        # Searched the whole ladder and nothing really matched: use the best we
-        # found, but flag it so the scene can be fixed by hand rather than left
-        # empty (an empty scene breaks the video).
-        weak_pick = scorer_on and got_rel is not None and got_rel < clip_min
-        if weak_pick:
-            weak.append(s.n)
-
-        used.add(got["path"])
-        detail = got.pop("_detail", None)          # strip telemetry before storing
-        out[s.n] = got
-        # Result line: ~ for a weak match, ✓ for a good one. Then, when the scene
-        # dropped to a looser query, a ladder line showing each rung it tried; and
-        # a dim detail line showing the sources, pool depth and the candidates.
-        sym = "~" if weak_pick else "✓"
-        pct = f"{got_rel * 100:.0f}%" if (scorer_on and got_rel is not None) else "  —"
-        topic = f" · {s.topic}" if getattr(s, "topic", "") else ""
-        note = "  (weak — below the match bar; worth a manual swap)" if weak_pick else ""
-        log(f"{sym} S{s.n:>3} {s.media.lower():<5} · {got['src']:<11} "
-            f"{pct:>4} · \"{got['query'][:46]}\"{topic}{note}")
-        # In the full step-by-step view the ladder was already narrated rung by
-        # rung above, so the compact "ladder:" line would just repeat it. Keep it
-        # for the default (compact) view, where it is the only trace of a fallback.
-        if not full_log and len(rungs) > 1:        # a genuine fallback happened
-            steps = []
-            for q, r in rungs:
-                mark = " ✓" if q == got["query"] else ""
-                rr = f"{int(r * 100)}%" if (scorer_on and r is not None) else "—"
-                steps.append(f"\"{q[:30]}\" {rr}{mark}")
-            log("       ladder: " + " → ".join(steps))
-        d2 = _detail_line(detail, full_log)
-        if d2:
-            log(d2)
+    if workers > 1 and len(scenes) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for fut in [ex.submit(_source_scene, i, s) for i, s in enumerate(scenes)]:
+                fut.result()                 # surface any scene's exception
+    else:
+        for i, s in enumerate(scenes):
+            _source_scene(i, s)
 
     down = _SRC.down_sources()
     if down:

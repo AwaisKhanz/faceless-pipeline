@@ -406,6 +406,33 @@ def main() -> int:
     check("a dead thumbnail is skipped, the rest still scored",
           sorted(rel.keys()), ["http://ok/1", "http://ok/3"])
 
+    # ── source_workers: scenes run in parallel, never duplicating a pick ─────
+    print("\n  source_workers runs scenes in parallel without duplicate picks:")
+    import time as _t
+    stock.vision.get_scorer = lambda cfg, log=None: None    # scoring off: first wins
+    stock._SRC.usable = lambda cfg: {"pexels"}
+    stock._SRC.route = lambda *a, **k: ["pexels"]
+    stock._SRC.down_sources = lambda: []
+    stock._SRC.drain_newly_down = lambda: []
+
+    def par_fetch(query, media, cache, pk, xk, index, sources=None, cfg=None):
+        _t.sleep(0.05)                                      # stand in for latency
+        return {"path": f"/p/{query}_{index}", "src": "pexels", "query": query,
+                "media": media, "score": None, "credit": "", "page": "", "license": ""}
+    stock.fetch = par_fetch
+    # Three scenes with the SAME query: without correct locking they'd all grab
+    # the identical top file. Parallel dedup must hand each a different one.
+    same = [SimpleNamespace(n=k, media="IMAGE", query="forest", fallbacks=[],
+                            domain="x", topic="nature") for k in (1, 2, 3)]
+    t0 = _t.time()
+    res = stock.fetch_all(same, Path(tempfile.mkdtemp()), "PK", "XK",
+                          cfg={"source_workers": 3}, log=lambda *_: None)
+    dt = _t.time() - t0
+    check("every scene got an asset", len(res), 3)
+    check("no two scenes share the same file (parallel dedup holds)",
+          len({res[n]["path"] for n in res}), 3)
+    print(f"    (3 scenes in {dt:.2f}s — parallel; sequential would be ~0.30s+)")
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
