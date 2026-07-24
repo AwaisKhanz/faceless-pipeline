@@ -412,8 +412,10 @@ PLAN_SCHEMA = {
 # The canonical topics live in lib/sources (single source of truth). The model
 # buckets every scene into one of them, which is how routing scales to ANY
 # subject without a fixed word list — it understands "beekeeping" or "Byzantine
-# iconography" even though those exact words are in no vocabulary. "" is allowed
-# when nothing fits, and sourcing then falls back to word-matching + stock.
+# iconography" even though those exact words are in no vocabulary. The enum holds
+# ONLY real topics: Gemini rejects an empty string inside an enum ("enum[0]:
+# cannot be empty"), and with 17 broad topics there is always a closest one, so
+# the model always picks a bucket rather than leaving it blank.
 from . import sources as _sources                                  # noqa: E402
 CANON_TOPICS = list(_sources.CANON_TOPICS)
 
@@ -425,7 +427,7 @@ SCENES_SCHEMA = {
             "media": {"type": "string", "enum": ["IMAGE", "VIDEO"]},
             "query": {"type": "string"},
             "domain": {"type": "string"},
-            "topic": {"type": "string", "enum": [""] + CANON_TOPICS},
+            "topic": {"type": "string", "enum": CANON_TOPICS},
             "fallback_query": {"type": "string"},
             "safety_query": {"type": "string"},
             "note": {"type": "string"},
@@ -745,13 +747,14 @@ RECURRING PEOPLE (cast them consistently):
 
 CANONICAL TOPIC (`topic` field)
 Set `topic` for each scene to the ONE canonical topic that best fits what its
-PICTURE shows, chosen from EXACTLY this list (or "" if truly none fit):
+PICTURE shows, chosen from EXACTLY this list:
   {topics}
 This routes the scene to the right picture library, so judge it by the IMAGE,
 not the overall video: a modern hospital scene is `medicine`; a Victorian
 surgical kit is `history`; a rocket launch is `space`; an older couple at home
-is `people`. Any subject on Earth fits one of these — pick the closest single
-one. `domain` stays your free-text description; `topic` is the bucket.
+is `people`. Any subject on Earth fits one of these, so ALWAYS pick the closest
+single one — never leave it blank. `domain` stays your free-text description;
+`topic` is the bucket.
 
 SECTION TO SPLIT (reproduce every word exactly, in order):
 {section}"""

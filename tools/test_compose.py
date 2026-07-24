@@ -53,6 +53,27 @@ def main() -> int:
         print(f"  {'ok' if ok else '!!'}  {label:<52}{got}"
               f"{'' if ok else f'  (wanted {want})'}")
 
+    # Gemini rejects an empty string inside an enum ("enum[0]: cannot be empty"),
+    # which took down every Gemini generate once the topic field was added. Guard
+    # every enum in the scene schema against a blank value, on every provider.
+    print("\n  the scene schema has no empty enum values (Gemini rejects them):")
+
+    def _empty_enums(node) -> list:
+        bad_enums = []
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "enum" and isinstance(v, list) and any(x == "" for x in v):
+                    bad_enums.append(v)
+                bad_enums += _empty_enums(v)
+        elif isinstance(node, list):
+            for v in node:
+                bad_enums += _empty_enums(v)
+        return bad_enums
+
+    check("no enum in SCENES_SCHEMA is blank", _empty_enums(G.SCENES_SCHEMA), [])
+    check("topic enum is the canonical set", G.SCENES_SCHEMA["properties"]["scenes"]
+          ["items"]["properties"]["topic"]["enum"], list(G.CANON_TOPICS))
+
     EN = "The sea is deep. Fish swim in the dark. Light fades below."
     DE = "Das Meer ist tief. Fische schwimmen im Dunkeln. Licht schwindet unten."
     ES = "El mar es profundo. Los peces nadan. La luz se apaga."
