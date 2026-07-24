@@ -233,10 +233,14 @@ class Scheduler:
     """
 
     def __init__(self, store: JobStore, run_map: dict, max_concurrent: int = 1,
-                 resume: bool = True, poll: float = 0.5):
+                 resume: bool = True, poll: float = 0.5, gate=None):
         self.store = store
         self.run_map = run_map
         self.max_concurrent = max(1, int(max_concurrent))
+        # gate(job, running_jobs) -> bool: may this job start given what's already
+        # running? Lets the studio keep two GPU-heavy jobs from overlapping while
+        # still letting a network-bound job run alongside one. None = no gate.
+        self.gate = gate
         self._poll = poll
         self._threads: "dict[str, threading.Thread]" = {}
         self._lock = threading.Lock()
@@ -288,14 +292,27 @@ class Scheduler:
         with self._lock:
             self._threads = {jid: t for jid, t in self._threads.items()
                              if t.is_alive()}
+            running = [j for j in (self.store.get(jid) for jid in self._threads)
+                       if j is not None]
             while len(self._threads) < self.max_concurrent:
-                job = self.store.next_queued()
-                if job is None:
+                # FIFO, but backfill: if the oldest queued job is held back by the
+                # gate (e.g. a GPU job while another GPU job runs), a later job on
+                # a free resource may start ahead of it, so the queue never stalls.
+                nxt = None
+                for job in self.store.jobs():
+                    if job.status != QUEUED:
+                        continue
+                    if self.gate and not self.gate(job, running):
+                        continue
+                    nxt = job
                     break
-                self.store.update(job.id, status=RUNNING, cancel=False,
+                if nxt is None:
+                    break
+                self.store.update(nxt.id, status=RUNNING, cancel=False,
                                   started=time.time(), force_save=True)
-                t = threading.Thread(target=self._run, args=(job.id,), daemon=True)
-                self._threads[job.id] = t
+                t = threading.Thread(target=self._run, args=(nxt.id,), daemon=True)
+                self._threads[nxt.id] = t
+                running.append(self.store.get(nxt.id))
                 t.start()
 
     def _run(self, jid: str) -> None:

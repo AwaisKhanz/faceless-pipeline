@@ -1389,18 +1389,101 @@ RUN_MAP = {
 }
 
 
+# Heavy-on-the-GPU work: voicing (local TTS) and rendering (encode). Two of these
+# at once fight over the card and get slower, not faster — so the scheduler never
+# overlaps them. Everything else (script generation, finding visuals, AI image /
+# video) is network-bound — those DO overlap a render, which is the whole point of
+# the queue. If the language model runs locally (ollama), generation is GPU-heavy
+# too, so it joins the exclusive set (handled in _start_scheduler).
+GPU_KINDS = {"voice", "render", "build", "run"}
+
+
+def _total_ram_gb() -> float | None:
+    """Best-effort physical RAM in GB, cross-platform, no hard dependencies."""
+    try:
+        import psutil                                    # noqa: F401
+        return psutil.virtual_memory().total / 1e9
+    except Exception:
+        pass
+    try:
+        if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names:
+            return (os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")) / 1e9
+    except Exception:
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class _MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            ms = _MS()
+            ms.dwLength = ctypes.sizeof(_MS)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+            return ms.ullTotalPhys / 1e9
+        except Exception:
+            pass
+    return None
+
+
+def _auto_concurrency() -> int:
+    """How many jobs to run at once, judged from the machine. The GPU is protected
+    by GPU_KINDS regardless, so this really sizes how many network-bound jobs may
+    overlap a render — a bigger machine can juggle more without feeling it."""
+    cpu = os.cpu_count() or 2
+    ram = _total_ram_gb()
+    if ram is None:
+        return 2 if cpu >= 8 else 1
+    if ram >= 24 and cpu >= 8:
+        return 3
+    if ram >= 12 and cpu >= 4:
+        return 2
+    return 1
+
+
+def _resolve_concurrency(cfg: dict) -> int:
+    """config's max_concurrent_jobs wins if it's a real number; 'auto' (or unset,
+    or junk) sizes it from the machine. Never below 1."""
+    raw = cfg.get("max_concurrent_jobs")
+    if isinstance(raw, bool):                            # True/False is not a count
+        raw = None
+    if isinstance(raw, (int, float)) and int(raw) >= 1:
+        return int(raw)
+    if isinstance(raw, str) and raw.strip().isdigit() and int(raw) >= 1:
+        return int(raw)
+    return _auto_concurrency()
+
+
 def _start_scheduler() -> None:
-    """Load any saved queue and start running it. A job left mid-run by a crashed
-    server was reloaded as INTERRUPTED and is auto-resumed here (Phase 3 will make
-    max_concurrent resource-aware; today it is a small, safe cap)."""
+    """Load any saved queue and start running it, with resource-aware concurrency.
+    A job left mid-run by a crashed server was reloaded as INTERRUPTED and is
+    auto-resumed here — and because every pipeline step is cached, it resumes where
+    it left off rather than 'starting from 0'."""
     global SCHED
     cfg = pl.load_config()
-    try:
-        cap = int(cfg.get("max_concurrent_jobs") or 1)
-    except (TypeError, ValueError):
-        cap = 1
+    cap = _resolve_concurrency(cfg)
+    gpu = set(GPU_KINDS)
+    if str(cfg.get("llm", "")).lower() == "ollama":
+        gpu |= {"generate", "add_language"}              # LLM now runs on the card
+
+    def gate(job, running) -> bool:
+        # A GPU-heavy job waits until no other GPU-heavy job is running; anything
+        # network-bound is free to overlap (up to the overall cap).
+        if job.kind in gpu:
+            return not any(r.kind in gpu for r in running)
+        return True
+
     STORE.load()
-    SCHED = jobs.Scheduler(STORE, RUN_MAP, max_concurrent=max(1, cap), resume=True)
+    SCHED = jobs.Scheduler(STORE, RUN_MAP, max_concurrent=cap, resume=True, gate=gate)
+    print(f"  Queue ready — up to {cap} job(s) at once "
+          f"(one GPU-heavy step at a time).")
 
 
 def main(open_browser: bool = True) -> None:

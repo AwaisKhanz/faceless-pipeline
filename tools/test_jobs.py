@@ -159,6 +159,43 @@ def main() -> int:
     check("the crash message is kept", "kaboom" in s3.get(j_err.id).error, True)
     sch3.stop()
 
+    # resource gate: never two GPU jobs at once, but a NET job backfills past a
+    # gate-blocked GPU job so the queue never stalls behind it.
+    print("\n  resource-aware gate (smart overlap):")
+    s5 = J.JobStore(tmp / "s5.json", save_every=0)
+    seen5, seen5_lock = [], __import__("threading").Lock()
+    gpu_live = {"now": 0, "peak": 0}
+
+    def work5(job):
+        if job.kind == "gpu":
+            with seen5_lock:
+                gpu_live["now"] += 1
+                gpu_live["peak"] = max(gpu_live["peak"], gpu_live["now"])
+        time.sleep(0.12)
+        if job.kind == "gpu":
+            with seen5_lock:
+                gpu_live["now"] -= 1
+        with seen5_lock:
+            seen5.append(job.kind)
+
+    def gate5(job, running):
+        if job.kind == "gpu":
+            return not any(r.kind == "gpu" for r in running)
+        return True
+    sch5 = J.Scheduler(s5, {"gpu": work5, "net": work5}, max_concurrent=3,
+                       poll=0.05, gate=gate5)
+    g1 = sch5.enqueue("p", "gpu")
+    g2 = sch5.enqueue("p", "gpu")            # must wait for g1 (gate)
+    n1 = sch5.enqueue("p", "net")            # should backfill past g2
+    wait_until(lambda: s5.get(g1.id).status == J.RUNNING)
+    time.sleep(0.05)
+    check("a NET job backfills past a gate-blocked GPU job",
+          s5.get(n1.id).status in (J.RUNNING, J.DONE), True)
+    check("the second GPU job is still waiting", s5.get(g2.id).status, J.QUEUED)
+    wait_until(lambda: all(j.status == J.DONE for j in s5.jobs()) and len(s5.jobs()) == 3)
+    check("two GPU jobs never ran at once (peak == 1)", gpu_live["peak"], 1)
+    sch5.stop()
+
     # resume: an INTERRUPTED job is re-queued and run on startup
     s4 = J.JobStore(tmp / "s4.json", save_every=0)
     dead = s4.add("p", "x")
