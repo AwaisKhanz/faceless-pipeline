@@ -315,7 +315,7 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     pool_n = _score_pool(cfg)
     scored_pool = _fair_pool(results, pool_n)
     rel = _relevance(scored_pool, query, media, cfg)
-    top3: list = []                                   # (src, rel) for the live log
+    ranked_all: list = []                             # every scored (src, rel), best first
     if rel:
         for h in scored_pool:
             h["rel"] = rel.get(h["url"])
@@ -331,8 +331,8 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
         # breaks ties between equally-relevant pictures. Anything not scored
         # keeps a sensible technical order behind the scored head.
         ranked = sorted(scored_pool, key=_combined, reverse=True)
-        top3 = [(h["src"], round(h["rel"], 2)) for h in ranked[:3]
-                if h.get("rel") is not None]
+        ranked_all = [(h["src"], round(h["rel"], 2)) for h in ranked
+                      if h.get("rel") is not None]
         scored_urls = {h["url"] for h in scored_pool}
         rest = sorted((h for h in results if h["url"] not in scored_urls),
                       key=_score, reverse=True)
@@ -372,7 +372,8 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
         counts[h["src"]] = counts.get(h["src"], 0) + 1
     meta["_detail"] = {"sources": list(order), "counts": counts,
                        "pooled": len(results),
-                       "scored": len(scored_pool) if rel else 0, "top": top3}
+                       "scored": len(scored_pool) if rel else 0,
+                       "ranked": ranked_all}
     return meta
 
 
@@ -451,19 +452,24 @@ def _video_frame(url: str) -> bytes:
         return b""
 
 
-def _detail_line(detail: dict | None) -> str:
+def _detail_line(detail: dict | None, full: bool = False) -> str:
     """The dim second line under a scene: which sources were searched, how deep
-    the pool went, and the top few candidates by relevance. Empty when there is
-    nothing to say (a cache hit carries no fresh telemetry)."""
+    the pool went, and the candidates by relevance. Shows the top 6 by default;
+    with `full` it lists EVERY scored candidate. Empty when there is nothing to
+    say (a cache hit carries no fresh telemetry)."""
     if not detail:
         return ""
     srcs = "·".join(detail.get("sources") or []) or "stock"
     parts = [f"searched {srcs}", f"pooled {detail.get('pooled', 0)}"]
     if detail.get("scored"):
         parts.append(f"scored {detail['scored']}")
-    top = detail.get("top") or []
-    if top:
-        parts.append("top " + " · ".join(f"{s} {int(r * 100)}%" for s, r in top))
+    ranked = detail.get("ranked") or []
+    shown = ranked if full else ranked[:6]
+    if shown:
+        cand = " · ".join(f"{s} {int(r * 100)}%" for s, r in shown)
+        if not full and len(ranked) > 6:
+            cand += f" (+{len(ranked) - 6} more)"
+        parts.append(("all: " if full else "top: ") + cand)
     return "       " + " · ".join(parts)
 
 
@@ -499,6 +505,9 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     # inert and the ladder behaves exactly as it always did.
     scorer_on = vision.get_scorer(cfg, log) is not None
     clip_min = float(cfg.get("clip_min") or DEFAULT_CLIP_MIN)
+    # "full" lists EVERY scored candidate per scene; anything else keeps the
+    # clean top-6 view. Set "source_log": "full" in config.json for the firehose.
+    full_log = str(cfg.get("source_log", "")).strip().lower() in ("full", "all", "verbose")
 
     for i, s in enumerate(scenes):
         if on_progress:
@@ -514,6 +523,7 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         got = None
         got_rel = -1.0
         notes: list[str] = []
+        rungs: list = []            # (query, rel) for each rung tried — the ladder
 
         for rung, query in enumerate(ladder):
             # Walk a few matches deep so a duplicate can be stepped over
@@ -535,20 +545,17 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                 continue                        # nothing usable from this query
 
             rel = pick.get("score")
+            rungs.append((query, rel))          # record this rung for the ladder line
             if not scorer_on or rel is None:
                 # No relevance signal (scoring off, or an unscorable video):
                 # first usable match wins, exactly as before.
                 got, got_rel = pick, None
-                if rung:
-                    notes.append(f"fell back to {query[:38]!r}")
                 break
 
             # Scoring is on: keep the most relevant candidate across the rungs,
             # and only stop searching once one clears the bar.
             if rel > got_rel:
                 got, got_rel = pick, rel
-                if rung:
-                    notes.append(f"fell back to {query[:34]!r} (match {rel:.2f})")
             if got_rel >= clip_min:
                 break                           # good enough — stop here
 
@@ -599,16 +606,22 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         used.add(got["path"])
         detail = got.pop("_detail", None)          # strip telemetry before storing
         out[s.n] = got
-        # Result line: ~ for a weak match, ✓ for a good one. Then a dim detail
-        # line showing exactly how the pick was reached.
+        # Result line: ~ for a weak match, ✓ for a good one. Then, when the scene
+        # dropped to a looser query, a ladder line showing each rung it tried; and
+        # a dim detail line showing the sources, pool depth and the candidates.
         sym = "~" if weak_pick else "✓"
         pct = f"{got_rel * 100:.0f}%" if (scorer_on and got_rel is not None) else "  —"
         topic = f" · {s.topic}" if getattr(s, "topic", "") else ""
-        fell = next((n for n in notes if n.startswith("fell back")), "")
-        line = (f"{sym} S{s.n:>3} {s.media.lower():<5} · {got['src']:<11} "
-                f"{pct:>4} · \"{got['query'][:46]}\"{topic}")
-        log(line + (f"  ({fell})" if fell else ""))
-        d2 = _detail_line(detail)
+        log(f"{sym} S{s.n:>3} {s.media.lower():<5} · {got['src']:<11} "
+            f"{pct:>4} · \"{got['query'][:46]}\"{topic}")
+        if len(rungs) > 1:                         # a genuine fallback happened
+            steps = []
+            for q, r in rungs:
+                mark = " ✓" if q == got["query"] else ""
+                rr = f"{int(r * 100)}%" if (scorer_on and r is not None) else "—"
+                steps.append(f"\"{q[:30]}\" {rr}{mark}")
+            log("       ladder: " + " → ".join(steps))
+        d2 = _detail_line(detail, full_log)
         if d2:
             log(d2)
 

@@ -147,7 +147,7 @@ def main() -> int:
                 "media": media, "score": 0.9, "credit": "", "page": "", "license": "",
                 "_detail": {"sources": sources or ["nasa"], "counts": {},
                             "pooled": 12, "scored": 8,
-                            "top": [("nasa", 0.9), ("pexels", 0.5)]}}
+                            "ranked": [("nasa", 0.9), ("pexels", 0.5)]}}
     stock.fetch = fx
     stock.vision.get_scorer = lambda cfg, log=None: object()   # scoring "on"
     stock._SRC.usable = lambda cfg: {"nasa", "pexels"}
@@ -163,6 +163,36 @@ def main() -> int:
     check("detail line shows searches + scoring",
           "searched" in joined and "scored" in joined and "top" in joined)
     check("telemetry stripped from the stored asset", "_detail" not in a[1])
+
+    # A fallback prints a ladder line; the candidate list caps by default and is
+    # exhaustive under source_log: "full".
+    def fx2(query, media, cache, pk, xk, index, sources=None, cfg=None):
+        weak = "sunset" in query
+        return {"path": f"/y/{query[:5]}_{index}",
+                "src": "wikimedia" if weak else "openverse", "query": query,
+                "media": media, "score": 0.38 if weak else 0.74,
+                "credit": "", "page": "", "license": "",
+                "_detail": {"sources": sources or [], "counts": {}, "pooled": 10,
+                            "scored": 8, "ranked": [("openverse", 0.74),
+                            ("wikimedia", 0.63), ("loc", 0.55), ("smithsonian", 0.51),
+                            ("pexels", 0.48), ("wikimedia", 0.44), ("openverse", 0.41),
+                            ("loc", 0.37)]}}
+    stock.fetch = fx2
+    stock._SRC.route = lambda *a, **k: ["smithsonian", "openverse", "loc", "wikimedia"]
+    scn = SimpleNamespace(n=5, media="IMAGE", query="roman aqueduct at sunset",
+                          fallbacks=["roman aqueduct arches"], domain="history",
+                          topic="history")
+    j2 = []
+    stock.fetch_all([scn], Path(tempfile.mkdtemp()), "PK", "XK",
+                    log=j2.append, cfg={"clip_min": 0.45})
+    j2s = "\n".join(j2)
+    check("a fallback prints a ladder line", "ladder:" in j2s and "→" in j2s)
+    check("default view caps the candidate list", "more)" in j2s)
+    j3 = []
+    stock.fetch_all([scn], Path(tempfile.mkdtemp()), "PK", "XK",
+                    log=j3.append, cfg={"clip_min": 0.45, "source_log": "full"})
+    j3s = "\n".join(j3)
+    check("source_log 'full' lists every candidate", "all:" in j3s and "more)" not in j3s)
 
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")
