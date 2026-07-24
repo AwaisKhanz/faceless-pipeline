@@ -278,6 +278,71 @@ def main() -> int:
     stock._SRC._JUST_DOWN.clear()
     stock._SRC._LAST_REASON.clear()
 
+    # ── image generation modes: off / mixed / all ──────────────────────────
+    print("\n  image generation modes (off / mixed / all), controlled:")
+    import lib.imagen as IM
+    IM.available = lambda cfg: True
+
+    def gen_asset(gen, s, cache, cfg, used):
+        return {"path": f"/gen/{s.n}", "src": "imagen", "query": s.query,
+                "media": "IMAGE", "credit": "AI-generated (Imagen)", "page": "",
+                "license": "AI-generated", "score": None, "generated": True}
+    stock._generate_one = gen_asset
+    stock.vision.get_scorer = lambda cfg, log=None: object()      # scoring on
+    stock._SRC.usable = lambda cfg: {"pexels", "wikimedia"}
+    stock._SRC.route = lambda *a, **k: ["pexels", "wikimedia"]
+    stock._SRC.down_sources = lambda: []
+
+    searched: list = []
+
+    def score_fetch(query, media, cache, pk, xk, index, sources=None, cfg=None):
+        searched.append(query)
+        sc = 0.75 if "strong" in query else 0.30
+        return {"path": f"/s/{query[:8]}_{index}", "src": "pexels", "query": query,
+                "media": media, "score": sc, "credit": "", "page": "", "license": ""}
+    stock.fetch = score_fetch
+
+    # ALL: the concept scene is generated (no search); a real-person scene is not.
+    searched.clear()
+    concept = SimpleNamespace(n=1, media="IMAGE", query="strong stock market",
+                              fallbacks=[], domain="finance", topic="money")
+    person = SimpleNamespace(n=2, media="IMAGE", query="Elon Musk",
+                             fallbacks=[], domain="bio", topic="people")
+    a = stock.fetch_all([concept, person], Path(tempfile.mkdtemp()), "PK", "XK",
+                        cfg={"generate": "all", "name_real_people": True},
+                        log=lambda *_: None)
+    check("all-mode generates the concept scene", a[1]["src"], "imagen")
+    check("all-mode does NOT search the concept scene",
+          "strong stock market" not in searched)
+    check("all-mode still searches the real-person scene", a[2]["src"] != "imagen")
+    check("the real-person scene was actually searched", "Elon Musk" in searched)
+
+    # MIXED: a below-60% match is replaced by generation; a strong match is kept.
+    weak = SimpleNamespace(n=1, media="IMAGE", query="weak subject",
+                           fallbacks=[], domain="x", topic="tech")
+    strong = SimpleNamespace(n=2, media="IMAGE", query="strong subject",
+                             fallbacks=[], domain="x", topic="tech")
+    b = stock.fetch_all([weak, strong], Path(tempfile.mkdtemp()), "PK", "XK",
+                        cfg={"generate": "mixed"}, log=lambda *_: None)
+    check("mixed replaces a below-60% match with generation", b[1]["src"], "imagen")
+    check("mixed keeps a strong search result", b[2]["src"] != "imagen")
+
+    # CAP: generate_max stops further generation this run.
+    c1 = SimpleNamespace(n=1, media="IMAGE", query="weak one", fallbacks=[],
+                         domain="x", topic="tech")
+    c2 = SimpleNamespace(n=2, media="IMAGE", query="weak two", fallbacks=[],
+                         domain="x", topic="tech")
+    c = stock.fetch_all([c1, c2], Path(tempfile.mkdtemp()), "PK", "XK",
+                        cfg={"generate": "mixed", "generate_max": 1},
+                        log=lambda *_: None)
+    check("cap: the first weak scene is generated", c[1]["src"], "imagen")
+    check("cap: the second is NOT (hit generate_max)", c[2]["src"] != "imagen")
+
+    # OFF (default): never generates.
+    off = stock.fetch_all([weak], Path(tempfile.mkdtemp()), "PK", "XK",
+                          cfg={}, log=lambda *_: None)
+    check("off (the default) never generates", off[1]["src"] != "imagen")
+
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")
     check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 6)

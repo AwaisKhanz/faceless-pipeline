@@ -521,6 +521,29 @@ def _emit_rung(log, query, detail, label, picked: bool, scorer_on: bool) -> None
     log(f"      → {pooled} pooled · {scored} scored{tail}{dupe}")
 
 
+def _generate_one(gen, s, cache: Path, cfg: dict, used: set) -> dict | None:
+    """Generate ONE image for a scene and return an asset dict, or None on any
+    failure so the caller falls back to search. The file is named by a hash of
+    the prompt, so an identical prompt reuses the picture already made — a
+    re-source never pays for the same generation twice."""
+    subject = s.query or getattr(s, "text", "") or ""
+    prompt = gen.prompt_for(subject, cfg)
+    if not prompt.strip():
+        return None
+    slug = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16]
+    dest = cache / f"gen_{slug}.png"
+    try:
+        gen.image(prompt, cfg, dest)
+    except Exception:
+        return None                        # generation failed → let search handle it
+    path = str(dest)
+    if path in used:
+        return None                        # already on screen elsewhere
+    return {"path": path, "src": "imagen", "query": s.query or prompt[:60],
+            "media": "IMAGE", "credit": "AI-generated (Imagen)", "page": "",
+            "license": "AI-generated", "score": None, "generated": True}
+
+
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
               picks: dict[int, int] | None = None, log=print,
               cfg: dict | None = None, already: dict | None = None,
@@ -568,6 +591,31 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     name_people = str(cfg.get("name_real_people", "")).strip().lower() \
         in ("1", "true", "yes", "on")
 
+    # IMAGE GENERATION (config `generate`): off = search only (default); all =
+    # generate every non-person scene, no search; mixed = search, but replace any
+    # scene whose best match is below `generate_min` with one generated image.
+    # Real-people scenes never generate — Imagen will not render a named person —
+    # so they always search. A per-run cap and one-image-per-scene keep cost in
+    # hand. The module is imported lazily so a search-only install never needs it.
+    gen_mode = str(cfg.get("generate", "")).strip().lower()
+    gen_mode = {"on": "all", "generate": "all", "true": "all"}.get(gen_mode, gen_mode)
+    if gen_mode not in ("mixed", "all"):
+        gen_mode = "off"
+    gen_min = float(cfg.get("generate_min") or 0.60)
+    gen_cap = int(cfg.get("generate_max") or 40)
+    _gen = None
+    if gen_mode != "off":
+        try:
+            from . import imagen as _gen
+            if not _gen.available(cfg):
+                _gen = None
+        except Exception:
+            _gen = None
+    if gen_mode != "off" and _gen is None:
+        log("  ⚠ generation is on but Vertex is not configured — searching only.")
+        gen_mode = "off"
+    generated_n = 0
+
     for i, s in enumerate(scenes):
         if on_progress:
             on_progress(i + 1, len(scenes), f"S{s.n} {s.media.lower()}")
@@ -582,10 +630,29 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                            all_sources=all_sources)
         # Biography mode + a people scene: drop stock so the real person (from the
         # archives) wins over a generic stock look-alike. Only if archives remain.
-        if name_people and getattr(s, "topic", "") == "people" and s.media == "IMAGE":
+        real_person = (name_people and getattr(s, "topic", "") == "people"
+                       and s.media == "IMAGE")
+        if real_person:
             archives_only = [r for r in route if r not in ("pexels", "pixabay")]
             if archives_only:
                 route = archives_only
+
+        # Can this scene be generated? Never a real named person, never video
+        # (that is Veo, a later step), and never past the per-run cap.
+        can_gen = (_gen is not None and s.media == "IMAGE"
+                   and not real_person and generated_n < gen_cap)
+
+        # ALL mode: generate instead of searching. A generation failure falls
+        # through to a normal search, so a scene is never left empty by it.
+        if gen_mode == "all" and can_gen:
+            a = _generate_one(_gen, s, cache, cfg, used)
+            if a:
+                used.add(a["path"])
+                out[s.n] = a
+                generated_n += 1
+                log(f"✦ S{s.n:>3} image · generated · \"{a['query'][:46]}\"")
+                continue
+
         got = None
         got_rel = -1.0
         best_below = None                       # best weak pick if nothing clears
@@ -671,6 +738,27 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             for idx, (q, det, picked) in enumerate(rung_log):
                 label = "search" if idx == 0 else f"fallback {idx}"
                 _emit_rung(log, q, det, label, picked, scorer_on)
+
+        # MIXED mode: the scene was searched; if the best match is empty or below
+        # the generation bar, replace it with one image generated from the line.
+        # (With scoring off we cannot judge "below 60%", so only an outright empty
+        # scene is rescued.) Real-people scenes are excluded via can_gen.
+        if gen_mode == "mixed" and can_gen:
+            below = got is None or (got_rel is not None and got_rel < gen_min)
+            if got is not None and got_rel is None:
+                below = False               # found but unscored — keep it
+            if below:
+                a = _generate_one(_gen, s, cache, cfg, used)
+                if a:
+                    used.add(a["path"])
+                    out[s.n] = a
+                    generated_n += 1
+                    why = ("nothing found" if got is None
+                           else f"best match {int(got_rel * 100)}% < "
+                                f"{int(gen_min * 100)}%")
+                    log(f"✦ S{s.n:>3} image · generated ({why}) · "
+                        f"\"{a['query'][:46]}\"")
+                    continue
 
         if got is None:
             # The scene's own ladder found nothing real. An empty scene breaks
