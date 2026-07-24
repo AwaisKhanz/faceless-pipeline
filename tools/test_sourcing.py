@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 from lib import stock, sources as SRC, vision, pipeline as pl  # noqa: E402
 
 _REAL_FETCH = stock.fetch          # captured before any test reassigns stock.fetch
+_REAL_RELEVANCE = stock._relevance  # ditto — a later test mocks stock._relevance
 
 
 def main() -> int:
@@ -388,12 +389,11 @@ def main() -> int:
     # ── scoring downloads run in parallel and skip a dead thumbnail ──────────
     print("\n  scoring fetches thumbnails in parallel, skipping dead ones:")
 
-    def flaky_get(url, headers=None, timeout=None, retries=3):
+    def flaky_fetch(url, timeout=None, retries=3):
         if "dead" in url:
             raise stock.StockError("unreachable")     # a slow/dead thumbnail
         return b"IMG"
-    stock._get = flaky_get
-    stock._BYTES.clear()
+    stock._fetch_bytes = flaky_fetch                  # what _relevance actually calls
 
     class _Scorer:
         def relevance(self, q, items):
@@ -402,7 +402,7 @@ def main() -> int:
     pool = [{"url": "http://ok/1", "thumb": "http://ok/1.jpg"},
             {"url": "http://dead/2", "thumb": "http://dead/2.jpg"},
             {"url": "http://ok/3", "thumb": "http://ok/3.jpg"}]
-    rel = stock._relevance(pool, "q", "IMAGE", {})
+    rel = _REAL_RELEVANCE(pool, "q", "IMAGE", {})
     check("a dead thumbnail is skipped, the rest still scored",
           sorted(rel.keys()), ["http://ok/1", "http://ok/3"])
 
