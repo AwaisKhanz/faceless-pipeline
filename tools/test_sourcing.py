@@ -145,7 +145,8 @@ def main() -> int:
     def fx(query, media, cache, pk, xk, index, sources=None, cfg=None):
         return {"path": f"/x/{query[:5]}_{index}", "src": "nasa", "query": query,
                 "media": media, "score": 0.9, "credit": "", "page": "", "license": "",
-                "_detail": {"sources": sources or ["nasa"], "counts": {},
+                "_detail": {"sources": sources or ["nasa"],
+                            "counts": {"nasa": 9, "pexels": 3},
                             "pooled": 12, "scored": 8,
                             "ranked": [("nasa", 0.9), ("pexels", 0.5)]}}
     stock.fetch = fx
@@ -162,6 +163,8 @@ def main() -> int:
     check("result line shows source + score", "nasa" in joined and "90%" in joined)
     check("detail line shows searches + scoring",
           "searched" in joined and "scored" in joined and "top" in joined)
+    check("detail line shows per-source counts (hides nothing)",
+          "nasa 9" in joined and "pexels 3" in joined)
     check("telemetry stripped from the stored asset", "_detail" not in a[1])
 
     # A fallback prints a ladder line; the candidate list caps by default and is
@@ -172,7 +175,9 @@ def main() -> int:
                 "src": "wikimedia" if weak else "openverse", "query": query,
                 "media": media, "score": 0.38 if weak else 0.74,
                 "credit": "", "page": "", "license": "",
-                "_detail": {"sources": sources or [], "counts": {}, "pooled": 10,
+                "_detail": {"sources": sources or [],
+                            "counts": {"openverse": 4, "loc": 2, "smithsonian": 1},
+                            "pooled": 10,
                             "scored": 8, "ranked": [("openverse", 0.74),
                             ("wikimedia", 0.63), ("loc", 0.55), ("smithsonian", 0.51),
                             ("pexels", 0.48), ("wikimedia", 0.44), ("openverse", 0.41),
@@ -187,6 +192,7 @@ def main() -> int:
                     log=j2.append, cfg={"clip_min": 0.45})
     j2s = "\n".join(j2)
     check("a fallback prints a ladder line", "ladder:" in j2s and "→" in j2s)
+    check("a source asked but empty reads as 0, not hidden", "wikimedia 0" in j2s)
     check("default view caps the candidate list", "more)" in j2s)
     j3 = []
     stock.fetch_all([scn], Path(tempfile.mkdtemp()), "PK", "XK",

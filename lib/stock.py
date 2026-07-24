@@ -466,7 +466,14 @@ def _detail_line(detail: dict | None, full: bool = False) -> str:
     say (a cache hit carries no fresh telemetry)."""
     if not detail:
         return ""
-    srcs = "·".join(detail.get("sources") or []) or "stock"
+    # Show every source that was ASKED with how many it actually returned, so a
+    # source that was queried but came back empty (e.g. Wikimedia blocked on this
+    # network, or a source the topic did not really suit) reads as "wikimedia 0"
+    # instead of silently looking like it contributed. Nothing is hidden: if a
+    # name shows 0 it found nothing this scene.
+    order = detail.get("sources") or []
+    counts = detail.get("counts") or {}
+    srcs = "·".join(f"{name} {counts.get(name, 0)}" for name in order) or "stock"
     parts = [f"searched {srcs}", f"pooled {detail.get('pooled', 0)}"]
     if detail.get("scored"):
         parts.append(f"scored {detail['scored']}")
