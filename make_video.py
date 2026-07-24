@@ -261,7 +261,7 @@ def main() -> None:
         description="Faceless video pipeline (command line)",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("step", choices=["studio", "doctor", "sources", "benchtts",
-                                     "generate",
+                                     "generate", "vertex-models",
                                      "models", "stock", "voice", "render", "all",
                                      "voices", "list"])
     ap.add_argument("--no-browser", action="store_true",
@@ -303,6 +303,50 @@ def main() -> None:
         # Same thing Start.bat / Start.command do, without leaving the terminal.
         import studio
         studio.main(open_browser=not a.no_browser)
+        return
+
+    if a.step == "vertex-models":
+        # Which Vertex Gemini models actually work for YOUR project + region.
+        # Availability changes and varies, so this calls each candidate for real
+        # (a 1-token request) rather than guessing. Set the winner as vertex_model.
+        from lib import llm as LLM
+        cfg = pl.load_config()
+        proj = cfg.get("vertex_project") or ""
+        sa = cfg.get("vertex_service_account") or ""
+        cfg_loc = cfg.get("vertex_location") or "us-central1"
+        banner("Vertex AI — which Gemini models can this project call?")
+        if not proj:
+            print("  Set \"vertex_project\" in config.json first "
+                  "(and \"llm\": \"vertex\").")
+            return
+        locations = [cfg_loc] + (["global"] if cfg_loc != "global" else [])
+        print(f"  project: {proj}")
+        print(f"  auth:    {os.path.basename(sa) if sa else 'application default credentials'}")
+        print(f"  probing {len(LLM.VERTEX_CANDIDATES)} models in: "
+              f"{', '.join(locations)}  (a tiny 1-token call each)\n")
+        working: list[tuple[str, str]] = []
+        for model, note in LLM.VERTEX_CANDIDATES:
+            line, hit = "", ""
+            for loc in locations:
+                ok, reason = LLM.vertex_probe(proj, loc, model, sa)
+                if ok:
+                    working.append((model, loc))
+                    hit = loc
+                    line = f"  ok  {model:<22} {loc:<12} — {note}"
+                    break
+                line = f"  !!  {model:<22} {loc:<12} {reason}"
+            print(line)
+        banner("Set one of these in config.json")
+        if working:
+            best, loc = working[0]                    # candidates are quality-ordered
+            print(f"  Best available:  \"vertex_model\": \"{best}\", "
+                  f"\"vertex_location\": \"{loc}\"")
+            print(f"\n  All that worked:")
+            for m, loc in working:
+                print(f"    - {m}  ({loc})")
+        else:
+            print("  None responded. Check that the Vertex AI API is enabled on the")
+            print("  project and that your account has the 'Vertex AI User' role.")
         return
 
     if a.step == "sources":

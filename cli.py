@@ -50,6 +50,8 @@ HELP = """
   Anything else
     faceless sheets                    projects found in sheets/
     faceless models                    Gemini models your key can call
+    faceless sources                   test each picture library, show routing
+    faceless vertex-models             which Vertex Gemini models you can call
 
   Add --verbose to any command to see full errors.
   Everything is cached, so re-running is cheap and picks up where it stopped.

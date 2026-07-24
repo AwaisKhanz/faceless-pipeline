@@ -208,6 +208,30 @@ def main() -> int:
     check("vertex model -> vertex backend, SA path threaded",
           (rv["ok"], rv["key"]), ("vertex", "keys/sa.json"))
 
+    print("\n  vertex_probe reports which models a project can call:")
+    LLM._vertex_token = lambda sa: "TOK"               # skip real google-auth
+
+    class _HTTPErr(Exception):
+        def __init__(self, code, body):
+            self.code = code
+            self._b = body.encode()
+        def read(self):
+            return self._b
+    LLM.urllib.error.HTTPError = _HTTPErr
+
+    def probe_urlopen(req, timeout=0):
+        if "gemini-2.5-flash" in req.full_url:
+            return _Resp({"candidates": [{"content": {"parts": [{"text": "hi"}]}}]})
+        raise _HTTPErr(404, json.dumps({"error": {"message": "model not found in region"}}))
+    LLM.urllib.request.urlopen = probe_urlopen
+    ok, why = LLM.vertex_probe("proj", "us-central1", "gemini-2.5-flash", "")
+    check("an available model probes ok", (ok, why), (True, "ok"))
+    ok2, why2 = LLM.vertex_probe("proj", "us-central1", "gemini-3.6-flash", "")
+    check("an unavailable model reports the 404 reason",
+          ok2 is False and "404" in why2 and "not found" in why2, True)
+    check("candidate list is non-empty and quality-ordered",
+          LLM.VERTEX_CANDIDATES[0][0].startswith("gemini-3"), True)
+
     print("\n  name_real_people flips the search rule (biography vs faceless):")
     cap = {}
 

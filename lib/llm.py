@@ -431,6 +431,56 @@ def vertex_complete(model: str, key: str, prompt: str, schema: dict,
     raise LLMError(f"Vertex AI gave no usable JSON after {retries} tries. {last}")
 
 
+# Candidate Gemini models to try on Vertex, best-quality first. Availability
+# varies by project and region and changes often, so this is only a list to
+# PROBE — `faceless vertex-models` calls each one and reports what actually works
+# for you. (id, one-line note.)
+VERTEX_CANDIDATES: list[tuple[str, str]] = [
+    ("gemini-3.1-pro",        "strongest reasoning (preview) — best quality, priciest"),
+    ("gemini-3-pro",          "Gemini 3 Pro — top quality"),
+    ("gemini-3.6-flash",      "newest Flash (GA) — great quality for the cost"),
+    ("gemini-3-flash",        "Gemini 3 Flash"),
+    ("gemini-3.5-flash-lite", "cheapest 3.x — fast and light"),
+    ("gemini-2.5-pro",        "strong, but retires Oct 2026"),
+    ("gemini-2.5-flash",      "reliable default — GA in us-central1"),
+    ("gemini-2.5-flash-lite", "cheapest 2.5"),
+    ("gemini-2.0-flash",      "older, cheap, widely available"),
+]
+
+
+def vertex_probe(project: str, location: str, model: str,
+                 sa_path: str = "") -> tuple[bool, str]:
+    """One tiny generateContent call to see if a model is enabled and available
+    in a region for this project. Returns (ok, short reason). Never raises."""
+    try:
+        token = _vertex_token(sa_path)
+    except LLMError as e:
+        return False, str(e).splitlines()[0]
+    host_ = ("aiplatform.googleapis.com" if location == "global"
+             else f"{location}-aiplatform.googleapis.com")
+    url = (f"https://{host_}/v1/projects/{project}/locations/{location}"
+           f"/publishers/google/models/{model}:generateContent")
+    body = json.dumps({"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                       "generationConfig": {"maxOutputTokens": 1}}).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            url, data=body, headers={"Content-Type": "application/json",
+                                     "Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+        return True, "ok"
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")
+        msg = detail
+        try:
+            msg = (json.loads(detail).get("error") or {}).get("message", detail)
+        except Exception:
+            pass
+        return False, f"{e.code}: {msg.strip()[:90]}"
+    except Exception as e:                            # noqa: BLE001
+        return False, f"{type(e).__name__}: {str(e)[:70]}"
+
+
 # ─────────────────────────────────────────────────────── status (doctor/UI)
 
 def capability(cfg: dict | None = None) -> dict:
