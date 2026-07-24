@@ -38,7 +38,10 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
-TIMEOUT = 25
+TIMEOUT = 12            # a search returns small JSON fast; a source that can't
+                        # answer in 12s is a straggler and the scene should not
+                        # wait for it — the other sources (queried in parallel)
+                        # and the winner's own download carry the scene.
 
 # Wikimedia's User-Agent policy requires a descriptive agent WITH working
 # contact information — a URL or an email — and blocks generic or vague ones
@@ -171,14 +174,10 @@ def _get(url: str, headers: dict | None = None) -> bytes:
             break
         except Exception as e:
             last = e
-            # A READ TIMEOUT usually means a slow archive (the Library of
-            # Congress photo search is genuinely slow), not a refusal — so give
-            # it another try or two before giving up. A RESET/REFUSAL is a block:
-            # retrying only stalls the run, so fall straight through and let the
-            # circuit breaker skip the source.
-            if "timed out" in str(e).lower() and attempt < 3:
-                time.sleep(1.0 * attempt)
-                continue
+            # A timeout, reset or refusal: don't retry a search. Since sources
+            # are queried in parallel and the scene waits for the slowest, a
+            # second attempt would only double the stall — better to skip fast and
+            # let the circuit breaker drop a source that keeps timing out.
             break
 
     msg = str(last)

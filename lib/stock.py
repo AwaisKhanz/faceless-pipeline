@@ -58,7 +58,9 @@ _BYTES_LOCK = threading.Lock()      # the cache is read/written from scoring thr
 # answer is skipped rather than waited on, because it is one of many candidates.
 _SCORE_TIMEOUT = 8                  # seconds per scoring thumbnail (vs 30 for a winner)
 _SCORE_WORKERS_IMAGE = 16           # concurrent thumbnail downloads for image scenes
-_SCORE_WORKERS_VIDEO = 6            # fewer for video: each spawns an ffmpeg stream
+_SCORE_WORKERS_VIDEO = 8            # ffmpeg is cheap and the machine sits idle, so
+                                    # score more clips at once — video is the slowest
+                                    # scene type and it is all network waiting.
 
 
 def _fetch_bytes(url: str, timeout: int | None = None, retries: int = 3) -> bytes:
@@ -498,7 +500,7 @@ def _video_frame(url: str) -> bytes:
             ["ffmpeg", "-nostdin", "-ss", "1", "-i", url,
              "-frames:v", "1", "-vf", "scale=384:-1",
              "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
-            capture_output=True, timeout=25)     # a frame comes fast or not at all
+            capture_output=True, timeout=15)     # a frame comes fast or not at all
         return r.stdout if r.returncode == 0 and r.stdout else b""
     except Exception:
         return b""
