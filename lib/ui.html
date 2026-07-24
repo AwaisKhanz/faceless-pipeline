@@ -388,6 +388,10 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5 7 5-16L17 12h4"/></svg>
       Activity<span class="badge" id="navBadge" style="display:none"></span>
     </a>
+    <a class="nav" data-r="/queue">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      Queue<span class="badge" id="queueBadge" style="display:none"></span>
+    </a>
     <a class="nav" data-r="/voices">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
       Voices
@@ -1010,6 +1014,127 @@ function paintRun() {
       el('span', { class: cls }, text)));
   }
   if (follow && near) t.scrollTop = t.scrollHeight;
+}
+
+// ═══ queue ════════════════════════════════════════════════════════════════
+// One project at a time was the old limit; now every run is a Job in a queue
+// that survives a refresh AND a server restart. This view is that queue: what is
+// running, what is waiting, and what has finished — each cancellable/removable.
+const Q_KIND = {
+  generate: 'Generate script', add_language: 'Add language',
+  source: 'Find visuals', regenerate: 'Regenerate images',
+  regenerate_video: 'Regenerate video', build: 'Build video',
+  run: 'Voice + render',
+};
+const Q_STATUS = {
+  running: { label: 'Running', cls: 'run' }, queued: { label: 'Queued', cls: 'none' },
+  approve: { label: 'Needs review', cls: 'part' }, interrupted: { label: 'Resuming', cls: 'part' },
+  done: { label: 'Done', cls: 'ok' }, error: { label: 'Error', cls: 'bad' },
+  canceled: { label: 'Canceled', cls: 'none' },
+};
+const Q_WAIT = ['running', 'approve', 'queued', 'interrupted'];
+
+function qPill(st) {
+  const m = Q_STATUS[st] || { label: st, cls: 'none' };
+  if (m.cls === 'run') return el('span', {
+    class: 'pill', style: 'color:var(--accent);'
+      + 'border-color:color-mix(in srgb,var(--accent) 34%,transparent);'
+      + 'background:color-mix(in srgb,var(--accent) 12%,transparent)'
+  }, m.label);
+  return el('span', { class: 'pill ' + m.cls }, m.label);
+}
+
+async function qAct(url, id, btn) {
+  if (btn) btn.disabled = true;
+  await api(url, { job: id });
+  await refreshQueue();
+}
+
+function qRow(j) {
+  const wait = Q_WAIT.includes(j.status);
+  const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+  const when = j.started ? fmtT((j.ended || Date.now() / 1000) - j.started)
+    : (j.status === 'queued' ? 'waiting' : '—');
+  const acts = [];
+  if (j.status === 'running' || j.status === 'approve')
+    acts.push(el('button', { class: 'btn sm', onclick: () => go('/activity') }, 'Watch'));
+  if (wait)
+    acts.push(el('button', {
+      class: 'btn sm danger',
+      onclick: e => qAct('/api/cancel', j.id, e.target)
+    }, j.status === 'queued' ? 'Remove' : 'Stop'));
+  else
+    acts.push(el('button', {
+      class: 'btn sm', onclick: e => qAct('/api/job/remove', j.id, e.target)
+    }, 'Clear'));
+
+  return el('div', { class: 'card', style: 'padding:14px 16px;margin-bottom:10px' },
+    el('div', { class: 'row', style: 'gap:12px;align-items:center' },
+      j.status === 'running' ? el('span', { class: 'spin' }) : null,
+      qPill(j.status),
+      el('div', { style: 'min-width:0;flex:1' },
+        el('b', {}, j.project || '(unnamed)'),
+        el('span', { class: 'sub', style: 'margin-left:8px' }, Q_KIND[j.kind] || j.kind),
+        j.auto ? el('span', {
+          class: 'pill plain none', style: 'margin-left:8px;font-size:11px'
+        }, 'auto') : null),
+      el('span', { class: 'mono sub' }, when),
+      ...acts),
+    j.status === 'running' ? el('div', { class: 'bar', style: 'margin-top:10px' },
+      el('i', { style: `width:${pct}%` })) : null,
+    j.status === 'running' && (j.label || j.total) ? el('div', {
+      class: 'mono sub', style: 'margin-top:6px'
+    }, (j.label || '') + (j.total ? ` · ${j.done}/${j.total}` : '')) : null,
+    j.status === 'error' && j.error ? el('div', {
+      class: 'mono', style: 'margin-top:8px;color:var(--bad);font-size:13px'
+    }, j.error) : null);
+}
+
+async function viewQueue() {
+  try { S.queue = await api('/api/queue'); } catch (e) { }
+  paintQueue();
+}
+
+function paintQueue() {
+  if (location.pathname !== '/queue') return;
+  const v = $('#view'); v.innerHTML = '';
+  const q = S.queue || { jobs: [] };
+  const jobs = q.jobs || [];
+  const waiting = jobs.filter(j => Q_WAIT.includes(j.status));
+  const done = jobs.filter(j => !Q_WAIT.includes(j.status)).reverse();  // newest first
+
+  v.append(el('div', { class: 'head' },
+    el('div', { class: 'grow' }, el('h1', {}, 'Queue'),
+      el('p', {}, waiting.length
+        ? `${waiting.length} in progress or waiting — runs ${q.max_concurrent > 1
+          ? q.max_concurrent + ' at a time' : 'one at a time'}, and survives a refresh or restart.`
+        : 'Nothing running. New work you start from any project lands here.')),
+    done.length ? el('button', {
+      class: 'btn sm', onclick: async e => { e.target.disabled = true; await api('/api/queue/clear', {}); await refreshQueue(); }
+    }, 'Clear finished') : null));
+
+  if (!jobs.length) {
+    v.append(el('div', { class: 'empty card' },
+      el('b', {}, 'The queue is empty'),
+      el('div', { class: 'sub', style: 'margin-top:6px' },
+        'Generate a script, find visuals or build a video — each one queues up here.'),
+      el('div', { style: 'margin-top:14px' },
+        el('button', { class: 'btn', onclick: () => go('/') }, 'Go to the dashboard'))));
+    return;
+  }
+  if (waiting.length) {
+    v.append(el('div', { class: 'sub', style: 'margin:4px 0 10px' }, 'In progress & waiting'));
+    waiting.forEach(j => v.append(qRow(j)));
+  }
+  if (done.length) {
+    v.append(el('div', { class: 'sub', style: 'margin:18px 0 10px' }, 'Finished'));
+    done.forEach(j => v.append(qRow(j)));
+  }
+}
+
+async function refreshQueue() {
+  try { S.queue = await api('/api/queue'); } catch (e) { }
+  paintQueue();
 }
 
 // ═══ new from script ══════════════════════════════════════════════════════
@@ -1974,6 +2099,7 @@ const ROUTES = [
   [/^\/project\/([^/]+)\/?$/, viewProject],
   [/^\/review\/([^/]+)\/?$/, viewReview],
   [/^\/activity\/?$/, viewRun],
+  [/^\/queue\/?$/, viewQueue],
   [/^\/new\/?$/, viewNew],
   [/^\/voices(?:\/([a-z-]+))?\/?$/, viewVoices],
   [/^\/subtitles(?:\/([^/]+))?\/?$/, viewSubtitles],
@@ -2044,6 +2170,16 @@ async function poll() {
     const badge = $('#navBadge');
     badge.style.display = busy ? '' : 'none';
     if (busy) badge.textContent = j.total ? Math.round(100 * j.done / j.total) + '%' : '···';
+
+    // The queue drives its own badge (jobs in progress or waiting) and, when
+    // it's the open view, repaints live — so a refresh never loses your place.
+    try {
+      S.queue = await api('/api/queue');
+      const waiting = (S.queue.jobs || []).filter(x => Q_WAIT.includes(x.status)).length;
+      const qb = $('#queueBadge');
+      if (qb) { qb.style.display = waiting ? '' : 'none'; qb.textContent = waiting; }
+      if (location.pathname === '/queue') paintQueue();
+    } catch (e) { }
 
     paintBanner();
     if (location.pathname === '/activity') paintRun();

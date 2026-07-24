@@ -360,6 +360,8 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
 def run_sourcing(pid: str, redo: list[int] | None) -> None:
     try:
         proj = pl.find_project(pid)
+        if proj is None:
+            raise RuntimeError(f"no project called {pid!r}")
         sheet = Path(proj["sheet"])
         cfg = pl.load_config()
         if not cfg.get("pexels_key") and not cfg.get("pixabay_key"):
