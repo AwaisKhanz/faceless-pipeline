@@ -51,16 +51,20 @@ class Job:
     args: dict = field(default_factory=dict)     # the kwargs the worker needs
     auto: bool = False                           # part of an auto-pipeline chain
     label: str = ""
-    stage: str = ""
+    stage: str = ""                              # the studio's step name
+    lang: str | None = None
     done: int = 0
     total: int = 0
     eta: float | None = None
     rate: float | None = None
     error: str = ""
     outputs: list = field(default_factory=list)
+    steps: list = field(default_factory=list)    # [{name, lang, seconds, items}]
     log: list = field(default_factory=list)      # [{"t": epoch, "text": str}]
+    cancel: bool = False                         # set to ask a running job to stop
     created: float = 0.0
     started: float | None = None
+    step_started: float | None = None
     ended: float | None = None
 
     def to_dict(self) -> dict:
@@ -212,3 +216,106 @@ class JobStore:
             self._seq = max([data.get("seq", 0),
                              *[j.seq for j in self._jobs.values()]] or [0])
             self._dirty = False
+
+
+class Scheduler:
+    """Runs queued jobs in FIFO order, up to `max_concurrent` at a time.
+
+    Decoupled from HTTP and the pipeline: it is handed a `run_map` of
+    kind -> callable(job) that does the actual work (blocking). The studio wraps
+    each real worker so that, before it runs, a thread-local 'current job' is set,
+    letting the existing set_job / log / progress helpers report into THIS job.
+
+    A worker signals its outcome by setting the job's status (done / error /
+    approve). If it returns without doing so, the job is marked done. On start,
+    any INTERRUPTED job (the server died mid-run) is re-queued — auto-resume —
+    and because every pipeline step is cached, it picks up where it left off.
+    """
+
+    def __init__(self, store: JobStore, run_map: dict, max_concurrent: int = 1,
+                 resume: bool = True, poll: float = 0.5):
+        self.store = store
+        self.run_map = run_map
+        self.max_concurrent = max(1, int(max_concurrent))
+        self._poll = poll
+        self._threads: "dict[str, threading.Thread]" = {}
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._stopped = False
+        if resume:
+            for j in store.jobs():
+                if j.status == INTERRUPTED:
+                    store.update(j.id, status=QUEUED, cancel=False)
+        self._dispatcher = threading.Thread(target=self._loop, daemon=True)
+        self._dispatcher.start()
+
+    # ── public ──────────────────────────────────────────────────────────────
+    def enqueue(self, project: str, kind: str, args: dict | None = None,
+                auto: bool = False) -> Job:
+        job = self.store.add(project, kind, args, auto=auto)
+        self._wake.set()
+        return job
+
+    def cancel(self, jid: str) -> bool:
+        """Stop a job. A queued job is dropped; a running one is asked to stop
+        (its worker sees the cancel flag between items and bows out)."""
+        job = self.store.get(jid)
+        if job is None or job.status in TERMINAL:
+            return False
+        if job.status == QUEUED:
+            self.store.update(jid, status=CANCELED, force_save=True)
+        else:
+            self.store.update(jid, cancel=True, force_save=True)
+        self._wake.set()
+        return True
+
+    def running_count(self) -> int:
+        with self._lock:
+            return sum(1 for t in self._threads.values() if t.is_alive())
+
+    def stop(self) -> None:                      # for tests / shutdown
+        self._stopped = True
+        self._wake.set()
+
+    # ── internals ───────────────────────────────────────────────────────────
+    def _loop(self) -> None:
+        while not self._stopped:
+            self._wake.wait(timeout=self._poll)
+            self._wake.clear()
+            self._dispatch()
+
+    def _dispatch(self) -> None:
+        with self._lock:
+            self._threads = {jid: t for jid, t in self._threads.items()
+                             if t.is_alive()}
+            while len(self._threads) < self.max_concurrent:
+                job = self.store.next_queued()
+                if job is None:
+                    break
+                self.store.update(job.id, status=RUNNING, cancel=False,
+                                  started=time.time(), force_save=True)
+                t = threading.Thread(target=self._run, args=(job.id,), daemon=True)
+                self._threads[job.id] = t
+                t.start()
+
+    def _run(self, jid: str) -> None:
+        job = self.store.get(jid)
+        fn = self.run_map.get(job.kind) if job else None
+        try:
+            if fn is None:
+                self.store.update(jid, status=ERROR,
+                                  error=f"no worker for kind '{job.kind}'",
+                                  force_save=True)
+            else:
+                fn(job)
+        except BaseException as e:               # a crash must not wedge the queue
+            self.store.update(jid, status=ERROR,
+                              error=str(e) or type(e).__name__, force_save=True)
+        finally:
+            cur = self.store.get(jid)
+            if cur is not None and cur.status == RUNNING:
+                # worker finished without declaring an outcome → treat as done,
+                # unless it was asked to cancel.
+                self.store.update(
+                    jid, status=(CANCELED if cur.cancel else DONE), force_save=True)
+            self._wake.set()                     # a slot freed — try the next

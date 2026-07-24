@@ -85,6 +85,91 @@ def main() -> int:
     st3.load()
     check("a corrupt store loads as empty, no crash", st3.jobs(), [])
 
+    # ── scheduler: FIFO, concurrency, cancel, error, resume ─────────────────
+    print("\n  scheduler runs the queue:")
+
+    def wait_until(fn, timeout=5.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            if fn():
+                return True
+            time.sleep(0.02)
+        return False
+
+    # FIFO order + a done outcome
+    s1 = J.JobStore(tmp / "s1.json", save_every=0)
+    order = []
+
+    def rec(job):
+        order.append(job.project)
+        time.sleep(0.05)
+    sch = J.Scheduler(s1, {"x": rec}, max_concurrent=1, poll=0.05)
+    for p in ("a", "b", "c"):
+        sch.enqueue(p, "x")
+    ok = wait_until(lambda: all(j.status == J.DONE for j in s1.jobs()) and len(s1.jobs()) == 3)
+    check("all three ran and finished", ok, True)
+    check("they ran in FIFO order", order, ["a", "b", "c"])
+    sch.stop()
+
+    # concurrency: max 2 in flight at once
+    s2 = J.JobStore(tmp / "s2.json", save_every=0)
+    live = {"now": 0, "peak": 0}
+    live_lock = __import__("threading").Lock()
+
+    def busy(job):
+        with live_lock:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        time.sleep(0.1)
+        with live_lock:
+            live["now"] -= 1
+    sch2 = J.Scheduler(s2, {"x": busy}, max_concurrent=2, poll=0.05)
+    for _ in range(4):
+        sch2.enqueue("p", "x")
+    wait_until(lambda: all(j.status == J.DONE for j in s2.jobs()) and len(s2.jobs()) == 4)
+    check("max_concurrent is honoured (peak == 2)", live["peak"], 2)
+    sch2.stop()
+
+    # cancel a queued job (never runs) and error propagation
+    s3 = J.JobStore(tmp / "s3.json", save_every=0)
+    ran = []
+
+    def slow(job):
+        for _ in range(50):
+            if job.cancel:
+                return
+            time.sleep(0.02)
+        ran.append(job.id)
+
+    def boom(job):
+        raise RuntimeError("kaboom")
+    sch3 = J.Scheduler(s3, {"slow": slow, "boom": boom}, max_concurrent=1, poll=0.05)
+    j_run = sch3.enqueue("p", "slow")
+    j_queued = sch3.enqueue("p", "slow")
+    j_err = sch3.enqueue("p", "boom")
+    wait_until(lambda: s3.get(j_run.id).status == J.RUNNING)
+    sch3.cancel(j_queued.id)                     # cancel the one still waiting
+    check("a queued job cancelled before it runs", s3.get(j_queued.id).status, J.CANCELED)
+    sch3.cancel(j_run.id)                        # ask the running one to stop
+    wait_until(lambda: s3.get(j_run.id).status == J.CANCELED)
+    check("a running job stops when cancelled", s3.get(j_run.id).status, J.CANCELED)
+    wait_until(lambda: s3.get(j_err.id).status == J.ERROR)
+    check("a crashing worker becomes ERROR, queue keeps going",
+          s3.get(j_err.id).status, J.ERROR)
+    check("the crash message is kept", "kaboom" in s3.get(j_err.id).error, True)
+    sch3.stop()
+
+    # resume: an INTERRUPTED job is re-queued and run on startup
+    s4 = J.JobStore(tmp / "s4.json", save_every=0)
+    dead = s4.add("p", "x")
+    s4.update(dead.id, status=J.INTERRUPTED)
+    seen = []
+    sch4 = J.Scheduler(s4, {"x": lambda job: seen.append(job.id)},
+                       max_concurrent=1, resume=True, poll=0.05)
+    wait_until(lambda: s4.get(dead.id).status == J.DONE)
+    check("an interrupted job auto-resumes on start", seen, [dead.id])
+    sch4.stop()
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
