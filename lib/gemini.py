@@ -409,6 +409,14 @@ PLAN_SCHEMA = {
                  "thumbnail_line2"],
 }
 
+# The canonical topics live in lib/sources (single source of truth). The model
+# buckets every scene into one of them, which is how routing scales to ANY
+# subject without a fixed word list — it understands "beekeeping" or "Byzantine
+# iconography" even though those exact words are in no vocabulary. "" is allowed
+# when nothing fits, and sourcing then falls back to word-matching + stock.
+from . import sources as _sources                                  # noqa: E402
+CANON_TOPICS = list(_sources.CANON_TOPICS)
+
 SCENES_SCHEMA = {
     "type": "object",
     "properties": {"scenes": {"type": "array", "items": {"type": "object",
@@ -417,13 +425,14 @@ SCENES_SCHEMA = {
             "media": {"type": "string", "enum": ["IMAGE", "VIDEO"]},
             "query": {"type": "string"},
             "domain": {"type": "string"},
+            "topic": {"type": "string", "enum": [""] + CANON_TOPICS},
             "fallback_query": {"type": "string"},
             "safety_query": {"type": "string"},
             "note": {"type": "string"},
             "hero": {"type": "boolean"},
         },
-        "required": ["narration", "media", "domain", "query", "fallback_query",
-                     "safety_query", "note", "hero"]}}},
+        "required": ["narration", "media", "domain", "topic", "query",
+                     "fallback_query", "safety_query", "note", "hero"]}}},
     "required": ["scenes"],
 }
 
@@ -725,6 +734,7 @@ def scenes_for_section(section: str, ctx: dict, key: str, model: str,
         if feedback else ""
     recurring = "\n".join(f"- {r['name']}: {r['look']}"
                           for r in ctx.get("recurring", [])) or "- (none)"
+    topics = ", ".join(CANON_TOPICS)
     p = f"""Split the following SECTION of a video script into scenes.
 
 VIDEO: {ctx.get('title_en', '')}
@@ -732,6 +742,16 @@ VISUAL STYLE: {ctx.get('visual_style', '')}
 RECURRING PEOPLE (cast them consistently):
 {recurring}
 {SPLIT_RULES}{extra}
+
+CANONICAL TOPIC (`topic` field)
+Set `topic` for each scene to the ONE canonical topic that best fits what its
+PICTURE shows, chosen from EXACTLY this list (or "" if truly none fit):
+  {topics}
+This routes the scene to the right picture library, so judge it by the IMAGE,
+not the overall video: a modern hospital scene is `medicine`; a Victorian
+surgical kit is `history`; a rocket launch is `space`; an older couple at home
+is `people`. Any subject on Earth fits one of these — pick the closest single
+one. `domain` stays your free-text description; `topic` is the bucket.
 
 SECTION TO SPLIT (reproduce every word exactly, in order):
 {section}"""

@@ -94,6 +94,20 @@ def main() -> int:
     check("sheet is a full path", Path(projs[0]["sheet"]).is_absolute())
     check("languages are en + de", [l["code"] for l in projs[0]["languages"]], ["en", "de"])
 
+    print("\n  the canonical topic round-trips through the sheet:")
+    import lib.sheet as sheetlib
+    sc = [compose.Scene(n=1, narration="A rocket lifts off.", media="VIDEO",
+                        query="rocket launch", domain="spaceflight", topic="space"),
+          compose.Scene(n=2, narration="An old loom in a museum.", media="IMAGE",
+                        query="antique loom", domain="craft", topic="culture")]
+    md = compose.render_main_script({"title_en": "T"}, sc, "vid", "en")
+    check("renderer writes a Topic line", "- Topic: space" in md)
+    rt = tmp / "rt_main_script.md"
+    rt.write_text(md, encoding="utf-8")
+    parsed = sheetlib.parse_main_script(rt)
+    check("topic parses back on scene 1", parsed[0].topic, "space")
+    check("topic parses back on scene 2", parsed[1].topic, "culture")
+
     # -- migration of a legacy flat project ----------------------------------
     print("\n  migrate a legacy FLAT project (pid has an underscore):")
     tmp2 = Path(tempfile.mkdtemp())

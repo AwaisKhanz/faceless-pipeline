@@ -221,6 +221,27 @@ def main() -> int:
     bad += not bare
     print(f"    {'ok' if bare else '!!'}  {sorted(bare)}")
 
+    print("\n  a model topic routes ANY subject, even one the words miss:")
+    full = {"nasa", "smithsonian", "openverse", "loc", "wikimedia",
+            "pexels", "pixabay"}
+    # 'quilting' is deliberately in no topic word-list, so words alone can only
+    # fall to stock. The model's canonical topic is what makes it scale.
+    words_only = S.route("quilting", "IMAGE", full, "quilting")
+    with_topic = S.route("quilting", "IMAGE", full, "quilting", topic="culture")
+    bad += not (words_only == ["pexels", "pixabay", "openverse"])
+    print(f"    {'ok' if words_only == ['pexels','pixabay','openverse'] else '!!'}"
+          f"  unknown word -> stock only: {words_only}")
+    reached = "smithsonian" in with_topic and "pexels" not in with_topic[:1]
+    bad += not reached
+    print(f"    {'ok' if reached else '!!'}  + topic 'culture' -> archives: {with_topic}")
+    # A bogus topic must never route worse than the words alone.
+    bogus = S.route("quilting", "IMAGE", full, "quilting", topic="not_a_topic")
+    bad += not (bogus == words_only)
+    print(f"    {'ok' if bogus == words_only else '!!'}  a bogus topic is ignored (== words)")
+    bad += not (len(S.CANON_TOPICS) == len(S.TOPICS))
+    print(f"    {'ok' if len(S.CANON_TOPICS) == len(S.TOPICS) else '!!'}  "
+          f"CANON_TOPICS mirrors TOPICS ({len(S.CANON_TOPICS)})")
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

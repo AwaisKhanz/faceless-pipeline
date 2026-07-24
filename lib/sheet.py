@@ -17,6 +17,10 @@ class Scene:
     # Which library to ask. The sources barely overlap (see lib/sources.py),
     # so this is a routing decision, not a preference.
     domain: str = ""
+    # Canonical topic (one of sources.CANON_TOPICS) — the model's subject bucket,
+    # which routing prefers over word-matching so any subject reaches the right
+    # archive. "" for older sheets, which then route by word-matching as before.
+    topic: str = ""
     en_narration: str = ""
     note: str = ""        # e.g. "title card", "Arthur intro"
     hero: bool = False    # flagged recurring-character / title-card scene
@@ -34,6 +38,9 @@ ALT_LOOSE_RE = re.compile(r"^-\s*ALT\s*/\s*search:\s*(.+?)\s*$")
 # must keep parsing exactly as they did.
 FALLBACK_RE = re.compile(r"^-\s*Fallbacks?:\s*(.+?)\s*$")
 DOMAIN_RE = re.compile(r"^-\s*Domain:\s*([a-z]+)\s*$", re.I)
+# Optional canonical topic line (newer sheets). Older sheets have none, and must
+# keep parsing exactly as before, so this is treated as optional everywhere.
+TOPIC_RE = re.compile(r"^-\s*Topic:\s*([a-z]+)\s*$", re.I)
 
 # **S31** · EN: "..."   then next line   DE: "..."  / ES: "..."
 TR_KEY_RE = re.compile(r'^\*\*S(\d+)\*\*\s*·\s*EN:\s*"(.*)"\s*$')
@@ -58,7 +65,7 @@ def parse_main_script(path: Path) -> list[Scene]:
             cur = {"n": int(m.group(1)), "media": m.group(2),
                    "note": tail.replace("⚑", "").replace("*", "").strip(),
                    "narration": "", "query": "", "fallbacks": [],
-                   "domain": ""}
+                   "domain": "", "topic": ""}
             continue
         if cur is None:
             continue
@@ -73,6 +80,10 @@ def parse_main_script(path: Path) -> list[Scene]:
         m = DOMAIN_RE.match(line)
         if m:
             cur["domain"] = m.group(1).strip().lower()
+            continue
+        m = TOPIC_RE.match(line)
+        if m:
+            cur["topic"] = m.group(1).strip().lower()
             continue
         m = FALLBACK_RE.match(line)
         if m:
@@ -98,7 +109,7 @@ def _finish(d: dict) -> Scene:
     hero = any(h.lower() in note.lower() for h in HERO_HINTS)
     return Scene(n=d["n"], media=d["media"], narration=d["narration"],
                  query=d["query"], fallbacks=d.get("fallbacks") or [],
-                 domain=d.get("domain") or "",
+                 domain=d.get("domain") or "", topic=d.get("topic") or "",
                  en_narration=d["narration"], note=note, hero=hero)
 
 

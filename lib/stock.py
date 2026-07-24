@@ -476,9 +476,11 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         base = picks.get(s.n, 0)
         ladder = [q for q in [s.query, *getattr(s, "fallbacks", [])] if q]
         # The query text is as strong a signal as the tag: "roman aqueduct"
-        # says historical whatever the scene was labelled.
+        # says historical whatever the scene was labelled. `topic` is the model's
+        # canonical bucket, which routes any subject even when its words are not
+        # in the vocabulary.
         route = _SRC.route(getattr(s, "domain", ""), s.media, have,
-                           query=" ".join(ladder))
+                           query=" ".join(ladder), topic=getattr(s, "topic", ""))
         got = None
         got_rel = -1.0
         notes: list[str] = []

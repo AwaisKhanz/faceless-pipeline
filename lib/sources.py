@@ -844,6 +844,17 @@ for _topic, _words in TOPICS.items():
     for _w in _words:
         _WORD2TOPIC[_w] = _WORD2TOPIC.get(_w, frozenset()) | {_topic}
 
+# The closed set of canonical topics, for anything that needs to name one from
+# outside — e.g. the scene generator asks the model to bucket each scene into one
+# of these. Kept here because TOPICS is the single source of truth: add a topic
+# and it is offered automatically, with no second list to keep in sync.
+CANON_TOPICS: tuple = tuple(sorted(TOPICS))
+
+
+def is_topic(name: str) -> bool:
+    """Whether `name` is one of the canonical topics (used to validate a model tag)."""
+    return name in TOPICS
+
 
 def topics_in(*texts: str) -> set:
     """Canonical topics mentioned anywhere in the given text.
@@ -962,12 +973,21 @@ ARCHIVE_FIRST = frozenset({"space", "history", "art", "science", "geology",
 MAX_SOURCES = 4
 
 
-def route(domain: str, media: str, available: set, query: str = "") -> list[str]:
+def route(domain: str, media: str, available: set, query: str = "",
+          topic: str = "") -> list[str]:
     """Which sources to ask for this scene, best first.
 
     `available` is the set usable right now, so a source whose key is missing
     is simply not offered and a half-configured install degrades to "fewer
     places to look" rather than an error.
+
+    `topic` is an OPTIONAL canonical topic (one of CANON_TOPICS) — normally the
+    label the scene generator's model assigned. It is how routing scales beyond
+    the fixed word list: the model can bucket ANY subject on Earth into a known
+    topic even when the exact word is not in the vocabulary. It is unioned with
+    the words found in the domain/query, so it only ever ADDS a signal — a wrong
+    or empty tag can never route worse than the words alone. The function stays
+    pure and offline: no model is called here; the topic is passed in.
 
     Subject match dominates: every reliability bonus is smaller than one topic
     of overlap, so a source that holds the material always beats a source that
@@ -977,6 +997,8 @@ def route(domain: str, media: str, available: set, query: str = "") -> list[str]
     Europeana led every historical scene for no better reason than the letter E.
     """
     found = topics_in(domain, query)
+    if topic in TOPICS:                        # a valid model tag adds its topic
+        found = found | {topic}
 
     scored: list[tuple] = []
     for name in available:
@@ -1033,10 +1055,13 @@ def route(domain: str, media: str, available: set, query: str = "") -> list[str]
     return [n for _, n in scored[:MAX_SOURCES]]
 
 
-def explain(domain: str, media: str, available: set, query: str = "") -> str:
+def explain(domain: str, media: str, available: set, query: str = "",
+            topic: str = "") -> str:
     """Human-readable reason for a route, for `faceless sources` and debugging."""
     found = topics_in(domain, query)
-    r = route(domain, media, available, query)
+    if topic in TOPICS:
+        found = found | {topic}
+    r = route(domain, media, available, query, topic)
     topic_s = ", ".join(sorted(found)) or "no recognised topic"
     return f"{topic_s} -> {r}"
 

@@ -38,6 +38,10 @@ class Scene:
     # Defaulted, so an old caller that omits them still works.
     domain: str = ""
     fallbacks: list[str] = field(default_factory=list)
+    # Canonical topic (one of sources.CANON_TOPICS), the model's bucket for this
+    # scene. Routing prefers it over word-matching, which is what lets any subject
+    # reach the right archive. "" for old sheets → routing falls back to words.
+    topic: str = ""
 
 
 @dataclass
@@ -95,6 +99,8 @@ def render_main_script(plan: dict, scenes: list[Scene], pid: str, lang: str = "e
         add(f"- ALT / search: `{s.query.strip().strip('`')}`")
         if getattr(s, "domain", ""):
             add(f"- Domain: {s.domain}")
+        if getattr(s, "topic", ""):
+            add(f"- Topic: {s.topic}")
         fb = [q.strip().strip('`') for q in getattr(s, "fallbacks", []) if q.strip()]
         if fb:
             # Its own line so sheets from before the ladder existed stay valid —
@@ -238,6 +244,7 @@ def split_into_scenes(script: str, plan: dict, key: str, model: str,
                     media=(s.get("media") or "IMAGE").upper(),
                     query=(s.get("query") or "").strip(),
                     domain=(s.get("domain") or "").strip().lower(),
+                    topic=(s.get("topic") or "").strip().lower(),
                     fallbacks=[q for q in ((s.get("fallback_query") or "").strip(),
                                            (s.get("safety_query") or "").strip())
                                if q],
