@@ -782,6 +782,50 @@ def internet_archive(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     return out
 
 
+# ──────────────────────────────────── The Met (Open Access, no key needed)
+# The Metropolitan Museum of Art. Two requests per result: a search returns a
+# list of objectIDs by relevance, then each object is fetched for its image and
+# rights. Public-domain objects are CC0, so they pass the strict licence gate
+# untouched; the per-object isPublicDomain flag is checked rather than trusting
+# the collection-level promise. The API is keyless and reports no dimensions, so
+# size is judged after download, exactly like NASA and Smithsonian.
+
+_MET = "https://collectionapi.metmuseum.org/public/collection/v1"
+
+
+def met(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media == "VIDEO":
+        raise SourceError("The Met is a still-image collection, not video")
+
+    qs = urllib.parse.urlencode({"q": query, "hasImages": "true"})
+    data = _json(f"{_MET}/search?{qs}")
+    ids = data.get("objectIDs") or []
+    out: list[Hit] = []
+
+    # Each object is a separate request, so cap how deep we walk — enough to fill
+    # `want` after the public-domain and image filters, not the whole result set.
+    for oid in ids[: max(want * 2, 12)]:
+        try:
+            obj = _json(f"{_MET}/objects/{oid}")
+        except SourceError:
+            continue                       # a broken record, not a dead source
+        if not _accept_any and not obj.get("isPublicDomain"):
+            continue                       # keep CC0 only unless the gate is open
+        # web-large is the sane ~2000px rendition; the original can be 30 MB+.
+        url = obj.get("primaryImageSmall") or obj.get("primaryImage") or ""
+        if not url:
+            continue
+        pd = obj.get("isPublicDomain")
+        out.append(Hit(
+            url=_https(url), ext=_ext(url), src="met",
+            credit=obj.get("artistDisplayName") or "The Met",
+            page=obj.get("objectURL") or "",
+            license="CC0" if pd else "The Met"))
+        if len(out) >= want:
+            break
+    return out
+
+
 # ─────────────────────────────────────────────── registry
 
 # ══════════════════════════════════════════════ topics, coverage, routing
@@ -983,6 +1027,15 @@ REGISTRY: dict[str, Source] = {
         # with no configuration; a free key just raises the ceiling.
         reliability=1.6, probe="butterfly specimen",
         note="objects, specimens, artefacts, artworks. All CC0."),
+
+    "met": Source(
+        "met", met, media=("IMAGE",),
+        covers=frozenset({"art", "history", "culture"}),
+        # Keyless and high-resolution, but two requests per result and mostly
+        # paintings/sculpture (often portrait), so it earns a place on art and
+        # history scenes without leading them outright.
+        reliability=1.5, probe="marble statue",
+        note="The Metropolitan Museum of Art Open Access. CC0, no key."),
 
     "openverse": Source(
         "openverse", openverse, media=("IMAGE",),
@@ -1250,6 +1303,9 @@ def diagnose(name: str, cfg: dict | None = None) -> list[tuple]:
                         "?q=butterfly&rows=1&api_key=DEMO_KEY"),
         "openverse": ("https://api.openverse.org/",
                       "https://api.openverse.org/v1/images/?q=test&page_size=1"),
+        "met": ("https://collectionapi.metmuseum.org/",
+                "https://collectionapi.metmuseum.org/public/collection/v1/"
+                "search?q=cat&hasImages=true"),
         "wikimedia": ("https://commons.wikimedia.org/",
                       "https://commons.wikimedia.org/w/api.php"
                       "?action=query&format=json&titles=File:Example.jpg&prop=imageinfo"),

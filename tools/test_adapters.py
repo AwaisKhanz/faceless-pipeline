@@ -251,6 +251,55 @@ def main() -> int:
         S.urllib.request.urlopen = orig_urlopen
         S._OV_TOKEN.clear()
 
+    print("\n  The Met: search → per-object, CC0 gate, web-large rendition:")
+    MET_SEARCH = {"total": 4, "objectIDs": [11, 12, 13, 14]}
+    MET_OBJECTS = {
+        11: {"isPublicDomain": True,
+             "primaryImageSmall": "https://images.metmuseum.org/web-large/a.jpg",
+             "primaryImage": "https://images.metmuseum.org/original/a.jpg",
+             "artistDisplayName": "Vincent van Gogh",
+             "objectURL": "https://www.metmuseum.org/art/collection/search/11"},
+        12: {"isPublicDomain": False,          # copyrighted → dropped under strict
+             "primaryImageSmall": "https://images.metmuseum.org/web-large/b.jpg",
+             "artistDisplayName": "A Living Artist", "objectURL": "u12"},
+        13: {"isPublicDomain": True,           # public domain but no image → drop
+             "primaryImageSmall": "", "primaryImage": "",
+             "artistDisplayName": "Anon", "objectURL": "u13"},
+        14: {"isPublicDomain": True,           # empty artist → credited "The Met"
+             "primaryImageSmall": "https://images.metmuseum.org/web-large/d.jpg",
+             "artistDisplayName": "", "objectURL": "u14"},
+    }
+
+    def met_feed():
+        def mj(url, headers=None):
+            if "/search?" in url:
+                return MET_SEARCH
+            return MET_OBJECTS[int(url.rsplit("/", 1)[-1])]
+        S._json = mj
+
+    S.configure({})                              # strict: CC0 only
+    met_feed()
+    hits = S.met("statue", "IMAGE", 5, {})
+    check("kept only the two public-domain works with an image", len(hits), 2)
+    if len(hits) == 2:
+        check("takes the web-large rendition, not the huge original",
+              hits[0].url, "https://images.metmuseum.org/web-large/a.jpg")
+        check("public-domain work is labelled CC0", hits[0].license, "CC0")
+        check("artist becomes the credit", hits[0].credit, "Vincent van Gogh")
+        check("a missing artist falls back to 'The Met'", hits[1].credit, "The Met")
+    check("source tag is 'met'", hits[0].src if hits else "", "met")
+
+    S.configure({"image_licenses": "all"})       # gate open: keep the non-PD one too
+    met_feed()
+    check("image_licenses='all' also keeps the copyrighted work",
+          len(S.met("statue", "IMAGE", 5, {})), 3)
+    S.configure({})
+    try:
+        S.met("x", "VIDEO", 3, {})
+        check("The Met refuses VIDEO", False, True)
+    except S.SourceError:
+        check("The Met refuses VIDEO (stills only)", True, True)
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
