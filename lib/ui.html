@@ -1185,6 +1185,7 @@ function viewNew() {
     onChange: chosen => { sel.clear(); chosen.forEach(c => sel.add(c)); paint(); }
   });
 
+  const autoBox = el('input', { type: 'checkbox' });
   v.append(el('div', { class: 'card' },
     el('div', { class: 'grid2' },
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
@@ -1192,7 +1193,11 @@ function viewNew() {
         picker.root)),
     el('div', { class: 'hr' }),
     scriptsWrap,
-    el('div', { class: 'row', style: 'margin-top:8px' },
+    el('label', { class: 'chk', style: 'margin-top:4px' }, autoBox,
+      el('span', {}, el('b', {}, 'Auto-process'),
+        ' — after the script, automatically find visuals and build the video, '
+        + 'no stops. Leave off to review the pictures before rendering.')),
+    el('div', { class: 'row', style: 'margin-top:12px' },
       el('button', {
         class: 'btn primary', onclick: async e => {
           if (!id.value.trim()) return toast('Give it a name first.', true);
@@ -1204,8 +1209,9 @@ function viewNew() {
           if (!Object.keys(scripts).length)
             return toast('Pick a language and paste its script first.', true);
           e.target.disabled = true;
-          const r = await api('/api/generate', { id: id.value.trim(), scripts });
-          if (r.started) go('/activity'); else e.target.disabled = false;
+          const auto = autoBox.checked;
+          const r = await api('/api/generate', { id: id.value.trim(), scripts, auto });
+          if (r.started) go(auto ? '/queue' : '/activity'); else e.target.disabled = false;
         }
       }, 'Generate the sheets'),
       el('span', { class: 'sub' },

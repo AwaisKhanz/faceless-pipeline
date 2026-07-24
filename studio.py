@@ -1156,7 +1156,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "Paste a script for at least one language."}, 400)
             pid = b.get("id") or "video"
             job = enqueue(pid, "generate", {"scripts": scripts, "pid": pid,
-                                            "overwrite": bool(b.get("overwrite"))})
+                                            "overwrite": bool(b.get("overwrite"))},
+                          auto=bool(b.get("auto")))
             return self._json({"started": True, "job": job.id})
 
         if path == "/api/add_language":
@@ -1461,6 +1462,30 @@ def _resolve_concurrency(cfg: dict) -> int:
     return _auto_concurrency()
 
 
+# The hands-off pipeline: when a project is created with Auto-process on, each
+# stage enqueues the next as it finishes, so a fresh script turns into a finished
+# video with no clicks in between (option: review is skipped). The chain stops on
+# error or a manual Stop — never runs past a stage that didn't truly succeed.
+AUTO_CHAIN = {"generate": "source", "source": "run"}
+
+
+def _auto_next(job) -> None:
+    """Scheduler on_done hook: queue the next auto stage for this project."""
+    # A stopped run reports 'done' (its partial work is kept) but carries the
+    # cancel flag — never chain past a Stop, and never past an error.
+    if not job.auto or job.cancel or job.error or SCHED is None:
+        return
+    nxt = AUTO_CHAIN.get(job.kind)
+    if nxt == "source":
+        SCHED.enqueue(job.project, "source", {"pid": job.project, "redo": None},
+                      auto=True)
+    elif nxt == "run":
+        SCHED.enqueue(job.project, "run",
+                      {"pid": job.project, "langs": [], "steps": ["voice", "render"],
+                       "captions": True, "music": None, "zoom": True, "voices": {},
+                       "force": False, "master": True}, auto=True)
+
+
 def _start_scheduler() -> None:
     """Load any saved queue and start running it, with resource-aware concurrency.
     A job left mid-run by a crashed server was reloaded as INTERRUPTED and is
@@ -1481,7 +1506,8 @@ def _start_scheduler() -> None:
         return True
 
     STORE.load()
-    SCHED = jobs.Scheduler(STORE, RUN_MAP, max_concurrent=cap, resume=True, gate=gate)
+    SCHED = jobs.Scheduler(STORE, RUN_MAP, max_concurrent=cap, resume=True,
+                           gate=gate, on_done=_auto_next)
     print(f"  Queue ready — up to {cap} job(s) at once "
           f"(one GPU-heavy step at a time).")
 

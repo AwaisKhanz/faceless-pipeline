@@ -207,6 +207,51 @@ def main() -> int:
     check("an interrupted job auto-resumes on start", seen, [dead.id])
     sch4.stop()
 
+    # on_done: fires on DONE only, and can chain the next job (auto-pipeline).
+    print("\n  on_done hook (auto-pipeline chaining):")
+    s6 = J.JobStore(tmp / "s6.json", save_every=0)
+    fired = []
+
+    def outcome(job):
+        if job.kind == "err":
+            raise RuntimeError("nope")
+        if job.kind == "cancelme":
+            for _ in range(50):
+                if job.cancel:
+                    return
+                time.sleep(0.02)
+
+    sch6 = None
+
+    def chain(job):
+        fired.append((job.kind, job.status))
+        if job.kind == "a":                      # a DONE 'a' queues a 'b'
+            sch6.enqueue(job.project, "b")
+    sch6 = J.Scheduler(s6, {"a": outcome, "b": outcome, "err": outcome,
+                            "cancelme": outcome}, max_concurrent=1, poll=0.05,
+                       on_done=chain)
+    sch6.enqueue("p", "a")
+    wait_until(lambda: any(j.kind == "b" and j.status == J.DONE for j in s6.jobs()))
+    check("a successful job's on_done queued the next stage",
+          any(j.kind == "b" for j in s6.jobs()), True)
+    check("on_done saw the finished job as DONE",
+          ("a", J.DONE) in fired, True)
+
+    e = sch6.enqueue("p", "err")
+    wait_until(lambda: s6.get(e.id).status == J.ERROR)
+    check("on_done does NOT fire for a failed job",
+          all(k != "err" for k, _ in fired), True)
+
+    c = sch6.enqueue("p", "cancelme")
+    wait_until(lambda: s6.get(c.id).status == J.RUNNING)
+    sch6.cancel(c.id)
+    wait_until(lambda: s6.get(c.id).status in J.TERMINAL)
+    # a cancelled worker that returns cleanly is DONE but carries cancel=True;
+    # on_done fires, but the studio's chain checks that flag and stops.
+    check("a cancelled job keeps its cancel flag for the hook to see",
+          s6.get(c.id).cancel, True)
+    sch6.stop()
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

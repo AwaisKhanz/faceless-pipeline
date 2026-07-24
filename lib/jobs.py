@@ -233,7 +233,7 @@ class Scheduler:
     """
 
     def __init__(self, store: JobStore, run_map: dict, max_concurrent: int = 1,
-                 resume: bool = True, poll: float = 0.5, gate=None):
+                 resume: bool = True, poll: float = 0.5, gate=None, on_done=None):
         self.store = store
         self.run_map = run_map
         self.max_concurrent = max(1, int(max_concurrent))
@@ -241,6 +241,10 @@ class Scheduler:
         # running? Lets the studio keep two GPU-heavy jobs from overlapping while
         # still letting a network-bound job run alongside one. None = no gate.
         self.gate = gate
+        # on_done(job): called once, after a job finishes successfully (DONE only —
+        # never on error/cancel). The studio uses it to chain the next stage of an
+        # auto-pipeline. Failures in the hook never affect the queue.
+        self.on_done = on_done
         self._poll = poll
         self._threads: "dict[str, threading.Thread]" = {}
         self._lock = threading.Lock()
@@ -335,4 +339,10 @@ class Scheduler:
                 # unless it was asked to cancel.
                 self.store.update(
                     jid, status=(CANCELED if cur.cancel else DONE), force_save=True)
+            final = self.store.get(jid)
+            if final is not None and final.status == DONE and self.on_done:
+                try:
+                    self.on_done(final)          # chain the next auto stage, maybe
+                except Exception:
+                    pass                         # a hook must never wedge the queue
             self._wake.set()                     # a slot freed — try the next
