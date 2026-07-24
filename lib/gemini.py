@@ -752,15 +752,28 @@ def scenes_for_section(section: str, ctx: dict, key: str, model: str,
     # person, so the picture is actually them (from photo archives).
     if ctx.get("name_people"):
         people_rule = """
-NAMED PEOPLE — THIS VIDEO IS ABOUT REAL PEOPLE
-When a scene is about a specific, real, named person, PUT THEIR NAME in the
-search query — that is the whole point of the video. Add a concrete setting or
-action so it is still a findable photo:
-  "Elon Musk speaking at a conference"   NOT  "a successful entrepreneur"
-  "Imran Khan addressing a crowd"        NOT  "a politician giving a speech"
-Use the person's full, correct name. Only fall back to a generic description for
-scenes that are NOT about a specific person (an abstract idea, a place, a thing).
-The fallback/safety queries may stay generic so an empty result is impossible."""
+NAMED PEOPLE — THIS VIDEO IS ABOUT A REAL PERSON, SO FEATURE THEM
+This is a biography / feature about a real named person. The viewer wants to SEE
+that person — do NOT illustrate the whole video with generic b-roll.
+
+  FEATURE THE PERSON in MOST scenes. Whenever a scene is about them, their life,
+  role, company or achievement, PUT THEIR NAME in the query with a light context:
+    "Elon Musk speaking at a conference"     NOT  "a successful entrepreneur"
+    "Elon Musk at a Tesla car"               NOT  "a modern electric car"
+    "Elon Musk at a rocket launch"           NOT  "a rocket on a launchpad"
+    "Imran Khan addressing a crowd"          NOT  "a politician giving a speech"
+  Keep it FINDABLE: the person's full name + ONE simple context word. Not a
+  complex staged scene.
+
+  ALWAYS make the FIRST fallback a plain photo of the person — e.g.
+  "Elon Musk portrait" — so even if the specific shot is missing you still get
+  THEM, never a stranger.
+
+  Use pure topical b-roll with NO person (a rocket, a car, a server room) ONLY
+  for a beat that is genuinely not about the person — a pure abstract idea or an
+  establishing place. Prefer the person otherwise.
+
+Use the person's full, correct name every time."""
     else:
         people_rule = """
 NAMED PEOPLE

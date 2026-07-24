@@ -513,6 +513,12 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     # would miss. More requests per scene, so it is opt-in.
     all_sources = str(cfg.get("search_all_sources", "")).strip().lower() \
         in ("1", "true", "yes", "on", "all")
+    # Biography mode: for a scene that shows a PERSON, stock has no real named
+    # people, yet a crisp generic stock photo can out-score the actual (often
+    # lower-res) archive shot. So skip stock on people scenes and let the archives
+    # — which DO hold the person — win. Stock still rescues an empty scene below.
+    name_people = str(cfg.get("name_real_people", "")).strip().lower() \
+        in ("1", "true", "yes", "on")
 
     for i, s in enumerate(scenes):
         if on_progress:
@@ -526,6 +532,12 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         route = _SRC.route(getattr(s, "domain", ""), s.media, have,
                            query=" ".join(ladder), topic=getattr(s, "topic", ""),
                            all_sources=all_sources)
+        # Biography mode + a people scene: drop stock so the real person (from the
+        # archives) wins over a generic stock look-alike. Only if archives remain.
+        if name_people and getattr(s, "topic", "") == "people" and s.media == "IMAGE":
+            archives_only = [r for r in route if r not in ("pexels", "pixabay")]
+            if archives_only:
+                route = archives_only
         got = None
         got_rel = -1.0
         notes: list[str] = []

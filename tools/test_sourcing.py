@@ -194,6 +194,31 @@ def main() -> int:
     j3s = "\n".join(j3)
     check("source_log 'full' lists every candidate", "all:" in j3s and "more)" not in j3s)
 
+    # ── biography mode drops stock on people scenes ─────────────────────────
+    print("\n  biography mode drops stock on people scenes (real person wins):")
+    seen = {}
+
+    def cap_fetch(query, media, cache, pk, xk, index, sources=None, cfg=None):
+        seen["s"] = list(sources or [])
+        return {"path": f"/z/{index}", "src": (sources or ["x"])[0], "query": query,
+                "media": media, "score": None, "credit": "", "page": "", "license": ""}
+    stock.fetch = cap_fetch
+    stock.vision.get_scorer = lambda cfg, log=None: None      # scoring off: first match wins
+    stock._SRC.usable = lambda cfg: {"pexels", "pixabay", "openverse", "wikimedia"}
+    stock._SRC.route = lambda *a, **k: ["pexels", "pixabay", "openverse", "wikimedia"]
+    stock._SRC.down_sources = lambda: []
+    ppl = SimpleNamespace(n=1, media="IMAGE", query="Elon Musk speaking",
+                          fallbacks=[], domain="biography", topic="people")
+    stock.fetch_all([ppl], Path(tempfile.mkdtemp()), "PK", "XK",
+                    cfg={"name_real_people": True}, log=lambda *_: None)
+    check("stock dropped for a people scene in biography mode",
+          [s for s in seen["s"] if s in ("pexels", "pixabay")], [])
+    check("archives kept", "openverse" in seen["s"] and "wikimedia" in seen["s"])
+    seen.clear()
+    stock.fetch_all([ppl], Path(tempfile.mkdtemp()), "PK", "XK",
+                    cfg={}, log=lambda *_: None)
+    check("stock kept when biography mode is off", "pexels" in seen["s"])
+
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")
     check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 6)
