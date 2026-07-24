@@ -813,12 +813,25 @@ CANONICAL TOPIC (`topic` field)
 Set `topic` for each scene to the ONE canonical topic that best fits what its
 PICTURE shows, chosen from EXACTLY this list:
   {topics}
-This routes the scene to the right picture library, so judge it by the IMAGE,
-not the overall video: a modern hospital scene is `medicine`; a Victorian
-surgical kit is `history`; a rocket launch is `space`; an older couple at home
-is `people`. Any subject on Earth fits one of these, so ALWAYS pick the closest
-single one — never leave it blank. `domain` stays your free-text description;
-`topic` is the bucket.
+Judge it by the IMAGE, not the overall video: a modern hospital scene is
+`medicine`; a Victorian surgical kit is `history`; a rocket launch is `space`.
+
+Use `people` ONLY when a PERSON is the real subject of the shot — a portrait, a
+face, a close or medium shot where the person is what the picture is ABOUT. When
+people are merely present in a place, landscape or activity, tag the PLACE or
+ACTIVITY, not `people`:
+  farmers in a wide field by a river  -> nature    (the field/river is the shot)
+  a busy market street                -> culture   (the street is the shot)
+  a surgeon mid-operation             -> medicine  (the operation is the shot)
+  workers on a factory floor          -> tech      (the factory is the shot)
+  an older couple close at home       -> people    (the couple IS the shot)
+This matters: `people` routes to libraries of individual people and, in
+biography mode, is treated as the video's NAMED subject — so a wide landscape
+tagged `people` gets handled as if it were one specific person, which it is not.
+
+Any subject on Earth fits one of these, so ALWAYS pick the closest single one —
+never leave it blank. `domain` stays your free-text description; `topic` is the
+bucket.
 
 SECTION TO SPLIT (reproduce every word exactly, in order):
 {section}"""
