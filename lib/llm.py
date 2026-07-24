@@ -120,6 +120,29 @@ def available(cfg: dict | None) -> bool:
     return bool(_s(cfg, "gemini_key"))
 
 
+def vertex_ready(cfg: dict | None) -> bool:
+    """Whether Vertex image/video GENERATION can actually run — a fast, offline
+    check (no token minted, no network). This is INDEPENDENT of the `llm` setting:
+    generation uses the Vertex credentials directly, so it works even when the
+    language model is Gemini, Ollama, etc. True only when a project is set, the
+    service-account file exists if one is named (an empty path means Application
+    Default Credentials, which cannot be verified cheaply, so it is allowed), and
+    google-auth is importable. The UI shows generation options ONLY when this is
+    true, so it never offers something that would then fail.
+    """
+    cfg = cfg or {}
+    if not _s(cfg, "vertex_project"):
+        return False
+    sa = _s(cfg, "vertex_service_account")
+    if sa and not os.path.exists(sa):
+        return False
+    try:
+        import google.auth  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def key_for(cfg: dict | None) -> str:
     """The credential to pass down. Empty for Ollama (local) and for Vertex when
     it uses Application Default Credentials; otherwise the API key, or — for

@@ -43,11 +43,11 @@ class GenError(RuntimeError):
 
 
 def available(cfg: dict | None) -> bool:
-    """Can we generate at all? True when a Vertex project is configured. The
-    service-account file and google-auth are checked at call time, so a
-    half-configured setup degrades to 'search only' rather than erroring."""
-    cfg = cfg or {}
-    return bool(cfg.get("vertex_project"))
+    """Can we generate at all? True only when Vertex is genuinely ready — a
+    project, the service-account file if one is named, and google-auth installed.
+    So the UI never offers generation that would then fail, and sourcing degrades
+    to 'search only' when it is not set up."""
+    return llm.vertex_ready(cfg)
 
 
 def prompt_for(query: str, cfg: dict | None = None) -> str:

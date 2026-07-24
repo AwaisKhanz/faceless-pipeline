@@ -24,6 +24,9 @@ def main() -> int:
             bad += 1
 
     print("Veo video generation\n")
+    # available() delegates to llm.vertex_ready; stub it so this suite tests the
+    # delegation, not whether google-auth happens to be installed here.
+    llm.vertex_ready = lambda cfg: bool((cfg or {}).get("vertex_project"))
     check("no project -> unavailable", veo.available({}), False)
     check("a project -> available", veo.available({"vertex_project": "p"}), True)
     p = veo.prompt_for("a rocket launch", {})

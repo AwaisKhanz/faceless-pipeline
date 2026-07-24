@@ -38,10 +38,10 @@ DEFAULT_STYLE = "cinematic documentary footage, natural light, gentle camera mot
 
 
 def available(cfg: dict | None) -> bool:
-    """Can we generate video? True when a Vertex project is configured (the same
-    setup Imagen and the LLM use). Credentials are checked at call time."""
-    cfg = cfg or {}
-    return bool(cfg.get("vertex_project"))
+    """Can we generate video? True only when Vertex is genuinely ready (project +
+    service-account file if named + google-auth), the same check Imagen uses — so
+    the review page offers 'Generate video' ONLY when it will actually work."""
+    return llm.vertex_ready(cfg)
 
 
 def prompt_for(query: str, cfg: dict | None = None) -> str:

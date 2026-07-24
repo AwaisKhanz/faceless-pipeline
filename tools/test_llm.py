@@ -10,6 +10,7 @@ request shape + JSON parse, and the capability reporting.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -261,6 +262,24 @@ def main() -> int:
     check("```json fenced", LLM._json_loads('```json\n{"a": 1}\n```'), {"a": 1})
     check("prose then object",
           LLM._json_loads('Sure! Here you go:\n{"a": [1, 2]}'), {"a": [1, 2]})
+
+    print("\n  vertex_ready gates generation on real config (not the llm choice):")
+    check("no project -> not ready", LLM.vertex_ready({}), False)
+    check("project but a named service-account file that is missing -> not ready",
+          LLM.vertex_ready({"vertex_project": "p",
+                            "vertex_service_account": "/no/such/file.json"}), False)
+    # Make google-auth importable so the ready path can be exercised here.
+    import types as _t
+    sys.modules.setdefault("google", _t.ModuleType("google"))
+    sys.modules["google.auth"] = _t.ModuleType("google.auth")
+    check("project + ADC (empty SA) + google-auth -> ready",
+          LLM.vertex_ready({"vertex_project": "p"}), True)
+    import tempfile as _tf
+    sa = _tf.mktemp(suffix=".json")
+    open(sa, "w").write("{}")
+    check("project + an existing service-account file -> ready",
+          LLM.vertex_ready({"vertex_project": "p", "vertex_service_account": sa}), True)
+    os.remove(sa)
 
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0

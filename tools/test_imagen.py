@@ -22,6 +22,9 @@ def main() -> int:
             bad += 1
 
     print("Imagen generation\n")
+    # available() delegates to llm.vertex_ready (a real config check, incl.
+    # google-auth); stub it here so this suite tests the delegation, not the env.
+    llm.vertex_ready = lambda cfg: bool((cfg or {}).get("vertex_project"))
     check("no project -> unavailable", im.available({}), False)
     check("a project -> available", im.available({"vertex_project": "p"}), True)
 
