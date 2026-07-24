@@ -225,6 +225,32 @@ def main() -> int:
                     cfg={}, log=lambda *_: None)
     check("stock kept when biography mode is off", "pexels" in seen["s"])
 
+    # ── a disabled source is announced the moment it happens ────────────────
+    print("\n  the circuit breaker announces a source the instant it is disabled:")
+    stock._SRC._FAILS.clear()
+    stock._SRC._JUST_DOWN.clear()
+    stock.vision.get_scorer = lambda cfg, log=None: None
+    stock._SRC.usable = lambda cfg: {"pexels", "wikimedia"}
+    stock._SRC.route = lambda *a, **k: ["pexels", "wikimedia"]
+    stock._SRC.down_sources = lambda: ["wikimedia"]
+
+    def failing_fetch(query, media, cache, pk, xk, index, sources=None, cfg=None):
+        # wikimedia crosses the fail limit during this scene's ladder
+        for _ in range(stock._SRC.FAIL_LIMIT):
+            stock._SRC.note_failure("wikimedia")
+        return {"path": f"/d/{index}", "src": "pexels", "query": query,
+                "media": media, "score": None, "credit": "", "page": "", "license": ""}
+    stock.fetch = failing_fetch
+    dl = []
+    stock.fetch_all([SimpleNamespace(n=1, media="IMAGE", query="anything",
+                                     fallbacks=[], domain="x", topic="tech")],
+                    Path(tempfile.mkdtemp()), "PK", "XK", log=dl.append, cfg={})
+    dls = "\n".join(dl)
+    check("names the disabled source", "wikimedia" in dls and "disabled" in dls)
+    check("explains it will be skipped for the run", "rest of this run" in dls)
+    stock._SRC._FAILS.clear()
+    stock._SRC._JUST_DOWN.clear()
+
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")
     check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 6)

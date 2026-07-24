@@ -1104,11 +1104,14 @@ def explain(domain: str, media: str, available: set, query: str = "",
 # ends, and nothing should need clearing by hand to notice that.
 
 _FAILS: dict[str, int] = {}
+_JUST_DOWN: list[str] = []          # crossed into "down" since last drained
 FAIL_LIMIT = 3
 
 
 def note_failure(name: str) -> None:
     _FAILS[name] = _FAILS.get(name, 0) + 1
+    if _FAILS[name] == FAIL_LIMIT:                  # crossed the line just now
+        _JUST_DOWN.append(name)
 
 
 def note_success(name: str) -> None:
@@ -1117,6 +1120,15 @@ def note_success(name: str) -> None:
 
 def is_down(name: str) -> bool:
     return _FAILS.get(name, 0) >= FAIL_LIMIT
+
+
+def drain_newly_down() -> list[str]:
+    """Sources that just crossed into 'down', reported once. The caller (the live
+    sourcing log) drains this each scene so a source disappearing from later
+    scenes is announced the moment it happens, never silently."""
+    out = _JUST_DOWN[:]
+    _JUST_DOWN.clear()
+    return out
 
 
 def down_sources() -> list[str]:

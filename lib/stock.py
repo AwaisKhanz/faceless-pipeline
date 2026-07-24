@@ -609,6 +609,14 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             # (the handicap already favoured the earlier, more specific queries).
             got, got_rel = best_below, best_below_rel
 
+        # Announce any source the circuit breaker just disabled, the instant it
+        # happens. Otherwise a source (e.g. Wikimedia blocked on this network)
+        # simply vanishes from later scenes' "searched" line with no explanation.
+        for nm in _SRC.drain_newly_down():
+            log(f"  ⚠ {nm} disabled for the rest of this run after "
+                f"{_SRC.FAIL_LIMIT} failed requests — unreachable on this network "
+                f"(run 'faceless sources' to check).")
+
         if got is None:
             # The scene's own ladder found nothing real. An empty scene breaks
             # the whole render, so fall back to a neutral background that free
