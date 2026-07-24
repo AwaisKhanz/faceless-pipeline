@@ -315,6 +315,7 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
     pool_n = _score_pool(cfg)
     scored_pool = _fair_pool(results, pool_n)
     rel = _relevance(scored_pool, query, media, cfg)
+    top3: list = []                                   # (src, rel) for the live log
     if rel:
         for h in scored_pool:
             h["rel"] = rel.get(h["url"])
@@ -330,6 +331,8 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
         # breaks ties between equally-relevant pictures. Anything not scored
         # keeps a sensible technical order behind the scored head.
         ranked = sorted(scored_pool, key=_combined, reverse=True)
+        top3 = [(h["src"], round(h["rel"], 2)) for h in ranked[:3]
+                if h.get("rel") is not None]
         scored_urls = {h["url"] for h in scored_pool}
         rest = sorted((h for h in results if h["url"] not in scored_urls),
                       key=_score, reverse=True)
@@ -359,6 +362,17 @@ def fetch(query: str, media: str, cache: Path, pexels_key: str | None,
             "score": hit.get("rel"),            # relevance, or None if not scored
             "score_v": vision.SCORE_VERSION if rel else None}
     meta_p.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    # Transient telemetry for the live log — how this pick was reached: which
+    # sources were searched, how many candidates were pooled and scored, and the
+    # top few by relevance. Attached AFTER the cache write and stripped by
+    # fetch_all before assets.json, so it never persists.
+    counts: dict[str, int] = {}
+    for h in results:
+        counts[h["src"]] = counts.get(h["src"], 0) + 1
+    meta["_detail"] = {"sources": list(order), "counts": counts,
+                       "pooled": len(results),
+                       "scored": len(scored_pool) if rel else 0, "top": top3}
     return meta
 
 
@@ -435,6 +449,22 @@ def _video_frame(url: str) -> bytes:
         return r.stdout if r.returncode == 0 and r.stdout else b""
     except Exception:
         return b""
+
+
+def _detail_line(detail: dict | None) -> str:
+    """The dim second line under a scene: which sources were searched, how deep
+    the pool went, and the top few candidates by relevance. Empty when there is
+    nothing to say (a cache hit carries no fresh telemetry)."""
+    if not detail:
+        return ""
+    srcs = "·".join(detail.get("sources") or []) or "stock"
+    parts = [f"searched {srcs}", f"pooled {detail.get('pooled', 0)}"]
+    if detail.get("scored"):
+        parts.append(f"scored {detail['scored']}")
+    top = detail.get("top") or []
+    if top:
+        parts.append("top " + " · ".join(f"{s} {int(r * 100)}%" for s, r in top))
+    return "       " + " · ".join(parts)
 
 
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
@@ -544,31 +574,43 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
 
             if got is not None:
                 got = dict(got)
+                got.pop("_detail", None)
                 got["placeholder"] = True           # a fill, not a real match
                 got["score"] = None
                 used.add(got["path"])
                 out[s.n] = got
                 placeholder.append(s.n)
-                log(f"  S{s.n:>3} PLACEHOLDER  neutral fill — no real match for "
-                    f"{(s.query or '')[:34]!r}")
+                log(f"⚑ S{s.n:>3} {s.media.lower():<5} · placeholder · no real "
+                    f"match for \"{(s.query or '')[:40]}\"")
                 continue
 
             failed.append((s.n, "; ".join(notes) or "no match"))
-            log(f"  S{s.n:>3} FAILED  {notes[0] if notes else 'no match'}")
+            log(f"✗ S{s.n:>3} {s.media.lower():<5} · FAILED · "
+                f"{notes[0] if notes else 'no match found'}")
             continue
 
         # Searched the whole ladder and nothing really matched: use the best we
         # found, but flag it so the scene can be fixed by hand rather than left
         # empty (an empty scene breaks the video).
-        if scorer_on and got_rel is not None and got_rel < clip_min:
-            notes.append(f"weak visual match ({got_rel:.2f})")
+        weak_pick = scorer_on and got_rel is not None and got_rel < clip_min
+        if weak_pick:
             weak.append(s.n)
 
         used.add(got["path"])
+        detail = got.pop("_detail", None)          # strip telemetry before storing
         out[s.n] = got
-        tail = f"  ({notes[-1]})" if notes else ""
-        rtag = f" [{got_rel:.2f}]" if (scorer_on and got_rel is not None) else ""
-        log(f"  S{s.n:>3} {s.media:<5} {got['src']:<11} {got['query'][:40]}{rtag}{tail}")
+        # Result line: ~ for a weak match, ✓ for a good one. Then a dim detail
+        # line showing exactly how the pick was reached.
+        sym = "~" if weak_pick else "✓"
+        pct = f"{got_rel * 100:.0f}%" if (scorer_on and got_rel is not None) else "  —"
+        topic = f" · {s.topic}" if getattr(s, "topic", "") else ""
+        fell = next((n for n in notes if n.startswith("fell back")), "")
+        line = (f"{sym} S{s.n:>3} {s.media.lower():<5} · {got['src']:<11} "
+                f"{pct:>4} · \"{got['query'][:46]}\"{topic}")
+        log(line + (f"  ({fell})" if fell else ""))
+        d2 = _detail_line(detail)
+        if d2:
+            log(d2)
 
     down = _SRC.down_sources()
     if down:

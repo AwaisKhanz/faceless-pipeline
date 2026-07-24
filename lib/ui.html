@@ -994,9 +994,11 @@ function paintRun() {
     // colour reflects what the pipeline did, never what the script says.
     const probe = text.replace(/\([^)]*\)/g, '');
     let cls = '';
-    if (/^ERROR|Traceback|failed/i.test(probe)) cls = 'e';
-    else if (/WARNING|⚠/i.test(probe)) cls = 'w';
-    else if (/\b(done|finished|ready)\b/i.test(probe)) cls = 'g';
+    // Leading status symbols from the sourcing log win first: ✗ failed, ~/⚑ a
+    // weak or placeholder pick, ✓ a good one. Then the older word-based rules.
+    if (/^\s*✗|^ERROR|Traceback|FAILED/i.test(probe)) cls = 'e';
+    else if (/^\s*[~⚑]|WARNING|⚠/i.test(probe)) cls = 'w';
+    else if (/^\s*✓|\b(done|finished|ready)\b/i.test(probe)) cls = 'g';
     else if (/^\s{2,}/.test(text)) cls = 'd';
     t.append(el('div', { class: 'ln' },
       el('span', { class: 'ts' },

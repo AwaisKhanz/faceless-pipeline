@@ -720,9 +720,13 @@ def _expand_scene_queries(scenes, p, cfg: dict, on_progress=lambda *_: None) -> 
 
 
 def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
-                 on_progress=noop) -> dict[int, dict]:
+                 on_progress=noop, log=noop) -> dict[int, dict]:
     """Fetch a visual per scene. Visuals are language-independent, so this is
-    done once per project and reused by every language."""
+    done once per project and reused by every language.
+
+    `log` receives the detailed per-scene feedback (searches, scores, the pick);
+    `on_progress` drives the progress bar. They are separate so the live Output
+    can show real detail without the bar's bare labels cluttering it."""
     p = paths_for(sheet, "en")
     p["base"].parent.mkdir(parents=True, exist_ok=True)   # work/
     p["approval"].parent.mkdir(parents=True, exist_ok=True)  # out/
@@ -757,7 +761,7 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
     keep = {n: a for n, a in assets.items() if n not in {s.n for s in todo}}
     fresh = stock.fetch_all(
         todo, p["stockcache"], cfg.get("pexels_key"), cfg.get("pixabay_key"),
-        picks=picks, log=lambda m: None, cfg=cfg, already=keep,
+        picks=picks, log=log, cfg=cfg, already=keep,
         on_progress=on_progress)
     assets.update(fresh)
 

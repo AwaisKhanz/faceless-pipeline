@@ -138,6 +138,32 @@ def main() -> int:
                         sources=["nasa", "pexels"], cfg={})
     check("no-dimension archive wins when it is the better match", meta3["src"], "nasa")
 
+    # ── detailed per-scene live feedback ────────────────────────────────────
+    print("\n  fetch_all logs rich per-scene feedback and leaks no telemetry:")
+    fcache = Path(tempfile.mkdtemp())
+
+    def fx(query, media, cache, pk, xk, index, sources=None, cfg=None):
+        return {"path": f"/x/{query[:5]}_{index}", "src": "nasa", "query": query,
+                "media": media, "score": 0.9, "credit": "", "page": "", "license": "",
+                "_detail": {"sources": sources or ["nasa"], "counts": {},
+                            "pooled": 12, "scored": 8,
+                            "top": [("nasa", 0.9), ("pexels", 0.5)]}}
+    stock.fetch = fx
+    stock.vision.get_scorer = lambda cfg, log=None: object()   # scoring "on"
+    stock._SRC.usable = lambda cfg: {"nasa", "pexels"}
+    stock._SRC.route = lambda *a, **k: ["nasa", "pexels"]
+    stock._SRC.down_sources = lambda: []
+    logs: list = []
+    a = stock.fetch_all(
+        [SimpleNamespace(n=1, media="IMAGE", query="moon surface",
+                         fallbacks=[], domain="space", topic="space")],
+        fcache, "PK", "XK", log=logs.append, cfg={})
+    joined = "\n".join(logs)
+    check("result line shows source + score", "nasa" in joined and "90%" in joined)
+    check("detail line shows searches + scoring",
+          "searched" in joined and "scored" in joined and "top" in joined)
+    check("telemetry stripped from the stored asset", "_detail" not in a[1])
+
     # ── scoring calibration moved ───────────────────────────────────────────
     print("\n  scoring recalibration is in place:")
     check("score version bumped (re-source recomputes)", vision.SCORE_VERSION, 6)

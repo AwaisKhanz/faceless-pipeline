@@ -347,9 +347,11 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
         set_job(total=len(redo or scenes))
         log(f"Sourcing visuals for {proj['label']}")
 
+        # The bar shows "which scene, how far"; the detailed per-scene feedback
+        # (searches, scores, the pick) comes through `log` from fetch_all. Keeping
+        # them separate is what stops the Output being a wall of bare "S33 image".
         def onp(d, t, m):
             progress(d, t, m)
-            log(f"  {m}")
 
         # Warm up the visual-matching model UP FRONT, with a visible note. The
         # very first source downloads it (SigLIP 2 is ~1.7 GB) and, until now,
@@ -367,7 +369,8 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
                 except Exception as e:
                     log(f"  visual matching unavailable ({e}) — ranking by size only.")
 
-        assets = pl.source_stock(scenes, sheet, cfg, redo=redo, on_progress=onp)
+        assets = pl.source_stock(scenes, sheet, cfg, redo=redo,
+                                 on_progress=onp, log=log)
         end_step()
 
         # Be honest about the outcome. A scene with no asset at all breaks the
