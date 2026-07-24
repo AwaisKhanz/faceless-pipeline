@@ -1621,17 +1621,35 @@ async function viewReview(id) {
       const r = await api('/api/source', { id, redo: [...rejected] });
       if (r.started) go('/activity'); else e.target.disabled = false;
     }
-  }, 'Get new pictures');
+  }, 'Search again');
 
-  // The button only means something once at least one picture is marked, so it
-  // stays disabled until then — no more "swap" with an empty selection.
+  // A second action for the same marked scenes: generate the picture with AI
+  // instead of searching. Only offered when Vertex is configured; each click
+  // makes a fresh take. Real people usually come back refused — that is fine,
+  // they keep their current picture and the run reports it.
+  const genBtn = d.generate_on ? el('button', {
+    class: 'btn', disabled: true, style: 'margin-left:8px', onclick: async e => {
+      if (!rejected.size) return;
+      e.target.disabled = true;
+      const r = await api('/api/regenerate', { id, scenes: [...rejected] });
+      if (r.started) go('/activity'); else e.target.disabled = false;
+    }
+  }, 'Generate with AI') : null;
+
+  // The buttons only mean something once at least one picture is marked, so they
+  // stay disabled until then — no more "swap" with an empty selection.
   const syncSwap = () => {
     swapBtn.disabled = rejected.size === 0;
     swapBtn.textContent = rejected.size
-      ? `Get new pictures (${rejected.size})` : 'Get new pictures';
+      ? `Search again (${rejected.size})` : 'Search again';
+    if (genBtn) {
+      genBtn.disabled = rejected.size === 0;
+      genBtn.textContent = rejected.size
+        ? `Generate with AI (${rejected.size})` : 'Generate with AI';
+    }
     count.textContent = rejected.size
-      ? `${rejected.size} marked for replacement`
-      : 'Click any weak or wrong picture to mark it for a swap';
+      ? `${rejected.size} marked — search again or generate`
+      : 'Click any weak or wrong picture to mark it';
   };
 
   v.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, el('div', { class: 'row' },
@@ -1640,7 +1658,7 @@ async function viewReview(id) {
       `${placeholders.length} placeholder`) : null,
     weak.length ? el('span', { class: 'pill part' }, `${weak.length} weak`) : null,
     d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no picture`) : null,
-    swapBtn)));
+    swapBtn, genBtn)));
 
   v.append(el('div', { class: 'thumbs' }, items.map(s => {
     const p = pct(s);

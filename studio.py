@@ -413,6 +413,43 @@ def run_sourcing(pid: str, redo: list[int] | None) -> None:
         traceback.print_exc()
 
 
+def run_regenerate(pid: str, which: list[int]) -> None:
+    """Manually generate AI images for the scenes the user marked in review."""
+    try:
+        proj = pl.find_project(pid)
+        sheet = Path(proj["sheet"])
+        cfg = pl.load_config()
+        mlang = pl.main_lang(sheet)
+        scenes = pl.load_scenes(sheet, mlang, None)
+        begin_job(pid, [mlang], "stock")
+        set_job(total=len(which or []))
+        log(f"Generating {len(which or [])} image(s) for {proj['label']}")
+
+        def onp(d, t, m):
+            progress(d, t, m)
+
+        res = pl.generate_scenes(scenes, sheet, cfg, which or [],
+                                 on_progress=onp, log=log)
+        end_step()
+        gen, failed = res["generated"], res["failed"]
+        if failed:
+            set_job(stage="approve",
+                    label=f"generated {len(gen)}, {len(failed)} could not")
+            log(f"⚠ {len(failed)} scene(s) could not be generated — often a real "
+                f"person or a safety filter. They kept their current picture: "
+                f"{[n for n, _ in failed]}")
+        else:
+            set_job(stage="approve", label=f"generated {len(gen)} image(s)")
+            log("Done — the new images are below.")
+    except SystemExit as e:
+        set_job(stage="error", error=str(e))
+        log(f"ERROR: {e}")
+    except Exception as e:
+        set_job(stage="error", error=str(e))
+        log(f"ERROR: {e}")
+        traceback.print_exc()
+
+
 def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
               zoom: bool, voices: dict[str, str], master: bool = True) -> None:
     try:
@@ -655,9 +692,15 @@ def approval_data(pid: str) -> dict:
             "video": bool(a and Path(a["path"]).suffix.lower() in (".mp4", ".mov", ".webm")),
         })
     cfg = pl.load_config()
+    try:
+        from lib import imagen as _IM
+        generate_on = _IM.available(cfg)
+    except Exception:
+        generate_on = False
     return {"id": pid, "label": proj["label"], "items": items,
             "clip_min": float(cfg.get("clip_min") or 0.45),
             "clip_on": VIS.capability(cfg)["ok"],
+            "generate_on": generate_on,
             "missing": [i["n"] for i in items if not i["url"]]}
 
 
@@ -1068,6 +1111,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/source":
             ok = start_thread(run_sourcing, b.get("id"), b.get("redo") or None)
+            return self._json({"started": ok})
+
+        if path == "/api/regenerate":
+            scenes = [int(n) for n in (b.get("scenes") or []) if str(n).isdigit()]
+            if not scenes:
+                return self._json({"error": "no scenes to generate"}, 400)
+            ok = start_thread(run_regenerate, b.get("id"), scenes)
             return self._json({"started": ok})
 
         if path == "/api/build":

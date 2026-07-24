@@ -805,6 +805,69 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
     return assets
 
 
+def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
+                    on_progress=noop, log=noop) -> dict:
+    """Generate a fresh AI image for each scene number in `which`, replacing its
+    asset. This is the MANUAL, on-demand path from the review page — distinct
+    from the automatic `generate` modes in source_stock.
+
+    Each call makes a NEW take (the picks counter is bumped and put in the
+    filename), so clicking 'generate' again gives a different image rather than
+    the cached one. A scene whose generation is refused — a safety filter, or a
+    named real person Imagen will not render — keeps its current picture and is
+    reported, never left empty.
+    """
+    from . import imagen
+    if not imagen.available(cfg):
+        raise SystemExit(
+            "Image generation needs \"vertex_project\" in config.json — the same "
+            "Vertex setup the LLM uses. Add it, then try again.")
+
+    p = paths_for(sheet, "en")
+    p["stockcache"].mkdir(parents=True, exist_ok=True)
+    p["assets"].parent.mkdir(parents=True, exist_ok=True)     # work/
+    assets: dict[int, dict] = {}
+    if p["assets"].exists():
+        assets = {int(k): v for k, v in
+                  json.loads(p["assets"].read_text(encoding="utf-8")).items()}
+    picks: dict[int, int] = {}
+    if p["picks"].exists():
+        picks = {int(k): v for k, v in
+                 json.loads(p["picks"].read_text(encoding="utf-8")).items()}
+
+    by_n = {s.n: s for s in scenes}
+    want = [n for n in which if n in by_n]
+    generated: list[int] = []
+    failed: list[tuple] = []
+
+    for i, n in enumerate(want):
+        s = by_n[n]
+        on_progress(i + 1, len(want), f"S{n} generating")
+        picks[n] = picks.get(n, 0) + 1                # fresh take, new filename
+        prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
+        dest = p["stockcache"] / f"gen_{n}_{picks[n]}.png"
+        try:
+            imagen.image(prompt, cfg, dest)
+        except Exception as e:                        # GenError or anything else
+            failed.append((n, str(e)))
+            log(f"✗ S{n:>3} · could not generate · {str(e)[:80]}")
+            continue
+        assets[n] = {"path": str(dest), "src": "imagen", "query": s.query,
+                     "media": "IMAGE", "credit": "AI-generated (Imagen)",
+                     "page": "", "license": "AI-generated", "score": None,
+                     "generated": True}
+        generated.append(n)
+        log(f"✦ S{n:>3} image · generated · \"{(s.query or '')[:46]}\"")
+
+    p["assets"].write_text(
+        json.dumps({str(k): v for k, v in assets.items()}, indent=2),
+        encoding="utf-8")
+    p["picks"].write_text(
+        json.dumps({str(k): v for k, v in picks.items()}, indent=2),
+        encoding="utf-8")
+    return {"generated": generated, "failed": failed, "assets": assets}
+
+
 def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
                    on_progress=noop) -> list[Path]:
     """`voice` names a reference clip, overriding the one saved for this language."""
