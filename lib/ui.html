@@ -921,7 +921,15 @@ async function viewProject(id) {
 
 // ═══ activity / live run ══════════════════════════════════════════════════
 let follow = true;
-function viewRun() {
+// With more than one job able to run at once, Activity shows ONE specific job:
+// the one whose "Watch" you clicked (S.watchId). Bare /activity (no id) falls
+// back to whatever is currently active, as before.
+function runJob() {
+  return (S.watchId ? S.watchJob : S.status) || {};
+}
+async function viewRun(id) {
+  S.watchId = id || null;
+  if (S.watchId) { try { S.watchJob = await api('/api/job?id=' + S.watchId); } catch (e) { } }
   const v = $('#view'); v.innerHTML = '';
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' }, el('h1', {}, 'Activity'), el('p', { id: 'runSub' }, ''))));
@@ -941,7 +949,8 @@ function viewRun() {
       }, 'Copy'),
       el('button', {
         class: 'btn sm danger', id: 'stopBtn',
-        onclick: async e => { e.target.disabled = true; await api('/api/cancel', {}); }
+        // Stop THIS job (the one being watched), not just whatever is active.
+        onclick: async e => { e.target.disabled = true; await api('/api/cancel', S.watchId ? { job: S.watchId } : {}); }
       }, 'Stop')),
     el('div', { class: 'term', id: 'term' })));
   paintRun();
@@ -949,7 +958,7 @@ function viewRun() {
 
 const BUSY = ['generate', 'stock', 'voice', 'render'];
 function paintRun() {
-  const j = S.status || {};
+  const j = runJob();
   const card = $('#runCard'); if (!card) return;
   const busy = BUSY.includes(j.stage);
   const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
@@ -1066,7 +1075,7 @@ function qRow(j) {
     : (j.status === 'queued' ? 'waiting' : '—');
   const acts = [];
   if (j.status === 'running' || j.status === 'approve')
-    acts.push(el('button', { class: 'btn sm', onclick: () => go('/activity') }, 'Watch'));
+    acts.push(el('button', { class: 'btn sm', onclick: () => go('/activity/' + j.id) }, 'Watch'));
   if (wait)
     acts.push(el('button', {
       class: 'btn sm danger',
@@ -2080,7 +2089,7 @@ function paintBanner() {
     b.append(
       el('b', { style: 'color:var(--bad)' }, 'Stopped'),
       el('span', { style: 'flex:1' }, j.error),
-      el('button', { class: 'btn sm', onclick: () => go('/activity') }, 'Details'),
+      el('button', { class: 'btn sm', onclick: () => go(j.id ? '/activity/' + j.id : '/activity') }, 'Details'),
       el('button', {
         class: 'btn sm',
         onclick: () => { S.status = { ...j, stage: 'idle', error: '' }; paintBanner(); }
@@ -2097,10 +2106,10 @@ function paintBanner() {
     el('span', { class: 'mono sub' },
       (j.total ? `${j.done}/${j.total}` : '') + (j.eta != null ? ` · ${fmtT(j.eta)} left` : '')),
     el('div', { style: 'flex:1' }),
-    el('button', { class: 'btn sm', onclick: () => go('/activity') }, 'Watch'),
+    el('button', { class: 'btn sm', onclick: () => go(j.id ? '/activity/' + j.id : '/activity') }, 'Watch'),
     el('button', {
       class: 'btn sm danger',
-      onclick: async e => { e.target.disabled = true; await api('/api/cancel', {}); }
+      onclick: async e => { e.target.disabled = true; await api('/api/cancel', j.id ? { job: j.id } : {}); }
     }, 'Stop'));
 }
 
@@ -2113,6 +2122,7 @@ const ROUTES = [
   [/^\/dashboard\/?$/, viewDashboard],
   [/^\/project\/([^/]+)\/?$/, viewProject],
   [/^\/review\/([^/]+)\/?$/, viewReview],
+  [/^\/activity\/([^/]+)\/?$/, viewRun],
   [/^\/activity\/?$/, viewRun],
   [/^\/queue\/?$/, viewQueue],
   [/^\/new\/?$/, viewNew],
@@ -2197,7 +2207,12 @@ async function poll() {
     } catch (e) { }
 
     paintBanner();
-    if (location.pathname === '/activity') paintRun();
+    // Activity shows the specific job being watched (/activity/<id>); keep it
+    // live by refetching just that job. Bare /activity uses the global status.
+    if (location.pathname.startsWith('/activity')) {
+      if (S.watchId) { try { S.watchJob = await api('/api/job?id=' + S.watchId); } catch (e) { } }
+      paintRun();
+    }
 
     // A run just ended — refresh whatever is on screen so the status is honest.
     if (lastStage && lastStage !== j.stage && ['done', 'approve', 'error'].includes(j.stage)) {

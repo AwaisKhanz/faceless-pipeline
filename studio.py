@@ -1022,6 +1022,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/queue":
             return self._json(_queue_payload())
 
+        if path == "/api/job":
+            # One specific job by id — what the Activity screen shows when you
+            # click "Watch" on a queue row (there can be several running at once,
+            # so "the active job" is no longer a single thing).
+            jid = (q.get("id") or [""])[0]
+            return self._json(_status_payload(STORE.get(jid)))
+
         if path == "/api/voices":
             pid = (q.get("id") or [""])[0]
             scenes = None
