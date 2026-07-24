@@ -351,6 +351,15 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
 .modal .box{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
   padding:22px;max-width:540px;width:100%;box-shadow:var(--shadow)}
 .modal h3{font-size:17px;margin-bottom:6px}
+/* lightbox prev/next: big, quiet arrows overlaid on the media edges */
+.lbstage{position:relative}
+.lbnav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;
+  display:grid;place-items:center;border-radius:999px;border:1px solid rgba(255,255,255,.28);
+  background:rgba(0,0,0,.5);color:#fff;font:400 26px/1 var(--ui);cursor:pointer;
+  transition:background .12s,opacity .12s;z-index:2;-webkit-user-select:none;user-select:none}
+.lbnav:hover{background:rgba(0,0,0,.82)}
+.lbnav.prev{left:12px}
+.lbnav.next{right:12px}
 .dgroup{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line)}
 .dgroup:first-of-type{border-top:0}
 .dgroup .what{flex:1}
@@ -1832,6 +1841,9 @@ async function viewReview(id) {
     d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no picture`) : null,
     swapBtn, genBtn, vidBtn)));
 
+  // Only pictures you can actually open are navigable in the lightbox; empty
+  // "NO PICTURE" scenes are skipped so Next/Prev never lands on a blank.
+  const viewable = items.filter(x => x.url);
   v.append(el('div', { class: 'thumbs' }, items.map(s => {
     const p = pct(s);
     const low = p != null && s.score < min;
@@ -1857,11 +1869,14 @@ async function viewReview(id) {
       // also mark the scene for a swap.
       s.url ? el('div', {
         class: 'zoom', title: s.video ? 'Play big' : 'View big',
-        onclick: e => { e.stopPropagation(); lightbox(s); }
+        onclick: e => { e.stopPropagation(); lightbox(viewable, viewable.indexOf(s)); }
       }, s.video
-        ? el('svg', { viewBox: '0 0 24 24', fill: 'currentColor' }, svgPath('M8 5v14l11-7z'))
-        : el('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round' },
-          svgPath('M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7'))) : null);
+        ? svgIcon(['M8 5v14l11-7z'], { fill: 'currentColor' })
+        // A clean, rounded maximize/fullscreen glyph — clearer than the old
+        // corner-arrows that read as "resize".
+        : svgIcon(['M8 3H5a2 2 0 0 0-2 2v3', 'M21 8V5a2 2 0 0 0-2-2h-3',
+          'M3 16v3a2 2 0 0 0 2 2h3', 'M16 21h3a2 2 0 0 0 2-2v-3'],
+          { fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })) : null);
     if (s.url) t.append(s.video
       ? el('video', {
         src: s.url, muted: true, loop: true, playsinline: true, preload: 'metadata',
@@ -1884,33 +1899,90 @@ async function viewReview(id) {
 // path terse inline above.)
 function svgPath(d) { const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', d); return p; }
 
+// A properly NAMESPACED <svg>. el() uses createElement, which makes an HTML
+// (non-SVG) <svg> that renders as a broken box — hence the ugly "view big"
+// glyph. Building the svg in the SVG namespace here makes icons render crisp.
+function svgIcon(paths, attrs) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const s = document.createElementNS(NS, 'svg');
+  s.setAttribute('viewBox', '0 0 24 24');
+  for (const [k, v] of Object.entries(attrs || {})) s.setAttribute(k, v);
+  for (const d of paths) {
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', d);
+    s.append(p);
+  }
+  return s;
+}
+
 // ═══ lightbox ═════════════════════════════════════════════════════════════
 // See one sourced picture big — a still full-size, a clip with real controls —
-// with its source, match and the line it was matched against.
-function lightbox(s) {
-  const media = s.video
-    ? el('video', {
-      src: s.url, controls: true, autoplay: true, loop: true, playsinline: true,
-      style: 'width:100%;max-height:74vh;border-radius:8px;background:#000'
-    })
-    : el('img', { src: s.url, style: 'width:100%;max-height:74vh;object-fit:contain;border-radius:8px;background:#000' });
-  const pc = pctOf(s);
+// with its source, match and the line it was matched against. Step through the
+// whole set without closing: on-screen arrows, Prev/Next buttons, or ← → keys.
+function lightbox(list, idx) {
+  if (!Array.isArray(list)) { list = [list]; idx = 0; }   // tolerate a single item
+  let i = Math.max(0, Math.min(idx | 0, list.length - 1));
+  const many = list.length > 1;
+  let media = null;
+
+  const stop = () => { try { media && media.pause(); } catch (_) { } };
+  const close = () => { stop(); document.removeEventListener('keydown', onKey); modal.remove(); };
+
+  const stage = el('div', { class: 'lbstage' });
+  const titleEl = el('h3', { style: 'flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' });
+  const pillWrap = el('span', { style: 'display:inline-flex' });
+  const counter = el('span', { class: 'sub mono', style: 'margin:0 2px' });
+  const capEl = el('div', { class: 'sub mono', style: 'margin-top:8px' });
+  const narrEl = el('div', { class: 'sub', style: 'margin-top:4px' });
+
+  function show(k) {
+    stop();
+    i = (k % list.length + list.length) % list.length;    // wrap both ways
+    const s = list[i];
+    media = s.video
+      ? el('video', {
+        src: s.url, controls: true, autoplay: true, loop: true, playsinline: true,
+        style: 'width:100%;max-height:72vh;border-radius:8px;background:#000'
+      })
+      : el('img', { src: s.url, style: 'width:100%;max-height:72vh;object-fit:contain;border-radius:8px;background:#000' });
+    stage.innerHTML = '';
+    stage.append(media);
+    if (many) {
+      stage.append(
+        el('button', { class: 'lbnav prev', title: 'Previous (←)', onclick: () => show(i - 1) }, '‹'),
+        el('button', { class: 'lbnav next', title: 'Next (→)', onclick: () => show(i + 1) }, '›'));
+    }
+    titleEl.textContent = 'S' + s.n + ' · ' + (s.video ? 'video' : 'image') + (s.src ? ' · ' + s.src : '');
+    const pc = pctOf(s);
+    pillWrap.innerHTML = '';
+    if (pc != null) pillWrap.append(el('span',
+      { class: 'pill ' + (s.score < (window._clipMin ?? 0.45) ? 'part' : 'ok') }, 'match ' + pc + '%'));
+    counter.textContent = many ? (i + 1) + ' / ' + list.length : '';
+    capEl.textContent = 'matched against: "' + (s.query || '') + '"';
+    narrEl.textContent = s.narration || '';
+    narrEl.style.display = s.narration ? '' : 'none';
+  }
+
+  function onKey(e) {
+    if (e.key === 'ArrowRight') { e.preventDefault(); show(i + 1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); show(i - 1); }
+    else if (e.key === 'Escape') close();
+  }
+
   const modal = el('div', {
-    class: 'modal', onclick: e => { if (e.target === modal) { try { media.pause(); } catch (_) { } modal.remove(); } }
+    class: 'modal', onclick: e => { if (e.target === modal) close(); }
   },
     el('div', { class: 'box', style: 'max-width:1000px' },
-      el('div', { class: 'row', style: 'margin-bottom:10px;align-items:center' },
-        el('h3', { style: 'flex:1' }, 'S' + s.n + ' · ' + (s.video ? 'video' : 'image')
-          + (s.src ? ' · ' + s.src : '')),
-        pc != null ? el('span', { class: 'pill ' + (s.score < (window._clipMin ?? 0.45) ? 'part' : 'ok') },
-          'match ' + pc + '%') : null,
-        el('button', { class: 'btn sm', onclick: () => window.open(s.url, '_blank') }, 'Open in tab'),
-        el('button', { class: 'btn sm', onclick: () => { try { media.pause(); } catch (_) { } modal.remove(); } }, 'Close')),
-      media,
-      el('div', { class: 'sub mono', style: 'margin-top:8px' },
-        'matched against: "' + (s.query || '') + '"'),
-      s.narration ? el('div', { class: 'sub', style: 'margin-top:4px' }, s.narration) : null));
+      el('div', { class: 'row', style: 'margin-bottom:10px;align-items:center;gap:8px' },
+        titleEl, pillWrap, counter,
+        many ? el('button', { class: 'btn sm', title: 'Previous (←)', onclick: () => show(i - 1) }, '‹ Prev') : null,
+        many ? el('button', { class: 'btn sm', title: 'Next (→)', onclick: () => show(i + 1) }, 'Next ›') : null,
+        el('button', { class: 'btn sm', onclick: () => window.open(list[i].url, '_blank') }, 'Open in tab'),
+        el('button', { class: 'btn sm', onclick: close }, 'Close')),
+      stage, capEl, narrEl));
   document.body.append(modal);
+  document.addEventListener('keydown', onKey);
+  show(i);
 }
 function pctOf(s) { return s.score == null ? null : Math.round(s.score * 100); }
 
