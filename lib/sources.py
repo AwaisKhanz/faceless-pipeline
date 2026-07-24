@@ -826,6 +826,90 @@ def met(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
     return out
 
 
+# ──────────────────────────── Art Institute of Chicago (Open Access, no key)
+# One request: the search returns the image_id and the public-domain flag inline,
+# and the image itself is served over IIIF. The IIIF base is handed back in the
+# response's `config`, so the URL is built rather than hardcoded. Public-domain
+# works are CC0; not everything the search returns is public domain (a Picasso
+# turns up under "cat"), so the flag is checked per item.
+
+_AIC = "https://api.artic.edu/api/v1"
+
+
+def art_institute(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media == "VIDEO":
+        raise SourceError("The Art Institute of Chicago is stills, not video")
+
+    qs = urllib.parse.urlencode({
+        "q": query, "limit": max(want * 5, 30),
+        "fields": "id,title,image_id,artist_title,is_public_domain"})
+    data = _json(f"{_AIC}/artworks/search?{qs}")
+    iiif = ((data.get("config") or {}).get("iiif_url")
+            or "https://www.artic.edu/iiif/2").rstrip("/")
+    out: list[Hit] = []
+
+    for r in (data.get("data") or []):
+        if not _accept_any and not r.get("is_public_domain"):
+            continue
+        img = r.get("image_id")
+        if not img:
+            continue                       # a record with no image to serve
+        # IIIF: 1686px wide (2× the 843 default) clears the stills floor.
+        url = f"{iiif}/{img}/full/1686,/0/default.jpg"
+        pd = r.get("is_public_domain")
+        out.append(Hit(
+            url=url, ext=".jpg", src="aic",
+            credit=r.get("artist_title") or "Art Institute of Chicago",
+            page=f"https://www.artic.edu/artworks/{r.get('id')}",
+            license="CC0" if pd else "Art Institute of Chicago"))
+        if len(out) >= want:
+            break
+    return out
+
+
+# ─────────────────────────────── Cleveland Museum of Art (Open Access, no key)
+# One request. `cc0=1` filters to CC0 server-side; the per-record status is still
+# checked. Cleveland reports the pixel size of each rendition, so the print (~2400
+# px) is preferred over the small web copy and undersized ones are dropped before
+# any download — like Openverse.
+
+_CMA = "https://openaccess-api.clevelandart.org/api/artworks"
+
+
+def cleveland(query: str, media: str, want: int, cfg: dict) -> list[Hit]:
+    if media == "VIDEO":
+        raise SourceError("The Cleveland Museum of Art is stills, not video")
+
+    params = {"q": query, "has_image": 1, "limit": max(want * 3, 15)}
+    if not _accept_any:
+        params["cc0"] = 1                  # CC0 only, filtered server-side
+    data = _json(f"{_CMA}/?{urllib.parse.urlencode(params)}")
+    out: list[Hit] = []
+
+    for r in (data.get("data") or []):
+        lic = (r.get("share_license_status") or "").upper()
+        if not _accept_any and lic != "CC0":
+            continue
+        imgs = r.get("images") or {}
+        pick = imgs.get("print") or imgs.get("web") or {}
+        url = pick.get("url") or ""
+        if not url:
+            continue
+        w, h = int(pick.get("width") or 0), int(pick.get("height") or 0)
+        if w and w < MIN_WIDTH:
+            continue                       # known too small: skip the download
+        creators = r.get("creators") or []
+        credit = (creators[0].get("description") if creators else "") \
+            or "Cleveland Museum of Art"
+        out.append(Hit(
+            url=_https(url), ext=_ext(url), src="cleveland", credit=credit,
+            page=r.get("url") or "", width=w, height=h,
+            license="CC0" if lic == "CC0" else (lic or "Cleveland Museum of Art")))
+        if len(out) >= want:
+            break
+    return out
+
+
 # ─────────────────────────────────────────────── registry
 
 # ══════════════════════════════════════════════ topics, coverage, routing
@@ -1036,6 +1120,20 @@ REGISTRY: dict[str, Source] = {
         # history scenes without leading them outright.
         reliability=1.5, probe="marble statue",
         note="The Metropolitan Museum of Art Open Access. CC0, no key."),
+
+    "aic": Source(
+        "aic", art_institute, media=("IMAGE",),
+        covers=frozenset({"art", "history", "culture"}),
+        # Just under Openverse so the wider, more modern pool keeps its place in
+        # the default top-few; a third art museum mostly matters in all_sources.
+        reliability=1.45, probe="impressionist painting",
+        note="Art Institute of Chicago Open Access. CC0, no key."),
+
+    "cleveland": Source(
+        "cleveland", cleveland, media=("IMAGE",),
+        covers=frozenset({"art", "history", "culture"}),
+        reliability=1.45, probe="bronze sculpture",
+        note="Cleveland Museum of Art Open Access. CC0, no key."),
 
     "openverse": Source(
         "openverse", openverse, media=("IMAGE",),
@@ -1306,6 +1404,11 @@ def diagnose(name: str, cfg: dict | None = None) -> list[tuple]:
         "met": ("https://collectionapi.metmuseum.org/",
                 "https://collectionapi.metmuseum.org/public/collection/v1/"
                 "search?q=cat&hasImages=true"),
+        "aic": ("https://api.artic.edu/",
+                "https://api.artic.edu/api/v1/artworks/search?q=cat&limit=1"),
+        "cleveland": ("https://www.clevelandart.org/",
+                      "https://openaccess-api.clevelandart.org/api/artworks/"
+                      "?q=cat&limit=1&has_image=1"),
         "wikimedia": ("https://commons.wikimedia.org/",
                       "https://commons.wikimedia.org/w/api.php"
                       "?action=query&format=json&titles=File:Example.jpg&prop=imageinfo"),

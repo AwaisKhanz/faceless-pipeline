@@ -300,6 +300,71 @@ def main() -> int:
     except S.SourceError:
         check("The Met refuses VIDEO (stills only)", True, True)
 
+    print("\n  Art Institute of Chicago: builds IIIF url, CC0 gate:")
+    AIC = {
+        "config": {"iiif_url": "https://www.artic.edu/iiif/2"},
+        "data": [
+            {"id": 100, "title": "PD", "artist_title": "Claude Monet",
+             "image_id": "abc-123", "is_public_domain": True},
+            {"id": 101, "title": "Copyright", "artist_title": "Pablo Picasso",
+             "image_id": "def-456", "is_public_domain": False},
+            {"id": 102, "title": "No image", "artist_title": "Anon",
+             "image_id": None, "is_public_domain": True},
+        ]}
+    S.configure({})
+    feed(AIC)
+    hits = S.art_institute("painting", "IMAGE", 5, {})
+    check("kept only the public-domain work that has an image", len(hits), 1)
+    if hits:
+        check("built the IIIF url at 1686px", hits[0].url,
+              "https://www.artic.edu/iiif/2/abc-123/full/1686,/0/default.jpg")
+        check("artist becomes the credit", hits[0].credit, "Claude Monet")
+        check("labelled CC0", hits[0].license, "CC0")
+        check("source tag is 'aic'", hits[0].src, "aic")
+    S.configure({"image_licenses": "all"})
+    feed(AIC)
+    check("image_licenses='all' also keeps the copyrighted work",
+          len(S.art_institute("painting", "IMAGE", 5, {})), 2)
+    S.configure({})
+    try:
+        S.art_institute("x", "VIDEO", 3, {})
+        check("AIC refuses VIDEO", False, True)
+    except S.SourceError:
+        check("AIC refuses VIDEO (stills only)", True, True)
+
+    print("\n  Cleveland Museum of Art: print rendition, size floor, CC0:")
+    CMA = {"data": [
+        {"id": 1, "share_license_status": "CC0", "url": "https://clevelandart.org/art/1",
+         "creators": [{"description": "John Singer Sargent (American)"}],
+         "images": {"web": {"url": "https://cdn/web1.jpg", "width": "630", "height": "893"},
+                    "print": {"url": "https://cdn/print1.jpg", "width": "2398", "height": "3400"}}},
+        {"id": 2, "share_license_status": "CC0", "url": "u2", "creators": [],
+         "images": {"web": {"url": "https://cdn/web2.jpg", "width": "600", "height": "800"}}},
+        {"id": 3, "share_license_status": "Copyrighted", "url": "u3", "creators": [],
+         "images": {"print": {"url": "https://cdn/print3.jpg", "width": "2000", "height": "1500"}}},
+    ]}
+    S.configure({})
+    feed(CMA)
+    hits = S.cleveland("statue", "IMAGE", 5, {})
+    check("kept the one CC0 work with a large-enough print", len(hits), 1)
+    if hits:
+        check("chose the print rendition, not the small web copy",
+              hits[0].url, "https://cdn/print1.jpg")
+        check("carried the pixel width through", hits[0].width, 2398)
+        check("creator becomes the credit", hits[0].credit,
+              "John Singer Sargent (American)")
+        check("source tag is 'cleveland'", hits[0].src, "cleveland")
+    S.configure({"image_licenses": "all"})
+    feed(CMA)
+    check("image_licenses='all' keeps the non-CC0 print too (still size-gated)",
+          len(S.cleveland("statue", "IMAGE", 5, {})), 2)
+    S.configure({})
+    try:
+        S.cleveland("x", "VIDEO", 3, {})
+        check("Cleveland refuses VIDEO", False, True)
+    except S.SourceError:
+        check("Cleveland refuses VIDEO (stills only)", True, True)
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
