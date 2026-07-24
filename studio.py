@@ -574,7 +574,8 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
 
 def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
               music: str | None, zoom: bool, voices: dict[str, str],
-              force: bool = False, master: bool = True) -> None:
+              force: bool = False, master: bool = True,
+              skip_unvoiced: bool = False) -> None:
     """Run a chosen subset of steps for chosen languages.
 
     `steps` is any of "voice" and "render". This is what the project view's
@@ -592,7 +593,35 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
         sdir = sheet.parent
         # Default to the project's own main language, never a hardcoded "en".
         langs = langs or [pl.main_lang(sheet)]
+
+        # A language needs a reference voice clip to be narrated or rendered.
+        # Manually running a specific language with no clip is a mistake worth
+        # stopping for; but the hands-off Auto-process just skips the ones that
+        # aren't set up yet and builds the rest, so one un-voiced language never
+        # sinks the whole run. Done before begin_job so the queue shows only the
+        # languages actually being built.
+        skipped: list[str] = []
+        if "voice" in steps or "render" in steps:
+            missing = [l for l in langs
+                       if not (voices.get(l) or vx.pref_for(l).get("reference"))]
+            if missing and skip_unvoiced:
+                langs = [l for l in langs if l not in missing]
+                skipped = missing
+                if not langs:
+                    raise RuntimeError(
+                        "None of this project's languages have a reference voice "
+                        "yet. Choose one in the Voices panel, then run again.")
+            elif missing:
+                names = ", ".join(pl.LANG_NAMES.get(m, m) for m in missing)
+                raise RuntimeError(
+                    f"No reference clip chosen for {names}. Pick one in the "
+                    f"Voices panel, then try again.")
+
         begin_job(pid, langs, steps[0] if steps else "voice")
+        if skipped:                              # after begin_job, which clears the log
+            names = ", ".join(pl.LANG_NAMES.get(m, m) for m in skipped)
+            log(f"Skipping {names}: no reference voice chosen yet "
+                f"(set one in the Voices panel to include it next time).")
 
         assets = {}
         if "render" in steps:
@@ -602,19 +631,6 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
                     "No visuals sourced yet. Run 'Find visuals' first.")
             assets = {int(k): v for k, v in
                       json.loads(assets_f.read_text(encoding="utf-8")).items()}
-
-        # Fail before starting, not three minutes in. Voicing with no reference
-        # clip chosen used to raise SystemExit from deep inside the worker.
-        # Rendering needs narration, so it needs a chosen clip just as much as
-        # voicing does — it simply generates it on the way through.
-        if "voice" in steps or "render" in steps:
-            missing = [l for l in langs
-                       if not (voices.get(l) or vx.pref_for(l).get("reference"))]
-            if missing:
-                names = ", ".join(pl.LANG_NAMES.get(m, m) for m in missing)
-                raise RuntimeError(
-                    f"No reference clip chosen for {names}. Pick one in the "
-                    f"Voices panel, then try again.")
 
         outputs = []
         for li, lang in enumerate(langs):
@@ -1490,7 +1506,8 @@ def _auto_next(job) -> None:
         SCHED.enqueue(job.project, "run",
                       {"pid": job.project, "langs": langs, "steps": ["voice", "render"],
                        "captions": True, "music": None, "zoom": True, "voices": {},
-                       "force": False, "master": True}, auto=True)
+                       "force": False, "master": True, "skip_unvoiced": True},
+                      auto=True)
 
 
 def _start_scheduler() -> None:
