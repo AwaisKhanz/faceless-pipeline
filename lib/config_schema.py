@@ -85,12 +85,17 @@ _FIELDS: list[dict] = [
                      ("grok", "Grok (xAI)"),
                      ("openrouter", "OpenRouter"))},
     {"key": "gemini_key", "section": "llm", "type": "secret"},
-    {"key": "gemini_model", "section": "llm", "type": "text", "show_if": {"llm": ["gemini"]}},
+    {"key": "gemini_model", "section": "llm", "type": "select", "allow_custom": True,
+     "options": _opt(("auto", "auto (pick the best Flash)"),
+                     "gemini-2.5-flash", "gemini-2.5-pro"),
+     "show_if": {"llm": ["gemini"]}},
     # Vertex credentials are shared (LLM + Imagen + Veo + Chirp), so always shown.
     {"key": "vertex_project", "section": "llm", "type": "text"},
     {"key": "vertex_location", "section": "llm", "type": "text"},
     {"key": "vertex_service_account", "section": "llm", "type": "text"},
-    {"key": "vertex_model", "section": "llm", "type": "text", "show_if": {"llm": ["vertex"]}},
+    {"key": "vertex_model", "section": "llm", "type": "select", "allow_custom": True,
+     "options": _opt("gemini-2.5-flash", "gemini-2.5-pro"),
+     "show_if": {"llm": ["vertex"]}},
     {"key": "ollama_host", "section": "llm", "type": "text", "show_if": {"llm": ["ollama"]}},
     {"key": "ollama_model", "section": "llm", "type": "text", "show_if": {"llm": ["ollama"]}},
     {"key": "grok_key", "section": "llm", "type": "secret", "show_if": {"llm": ["grok"]}},
@@ -121,7 +126,12 @@ _FIELDS: list[dict] = [
     # ── visual matching ─────────────────────────────────────────────────────
     {"key": "clip", "section": "matching", "type": "select",
      "options": _opt(("auto", "auto"), ("off", "off"))},
-    {"key": "clip_model", "section": "matching", "type": "text", "show_if": {"clip": ["auto"]}},
+    {"key": "clip_model", "section": "matching", "type": "select",
+     "allow_custom": True, "allow_empty": True,
+     "options": _opt(("", "auto — pick best for this machine"),
+                     "openai/clip-vit-base-patch32",
+                     "google/siglip2-so400m-patch14-384"),
+     "show_if": {"clip": ["auto"]}},
     {"key": "clip_min", "section": "matching", "type": "number",
      "min": 0, "max": 1, "step": 0.01, "show_if": {"clip": ["auto"]}},
 
@@ -271,9 +281,12 @@ def _coerce(field: dict, raw):
                 raise _Bad("must be 'auto' or a whole number")
         val = int(raw) if field.get("int") else raw
         # allow_custom fields (e.g. model names, which change over time) accept any
-        # non-empty value — the options are just suggestions, not a closed set.
+        # value — the options are just suggestions, not a closed set. Empty is
+        # rejected unless allow_empty (e.g. clip_model, where "" means auto-pick).
         if field.get("allow_custom"):
             if isinstance(val, str) and not val.strip():
+                if field.get("allow_empty"):
+                    return ""
                 raise _Bad("cannot be empty")
             return val
         allowed = [o["value"] for o in field.get("options", [])]

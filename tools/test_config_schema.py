@@ -54,6 +54,9 @@ def main() -> int:
           "gemini-3.1-flash-lite-image")
     check("empty custom value is rejected",
           "generate_model" in CS.validate_and_merge({}, {"generate_model": "  "})[1], True)
+    check("clip_model allows empty (means auto)", CS._coerce(F["clip_model"], ""), "")
+    check("clip_model accepts a custom id",
+          CS._coerce(F["clip_model"], "myorg/model"), "myorg/model")
 
     print("\n  invalid values are rejected, not silently written:")
     _, errs = CS.validate_and_merge({}, {"voice_engine": "nope"})
