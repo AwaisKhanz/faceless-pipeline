@@ -547,6 +547,49 @@ def load_config() -> dict:
     return cfg
 
 
+CONFIG_FILE = ROOT / "config.json"
+
+
+def read_config_file() -> dict:
+    """The raw config.json exactly as stored — every key, including empty/false
+    values and the `_label` docs, and no environment merge. load_config() is for
+    RUNNING the pipeline (it drops blanks and folds in env vars); this is for the
+    Settings editor, which must see and round-trip the real file faithfully."""
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def write_config_file(data: dict) -> Path:
+    """Save config.json atomically, keeping a timestamped backup first.
+
+    Written to a temp file in the same folder then os.replace()'d in, so a crash
+    mid-write can never leave a half-written config. The backup name matches the
+    gitignored config.json.bak-* pattern, so it's never committed."""
+    import os
+    import shutil
+    import tempfile
+    import time
+    if CONFIG_FILE.exists():
+        shutil.copy2(CONFIG_FILE,
+                     CONFIG_FILE.with_name(f"config.json.bak-{time.strftime('%Y%m%d-%H%M%S')}"))
+    # Temp file in the TARGET's own folder, so os.replace() is a same-filesystem
+    # atomic rename (a temp on another mount would raise a cross-device error).
+    fd, tmp = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), prefix=".config.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, CONFIG_FILE)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return CONFIG_FILE
+
+
 def _flag(v, default: bool = True) -> bool:
     """Read a config value as an on/off switch. 'auto'/'on'/True are on;
     'off'/'no'/'false'/'0'/False are off. Missing falls back to `default`."""

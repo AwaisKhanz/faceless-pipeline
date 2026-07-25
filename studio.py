@@ -1023,8 +1023,14 @@ class Handler(BaseHTTPRequestHandler):
                               "names": [f.name for f in files[:6]]}
             return self._json({"id": pid, "groups": summary})
 
+        if path == "/api/config":
+            # The Settings editor: the schema (types, options, help, show-if) with
+            # the CURRENT value folded into each field, read from the real file.
+            from lib import config_schema as CS
+            return self._json({"sections": CS.schema(pl.read_config_file())})
+
         if path == "/api/doctor":
-            # The same checks the `faceless check` command runs, for Settings.
+            # The same checks the `faceless check` command runs, for Status.
             from lib import chatterbox_engine as CB
             import shutil as _sh
             caps = R.caption_method()
@@ -1386,6 +1392,21 @@ class Handler(BaseHTTPRequestHandler):
             favs, on = vx.toggle_favorite(b.get("engine") or "google", name,
                                           b.get("on"))
             return self._json({"favorites": favs, "favorite": on})
+
+        if path == "/api/config":
+            # Save settings from the editor. Every value is validated against the
+            # schema; only known keys are written; the file is backed up and
+            # replaced atomically. Nothing here is ever committed (gitignored).
+            from lib import config_schema as CS
+            updates = b.get("updates")
+            if not isinstance(updates, dict):
+                return self._json({"error": "expected an 'updates' object"}, 400)
+            merged, errors = CS.validate_and_merge(pl.read_config_file(), updates)
+            if errors:
+                return self._json({"error": "Some values are invalid.",
+                                   "errors": errors}, 400)
+            pl.write_config_file(merged)
+            return self._json({"saved": True})
 
         if path == "/api/generate":
             # `scripts` maps language -> that language's pasted script. A legacy

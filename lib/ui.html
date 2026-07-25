@@ -20,7 +20,8 @@
      /activity          live terminal, exact counts, elapsed and remaining
      /new               paste a script, generate sheets
      /voices[/<lang>]   audition and choose reference clips
-     /settings          machine check, keys, finished files
+     /settings          edit every config value with typed controls
+     /status            machine health check (ffmpeg, GPU, engines)
 
   One poll loop drives the whole app (900ms). It repaints the run view only when
   that view is open, but always keeps the sidebar badge current so you can walk
@@ -412,6 +413,10 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
     <a class="nav" data-r="/settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
       Settings
+    </a>
+    <a class="nav" data-r="/status">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Status
     </a>
     <div class="foot">
       <div class="live"><span class="dotlive"></span><span>Server running</span></div>
@@ -1810,11 +1815,133 @@ async function viewSubtitles(pid) {
 }
 
 // ═══ settings ═════════════════════════════════════════════════════════════
-async function viewSettings() {
+// ═══ Settings editor ══════════════════════════════════════════════════════
+// Schema-driven: every control, its options, and when it shows are described by
+// the server (/api/config from lib/config_schema.py). Adding a setting there
+// makes a properly-typed control appear here with no new UI code.
+async function viewConfig() {
+  const v = $('#view'); v.innerHTML = '';
+  const head = () => el('div', { class: 'head' }, el('div', { class: 'grow' },
+    el('h1', {}, 'Settings'),
+    el('p', {}, 'Everything the pipeline reads, editable here — no more hand-editing '
+      + 'config.json. Choose from the options; related fields appear based on what '
+      + 'you pick.')));
+  v.append(head(), el('div', { class: 'card' }, el('span', { class: 'spin' }), ' Loading…'));
+
+  const d = await api('/api/config');
+  v.innerHTML = ''; v.append(head());
+
+  const state = {};      // key -> current value
+  const rows = [];       // { def, row } — for show/hide
+
+  (d.sections || []).forEach(s => (s.fields || []).forEach(f => {
+    state[f.key] = ('value' in f) ? f.value : f.default;
+  }));
+
+  const prettyKey = k => { const t = k.replace(/_/g, ' '); return t[0].toUpperCase() + t.slice(1); };
+  const coerceSel = (f, v) => f.auto_or_int ? (v === 'auto' ? 'auto' : Number(v)) : (f.int ? Number(v) : v);
+  const showIf = f => !f.show_if || Object.entries(f.show_if)
+    .every(([k, allowed]) => allowed.map(String).includes(String(state[k])));
+  const applyVisibility = () => rows.forEach(r => { r.row.style.display = showIf(r.def) ? '' : 'none'; });
+  const set = (f, val) => { state[f.key] = val; applyVisibility(); };
+
+  function widget(f) {
+    if (f.type === 'select') {
+      return el('select', { style: 'min-width:300px', onchange: e => set(f, coerceSel(f, e.target.value)) },
+        (f.options || []).map(o => el('option',
+          { value: String(o.value), selected: String(o.value) === String(state[f.key]) }, o.label)));
+    }
+    if (f.type === 'bool') {
+      return el('select', { style: 'min-width:120px', onchange: e => set(f, e.target.value === 'true') },
+        el('option', { value: 'true', selected: state[f.key] === true }, 'On'),
+        el('option', { value: 'false', selected: state[f.key] !== true }, 'Off'));
+    }
+    if (f.type === 'number') {
+      return el('input', {
+        type: 'number', value: state[f.key], min: f.min, max: f.max, step: f.step,
+        style: 'width:130px',
+        oninput: e => set(f, e.target.value === '' ? '' : Number(e.target.value))
+      });
+    }
+    if (f.type === 'multiselect') {
+      const cur = new Set(Array.isArray(state[f.key]) ? state[f.key] : []);
+      return el('div', { class: 'row', style: 'flex-wrap:wrap;gap:12px' },
+        (f.options || []).map(o => el('label', { class: 'row', style: 'gap:5px;align-items:center' },
+          el('input', {
+            type: 'checkbox', checked: cur.has(o.value),
+            onchange: e => { e.target.checked ? cur.add(o.value) : cur.delete(o.value); set(f, [...cur]); }
+          }), o.label)));
+    }
+    if (f.type === 'dict') {
+      const ta = el('textarea', { rows: 2, style: MONO, oninput: e => set(f, e.target.value) });
+      ta.value = typeof state[f.key] === 'string' ? state[f.key]
+        : JSON.stringify(state[f.key] || {});
+      return ta;
+    }
+    // text / secret (plain text, per your choice)
+    const inp = el('input', {
+      type: 'text', value: state[f.key] ?? '', placeholder: f.default || '',
+      style: 'min-width:340px' + (f.type === 'secret' ? ';font-family:var(--mono,monospace)' : ''),
+      oninput: e => set(f, e.target.value)
+    });
+    return inp;
+  }
+
+  (d.sections || []).forEach(s => {
+    const body = el('div', {});
+    (s.fields || []).forEach(f => {
+      const row = el('div', {
+        class: 'row', style: 'justify-content:space-between;align-items:flex-start;'
+          + 'gap:18px;padding:11px 0;border-bottom:1px solid var(--line)'
+      },
+        el('div', { style: 'flex:1;min-width:0' },
+          el('b', {}, prettyKey(f.key)),
+          el('code', { class: 'sub', style: 'margin-left:8px;opacity:.6' }, f.key),
+          f.help ? el('div', { class: 'sub', style: 'margin-top:3px;max-width:640px' }, f.help) : null),
+        el('div', { style: 'flex:none' }, widget(f)));
+      rows.push({ def: f, row });
+      body.append(row);
+    });
+    v.append(el('div', { class: 'sec' }, el('h2', {}, s.title),
+      s.help ? el('span', { class: 'sub' }, s.help) : null));
+    v.append(el('div', { class: 'card' }, body));
+  });
+
+  applyVisibility();
+
+  const doSave = async btn => {
+    btn.disabled = true; const label = btn.textContent; btn.textContent = 'Saving…';
+    const updates = {};
+    rows.forEach(r => {
+      let val = state[r.def.key];
+      if (r.def.type === 'number' && (val === '' || val === null || Number.isNaN(val)))
+        val = r.def.default;
+      updates[r.def.key] = val;
+    });
+    const res = await api('/api/config', { updates });
+    btn.disabled = false; btn.textContent = label;
+    if (res.saved) toast('Settings saved. Some changes take effect on the next run.');
+    else {
+      const msgs = res.errors
+        ? Object.entries(res.errors).map(([k, m]) => k + ': ' + m).join('; ')
+        : (res.error || 'Save failed');
+      toast('Could not save — ' + msgs);
+    }
+  };
+
+  v.append(el('div', { class: 'card', style: 'position:sticky;bottom:0;display:flex;'
+    + 'justify-content:flex-end;gap:10px;margin-top:14px' },
+    el('span', { class: 'sub', style: 'flex:1;align-self:center' },
+      'Saved to config.json (a timestamped backup is kept each time).'),
+    el('button', { class: 'btn primary', onclick: e => doSave(e.target) }, 'Save settings')));
+}
+
+async function viewStatus() {
   const v = $('#view'); v.innerHTML = '';
   const header = () => el('div', { class: 'head' }, el('div', { class: 'grow' },
-    el('h1', {}, 'Settings'),
-    el('p', {}, 'The same checks that `faceless check` runs in the terminal.')));
+    el('h1', {}, 'Status'),
+    el('p', {}, 'A health check of this machine — the same checks `faceless check` '
+      + 'runs in the terminal. To change settings, go to Settings.')));
   v.append(header(), el('div', { class: 'card' }, el('span', { class: 'spin' }), ' Checking…'));
 
   const d = await api('/api/doctor');
@@ -2426,7 +2553,8 @@ const ROUTES = [
   [/^\/new\/?$/, viewNew],
   [/^\/voices(?:\/([a-z-]+))?\/?$/, viewVoices],
   [/^\/subtitles(?:\/([^/]+))?\/?$/, viewSubtitles],
-  [/^\/settings\/?$/, viewSettings],
+  [/^\/settings\/?$/, viewConfig],
+  [/^\/status\/?$/, viewStatus],
 ];
 
 /** Navigate without reloading. Use this everywhere instead of location.href. */
