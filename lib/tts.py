@@ -121,6 +121,32 @@ def _google_voice(lang: str, voice: str | None, cfg: dict) -> str:
     return GT.default_voice(lang, cfg)
 
 
+def _cb_opts(lang: str) -> dict:
+    """The Chatterbox knobs for a language, used by both synth and voice_paths so
+    their cache keys can't drift. (expected_paths ignores retries/best_of — they
+    aren't part of the voice's sound — so passing the full set is safe.)"""
+    p = V.pref_for(lang)
+    return {"exaggeration": p["exaggeration"], "cfg_weight": p["cfg_weight"],
+            "temperature": p["temperature"], "retries": p["retries"],
+            "best_of": p["best_of"]}
+
+
+def _fallback_notice(log, engine: str, reason: str, tip: str) -> None:
+    """The one loud, consistent 'that engine couldn't run — using Chatterbox for
+    the rest of the session' block, shared by every engine's fallback path."""
+    for line in ("",
+                 "  ⚠ VOICE ENGINE FELL BACK TO CHATTERBOX",
+                 f"      {engine} couldn't run here: {reason}",
+                 "      Switched to Chatterbox for the rest of this session so this "
+                 "render still completes.",
+                 f"      {tip}",
+                 ""):
+        try:
+            log(line)
+        except Exception:
+            pass
+
+
 def _raw_ref(lang: str, voice: str | None) -> str:
     """A stable reference name shared by synth and voice_paths (so their cache
     keys match). Resolved to the voices_refs-relative path when possible."""
@@ -207,13 +233,9 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
             raise
         except Exception as e:
             GT.mark_unusable(str(e))
-            log("")
-            log("  ⚠ VOICE ENGINE FELL BACK TO CHATTERBOX")
-            log(f"      Google Chirp couldn't run here: {e}")
-            log("      Switched to Chatterbox for the rest of this session so this")
-            log("      render still completes. Check the Text-to-Speech API is")
-            log("      enabled on your Vertex project and a voice is chosen.")
-            log("")
+            _fallback_notice(log, "Google Chirp", str(e),
+                             "Check the Text-to-Speech API is enabled on your "
+                             "Vertex project and a voice is chosen.")
 
     if not V.supported(lang):
         raise SystemExit(
@@ -239,27 +261,16 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
         except SystemExit:
             raise                                   # a real "pick a voice" message
         except Exception as e:
-            # Higgs was selected but couldn't run on this machine — don't dead-end
-            # the render. Mark it unusable for the whole session so the status and
-            # render lookups also switch to Chatterbox (otherwise the dashboard
-            # keeps looking for Higgs files and reports 'not voiced'), then fall
-            # through to Chatterbox here.
+            # Higgs was selected but couldn't run here — mark it unusable for the
+            # session (so status/render lookups also switch to Chatterbox and don't
+            # report 'not voiced'), then fall through to Chatterbox below.
             HG.mark_unusable(str(e))
-            log("")
-            log("  ⚠ VOICE ENGINE FELL BACK TO CHATTERBOX")
-            log(f"      Higgs Audio couldn't run here: {e}")
-            log("      Switched to Chatterbox for the rest of this session, so this")
-            log("      render still completes. Higgs needs an NVIDIA (CUDA) GPU —")
-            log("      on a Mac (MPS) it always falls back. It'll run on your RTX box.")
-            log("")
+            _fallback_notice(log, "Higgs Audio", str(e),
+                             "Higgs needs an NVIDIA (CUDA) GPU — on a Mac (MPS) it "
+                             "always falls back. It'll run on your RTX box.")
 
-    p = V.pref_for(lang)
     return CB.synth(scenes, lang, reference_for(lang, voice), cache,
-                    {"exaggeration": p["exaggeration"],
-                     "cfg_weight": p["cfg_weight"],
-                     "temperature": p["temperature"],
-                     "retries": p["retries"],
-                     "best_of": p["best_of"]}, log=log)
+                    _cb_opts(lang), log=log)
 
 
 def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> list[Path]:
@@ -287,11 +298,7 @@ def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> lis
         from . import higgs_engine as HG
         return HG.expected_paths(scenes, lang, name, cache,
                                  _higgs_opts(lang, cfg), cfg=cfg)
-    p = V.pref_for(lang)
-    return CB.expected_paths(scenes, lang, name, cache,
-                             {"exaggeration": p["exaggeration"],
-                              "cfg_weight": p["cfg_weight"],
-                              "temperature": p["temperature"]})
+    return CB.expected_paths(scenes, lang, name, cache, _cb_opts(lang))
 
 
 def list_voices(lang: str | None = None) -> None:
