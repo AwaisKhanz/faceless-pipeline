@@ -1347,6 +1347,10 @@ async function viewVoices(lang) {
         .map(([c, n]) => el('option', { value: c, selected: c === lang }, n))));
 
   const eng = d.engine || { active: 'chatterbox', selected: 'chatterbox', higgs_installed: false };
+  // Reference clips are the narration source only for Chatterbox/Higgs. Under
+  // Chirp, Google's voice reads — so a clip is never "in use", even if one is
+  // still saved as the Chatterbox/Higgs choice.
+  const clipsActive = eng.selected !== 'chirp';
   const enginePill = eng.active === 'higgs'
     ? el('span', { class: 'pill ok' }, 'Engine: Higgs')
     : eng.active === 'chirp'
@@ -1466,8 +1470,9 @@ async function viewVoices(lang) {
   // ── reference transcript (Higgs voice cloning) ──────────────────────────
   // Higgs clones from the clip PLUS what's said in it. Left blank, Higgs
   // auto-transcribes the clip the first time it's used; this box lets you set
-  // or fix it. Chatterbox ignores it entirely.
-  if (chosenRel) {
+  // or fix it. Chatterbox ignores it entirely, and Chirp uses no clip — so hide
+  // it under Chirp where it would only confuse.
+  if (chosenRel && clipsActive) {
     const ta = el('textarea', {
       rows: 3, style: MONO,
       placeholder: 'What is spoken in the chosen clip… (leave blank — Higgs will '
@@ -1534,7 +1539,10 @@ async function viewVoices(lang) {
           el('div', { class: 'sub' }, `${r.seconds}s`
             + (r.short ? ' · under 8s, clones poorly' : '')
             + (r.lang ? '' : ' · not in a language folder'))),
-        isChosen(r) ? el('span', { class: 'pill ok' }, 'in use') : null),
+        isChosen(r)
+          ? el('span', { class: 'pill ' + (clipsActive ? 'ok' : 'none') },
+            clipsActive ? 'in use' : 'saved · Chatterbox/Higgs')
+          : null),
       el('div', { class: 'row', style: 'margin-top:12px' }, preview, choose));
   };
 
@@ -1554,6 +1562,9 @@ async function viewVoices(lang) {
     v.append(el('div', { class: 'sec' },
       el('h2', {}, `${d.lang_name} clips`),
       el('span', { class: 'sub mono' }, d.folder + '/')));
+    if (!clipsActive) v.append(el('div', { class: 'sub', style: 'margin:-4px 0 10px' },
+      'These reference clips are used by Chatterbox and Higgs — not while Google '
+      + 'Chirp is your engine. Switch the engine in Settings to use them.'));
     v.append(el('div', { class: 'cards' }, mine.map(voiceCard)));
   }
 
