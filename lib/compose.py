@@ -259,11 +259,17 @@ def _resolve_coarse(scenes: list[dict], auto_split: bool, key: str, model: str,
             done += 1
         else:
             out.append(s)
-    left = sum(1 for s in out if _under_split(s.get("narration", "")))
+    # Name the scenes that are still dense (by their FINAL number = position + 1,
+    # which is how they'll be numbered in the sheet) so review is a jump, not a
+    # hunt through hundreds of scenes.
+    left = [k + 1 for k, s in enumerate(out) if _under_split(s.get("narration", ""))]
     if left:
+        shown = ", ".join(f"S{n}" for n in left[:12])
+        more = "" if len(left) <= 12 else f" (+{len(left) - 12} more)"
         res.warnings.append(
-            f"{left} scene(s) still bundle more than one picture — the generator "
-            f"couldn't safely split them, so review and split those by hand.")
+            f"{len(left)} scene(s) still bundle more than one picture — {shown}{more}. "
+            f"The generator couldn't safely split them, so review and split those "
+            f"by hand.")
     return out
 
 
