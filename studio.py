@@ -101,7 +101,12 @@ _CUR = threading.local()           # per-thread current job id
 RUNNING = ("generate", "stock", "voice", "render")     # studio 'stage' names
 _STAGE_STATUS = {"generate": jobs.RUNNING, "stock": jobs.RUNNING,
                  "voice": jobs.RUNNING, "render": jobs.RUNNING,
-                 "approve": jobs.APPROVE, "done": jobs.DONE, "error": jobs.ERROR}
+                 "approve": jobs.APPROVE, "done": jobs.DONE, "error": jobs.ERROR,
+                 # "generated" is a SUCCESS end-state (sheets written). Mapping it
+                 # to DONE means a job that actually finished is marked done — not
+                 # flipped to Canceled just because Stop was pressed a moment too
+                 # late, after the work had already completed.
+                 "generated": jobs.DONE}
 
 
 def _cur_id():

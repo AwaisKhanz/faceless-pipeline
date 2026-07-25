@@ -966,17 +966,33 @@ async function viewRun(id) {
 }
 
 const BUSY = ['generate', 'stock', 'voice', 'render'];
+// Headline word + one-line status for each job STATUS. Driven by status (not the
+// transient 'stage') so a finished or stopped job never lingers as "Idle".
+const RUN_STATE = {
+  running: ['', ''],
+  approve: ['Ready to review', 'Ready for you to review.'],
+  done: ['Done', 'Finished.'],
+  canceled: ['Stopped', 'Stopped — anything already made was kept.'],
+  error: ['Error', 'Stopped with an error.'],
+  queued: ['Queued', 'Waiting for a free slot.'],
+  interrupted: ['Resuming', 'Interrupted — resuming where it left off.'],
+  idle: ['Idle', 'Nothing running.'],
+};
 function paintRun() {
   const j = runJob();
   const card = $('#runCard'); if (!card) return;
-  const busy = BUSY.includes(j.stage);
+  const st = j.status || 'idle';
+  const running = st === 'running';
   const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+  const [head, subline] = RUN_STATE[st] || RUN_STATE.idle;
 
   const sub = $('#runSub');
-  if (sub) sub.textContent = busy ? `${j.project || ''} · ${j.label || j.stage}`
-    : j.stage === 'error' ? 'Stopped with an error.'
-      : j.stage === 'done' ? 'Finished.'
-        : j.stage === 'approve' ? 'Visuals ready to review.' : 'Nothing running.';
+  if (sub) sub.textContent = running ? `${j.project || ''} · ${j.label || j.stage}` : subline;
+
+  // The Output "Stop" button belongs to a running job only — hide it otherwise,
+  // so a finished/stopped run never shows a live-looking Stop.
+  const stopBtn = $('#stopBtn');
+  if (stopBtn) { stopBtn.style.display = running ? '' : 'none'; stopBtn.disabled = !running; }
 
   card.innerHTML = '';
   // Native .append() — unlike the el() helper — turns a null argument into the
@@ -984,12 +1000,11 @@ function paintRun() {
   // two trailing nulls rendered as "nullnull" under the stats. Filter them out.
   card.append(...[
     el('div', { class: 'row', style: 'margin-bottom:10px' },
-      busy ? el('span', { class: 'spin' }) : null,
-      el('b', {}, busy ? (j.label || j.stage)
-        : j.stage === 'error' ? 'Error' : j.stage === 'done' ? 'Done' : 'Idle'),
+      running ? el('span', { class: 'spin' }) : null,
+      el('b', {}, running ? (j.label || j.stage || 'Working') : head),
       el('div', { style: 'flex:1' }),
       el('span', { class: 'mono sub' }, j.total ? `${j.done} / ${j.total}` : '')),
-    el('div', { class: 'bar' + (busy ? '' : ' idle') }, el('i', { style: `width:${pct}%` })),
+    el('div', { class: 'bar' + (running ? '' : ' idle') }, el('i', { style: `width:${pct}%` })),
     j.error ? el('div', { class: 'card', style: 'margin-top:12px;border-color:var(--bad);color:var(--bad)' },
       j.error) : null,
     el('div', { class: 'stats' },
@@ -997,7 +1012,7 @@ function paintRun() {
       el('div', { class: 'stat' }, el('b', {}, (j.done ?? 0) + '/' + (j.total ?? 0)), el('span', {}, 'items')),
       el('div', { class: 'stat' }, el('b', {}, j.started ? fmtT((j.ended || Date.now() / 1000) - j.started) : '—'),
         el('span', {}, 'elapsed')),
-      el('div', { class: 'stat' }, el('b', {}, busy && j.eta != null ? fmtT(j.eta) : '—'),
+      el('div', { class: 'stat' }, el('b', {}, running && j.eta != null ? fmtT(j.eta) : '—'),
         el('span', {}, 'remaining')),
       el('div', { class: 'stat' },
         el('b', {}, j.rate ? (j.rate >= 1 ? j.rate.toFixed(1) + '/s' : (1 / j.rate).toFixed(1) + 's ea') : '—'),
@@ -2175,8 +2190,11 @@ async function askDelete(id) {
 function paintBanner() {
   const b = $('#banner'); if (!b) return;
   const j = S.status || {};
-  const running = BUSY.includes(j.stage);
-  const failed = j.stage === 'error' && j.error;
+  // Drive off the real STATUS, not the transient 'stage' word — a stopped or
+  // finished job can still carry a 'running' stage, which used to leave a
+  // phantom "running" banner (and a stray Stop button) on screen.
+  const running = j.status === 'running';
+  const failed = j.status === 'error' && j.error;
 
   if (!running && !failed) { b.style.display = 'none'; return; }
   b.style.display = ''; b.className = failed ? 'err' : '';
@@ -2283,12 +2301,12 @@ document.addEventListener('click', e => {
 document.querySelectorAll('a[data-r]').forEach(a => a.setAttribute('href', a.dataset.r));
 
 // ═══ polling ══════════════════════════════════════════════════════════════
-let lastStage = null;
+let lastStatus = null;
 async function poll() {
   try {
     const j = await api('/api/status');
     S.status = j;
-    const busy = BUSY.includes(j.stage);
+    const busy = j.status === 'running';
     const badge = $('#navBadge');
     badge.style.display = busy ? '' : 'none';
     if (busy) badge.textContent = j.total ? Math.round(100 * j.done / j.total) + '%' : '···';
@@ -2312,14 +2330,16 @@ async function poll() {
     }
 
     // A run just ended — refresh whatever is on screen so the status is honest.
-    if (lastStage && lastStage !== j.stage && ['done', 'approve', 'error'].includes(j.stage)) {
-      if (j.stage === 'done') toast('Finished.');
-      if (j.stage === 'error') toast(j.error || 'Something failed — see Activity.', true);
-      if (j.stage === 'approve') toast('Visuals ready to review.');
+    if (lastStatus && lastStatus !== j.status
+        && ['done', 'approve', 'error', 'canceled'].includes(j.status)) {
+      if (j.status === 'done') toast('Finished.');
+      if (j.status === 'error') toast(j.error || 'Something failed — see Activity.', true);
+      if (j.status === 'approve') toast('Ready to review.');
+      if (j.status === 'canceled') toast('Stopped.');
       if (location.pathname === '/' || location.pathname === '/dashboard'
           || location.pathname.startsWith('/project/')) route();
     }
-    lastStage = j.stage;
+    lastStatus = j.status;
   } catch (e) { /* server restarting — try again on the next tick */ }
   setTimeout(poll, 900);
 }
