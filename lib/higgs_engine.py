@@ -38,10 +38,12 @@ DEFAULT_MODEL = "bosonai/higgs-audio-v2-generation-3B-base"
 DEFAULT_TOKENIZER = "bosonai/higgs-audio-v2-tokenizer"
 DEFAULT_SCENE = "Audio is recorded from a quiet room."
 DEFAULT_MAX_NEW_TOKENS = 2048
+DEFAULT_ASR_MODEL = "openai/whisper-small"   # for auto-transcribing new clips
 STOP_STRINGS = ["<|end_of_text|>", "<|eot_id|>"]
 
-# One loaded engine, kept alive across scenes (load is most of the cost).
+# One loaded engine (and one ASR), kept alive across scenes (load is the cost).
 _ENGINE = {"obj": None, "key": None, "device": None}
+_ASR = {"obj": None, "key": None}
 
 
 class HiggsError(RuntimeError):
@@ -111,22 +113,62 @@ def device_info(cfg: dict | None = None) -> dict:
 
 # -------------------------------------------------------------- references
 
-def _transcript_for(lang: str, reference: str) -> str:
-    """The words spoken in the reference clip, for cloning. Looked up from
-    voices.json ("reference_text") or a sibling .txt next to the clip. Empty
-    string means 'no transcript' → the caller uses a generic voice."""
-    txt = (V.pref_for(lang).get("reference_text") or "").strip() \
-        if hasattr(V, "pref_for") else ""
+def _auto_transcribe(clip_path: Path, lang: str, cfg: dict, log) -> str:
+    """Best-effort ASR so cloning is automatic when a new clip is added: Whisper
+    via `transformers` (already a Higgs dependency), run ONCE per clip. Returns
+    the transcript, or "" if transcription isn't available or fails — the caller
+    then falls back to a generic voice, never an error."""
+    try:
+        from transformers import pipeline
+    except Exception:
+        return ""
+    model = str(cfg.get("higgs_asr_model") or DEFAULT_ASR_MODEL)
+    dev = best_device(cfg)
+    key = (model, dev)
+    if _ASR["obj"] is None or _ASR["key"] != key:
+        try:
+            log(f"  Higgs: transcribing the reference clip once with {model} …")
+            _ASR["obj"] = pipeline("automatic-speech-recognition", model=model,
+                                   device=(0 if dev == "cuda" else -1))
+            _ASR["key"] = key
+        except Exception as e:
+            log(f"  (auto-transcript unavailable: {e})")
+            return ""
+    try:
+        gen = {"language": lang} if lang else {}
+        out = _ASR["obj"](str(clip_path), generate_kwargs=gen, chunk_length_s=30)
+        return (out.get("text") or "").strip()
+    except Exception as e:
+        log(f"  (auto-transcript failed: {e})")
+        return ""
+
+
+def _transcript_for(lang: str, reference: str, cfg: dict | None = None, log=print) -> str:
+    """The words spoken in the reference clip, needed to clone the voice. In order
+    of preference: voices.json "reference_text", a sibling .txt next to the clip,
+    then a one-time auto-transcription (cached as that .txt). "" means no
+    transcript → the caller uses a generic voice."""
+    txt = (V.pref_for(lang).get("reference_text") or "").strip()
     if txt:
         return txt
     try:
         src = V.resolve(reference)                 # the raw clip on disk
-        side = src.with_suffix(".txt")
-        if side.exists():
-            return side.read_text(encoding="utf-8").strip()
     except Exception:
-        pass
-    return ""
+        return ""
+    side = src.with_suffix(".txt")
+    if side.exists():
+        cached = side.read_text(encoding="utf-8").strip()
+        if cached:
+            return cached
+    got = _auto_transcribe(src, lang, cfg or {}, log)
+    if got:
+        try:
+            side.write_text(got, encoding="utf-8")  # cache + let the user edit it
+            log(f"  Higgs: saved the transcript to {side.name} "
+                f"(edit it if a word is off).")
+        except Exception:
+            pass
+    return got
 
 
 # ------------------------------------------------------------------- model
@@ -234,11 +276,11 @@ def synth(scenes, lang: str, ref_wav, cache: Path = CACHE, opts: dict | None = N
     engine = _engine_for(cfg)
     scene_desc = str(cfg.get("higgs_scene") or DEFAULT_SCENE)
     max_new = int(cfg.get("higgs_max_new_tokens") or DEFAULT_MAX_NEW_TOKENS)
-    transcript = _transcript_for(lang, reference) if ref_wav else ""
+    transcript = _transcript_for(lang, reference, cfg, log) if ref_wav else ""
     if ref_wav and not transcript:
-        log("  ⚠ Higgs: no transcript for the reference clip — using a generic "
-            "voice. Add \"reference_text\" in voices.json (or a .txt next to the "
-            "clip) to clone your voice.")
+        log("  ⚠ Higgs: no transcript for the reference clip and auto-transcribe "
+            "wasn't available — using a generic voice. Add \"reference_text\" in "
+            "the Voices panel (or a .txt next to the clip) to clone your voice.")
 
     model_name = str(cfg.get("higgs_model") or DEFAULT_MODEL)
     out, made = [], 0

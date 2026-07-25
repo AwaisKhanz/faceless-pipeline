@@ -1112,11 +1112,23 @@ class Handler(BaseHTTPRequestHandler):
             lang = lang or "en"          # global (project-less) voices page
             vx.ensure_folders()
             refs = vx.references(lang)
+            cfg_v = pl.load_config()
+            selected = "higgs" if str(cfg_v.get("voice_engine", "chatterbox")).strip().lower() \
+                in ("higgs", "higgs-audio") else "chatterbox"
+            try:
+                from lib import higgs_engine as _HG
+                higgs_ok = _HG.installed()
+            except Exception:
+                higgs_ok = False
+            engine = {"selected": selected,
+                      "active": "higgs" if (selected == "higgs" and higgs_ok) else "chatterbox",
+                      "higgs_installed": higgs_ok}
             return self._json({
                 "lang": lang,
                 "lang_name": vx.LANGS.get(lang, lang),
                 "languages": vx.LANGS,
                 "status": vx.status(lang),
+                "engine": engine,
                 # Only this language's clips, plus any left loose — a German
                 # list full of English voices is noise, not choice.
                 "references": [r for r in refs if r["lang"] == lang],
@@ -1222,11 +1234,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/choose_voice":
             lang = b.get("lang") or "en"
-            saved = vx.save_pref(
-                lang,
-                reference=b.get("reference"),
-                exaggeration=b.get("exaggeration"),
-                cfg_weight=b.get("cfg_weight"))
+            fields = dict(reference=b.get("reference"),
+                          exaggeration=b.get("exaggeration"),
+                          cfg_weight=b.get("cfg_weight"))
+            # Only touch reference_text (Higgs clone transcript) when the caller
+            # actually sent it, so choosing a clip never wipes an existing one.
+            if "reference_text" in b:
+                fields["reference_text"] = b.get("reference_text")
+            saved = vx.save_pref(lang, **fields)
             log(f"Voice for {lang}: {tts.describe(lang)}")
             return self._json({"saved": saved})
 

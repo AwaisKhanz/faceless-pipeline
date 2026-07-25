@@ -1333,12 +1333,49 @@ async function viewVoices(lang) {
         .filter(([c]) => !(c in (d.counts || {})))
         .map(([c, n]) => el('option', { value: c, selected: c === lang }, n))));
 
+  const eng = d.engine || { active: 'chatterbox', selected: 'chatterbox', higgs_installed: false };
+  const enginePill = eng.active === 'higgs'
+    ? el('span', { class: 'pill ok' }, 'Engine: Higgs')
+    : eng.selected === 'higgs'
+      ? el('span', { class: 'pill part', title: 'Higgs is selected in config.json but not installed on this machine — using Chatterbox.' },
+        'Engine: Chatterbox (Higgs not installed)')
+      : el('span', { class: 'pill plain none' }, 'Engine: Chatterbox');
+
   v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
     el('div', { class: 'row' }, tabs,
       el('div', { style: 'flex:1' }),
+      enginePill,
       chosenRel
         ? el('span', { class: 'pill ok' }, 'Using: ' + (d.status.reference_label || chosenRel))
         : el('span', { class: 'pill none' }, 'no clip chosen'))));
+
+  // ── reference transcript (Higgs voice cloning) ──────────────────────────
+  // Higgs clones from the clip PLUS what's said in it. Left blank, Higgs
+  // auto-transcribes the clip the first time it's used; this box lets you set
+  // or fix it. Chatterbox ignores it entirely.
+  if (chosenRel) {
+    const ta = el('textarea', {
+      rows: 3, style: MONO,
+      placeholder: 'What is spoken in the chosen clip… (leave blank — Higgs will '
+        + 'transcribe it automatically the first time)'
+    });
+    ta.value = (d.chosen || {}).reference_text || '';
+    v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
+      el('div', { class: 'sub', style: 'margin-bottom:6px' },
+        'Reference transcript · used by the Higgs engine to clone your voice'),
+      ta,
+      el('div', { class: 'row', style: 'margin-top:10px' },
+        el('button', {
+          class: 'btn sm primary', onclick: async e => {
+            e.target.disabled = true;
+            await api('/api/choose_voice', { lang, reference_text: ta.value });
+            toast('Reference transcript saved for ' + d.lang_name + '.');
+            e.target.disabled = false;
+          }
+        }, 'Save transcript'),
+        el('span', { class: 'sub' },
+          'Chatterbox doesn’t need this. Higgs works best with an accurate transcript.'))));
+  }
 
   const tune = {
     exag: (d.chosen || {}).exaggeration ?? 0.4,
