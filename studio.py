@@ -1048,6 +1048,36 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     langs[lg] = {}
             cfg = pl.load_config()
+
+            # Voice engine — say clearly WHICH backend is narrating right now,
+            # which model, and on what device, so Settings isn't a guessing game.
+            v_selected = "higgs" if str(cfg.get("voice_engine", "chatterbox")).strip().lower() \
+                in ("higgs", "higgs-audio") else "chatterbox"
+            try:
+                from lib import higgs_engine as HG
+                higgs_ok = HG.installed()
+                higgs_dev = HG.device_info(cfg) if higgs_ok else {}
+            except Exception:
+                higgs_ok, higgs_dev = False, {}
+            v_active = "higgs" if (v_selected == "higgs" and higgs_ok) else "chatterbox"
+            if v_active == "higgs":
+                v_model = str(cfg.get("higgs_model") or HG.DEFAULT_MODEL).split("/")[-1]
+                v_devinfo = higgs_dev
+            else:
+                v_model = "Chatterbox Multilingual"
+                v_devinfo = dev
+            voice = {
+                "selected": v_selected,
+                "active": v_active,
+                "chatterbox_installed": CB.installed(),
+                "higgs_installed": higgs_ok,
+                "model": v_model,
+                "device": v_devinfo.get("device") or "cpu",
+                "device_name": v_devinfo.get("name"),
+                "fallback": v_selected == "higgs" and not higgs_ok,
+                "install_hint": (HG.install_hint() if v_selected == "higgs" and not higgs_ok else ""),
+            }
+
             return self._json({
                 "python": sys.version.split()[0],
                 "in_venv": Path(sys.prefix) == (ROOT / ".venv"),
@@ -1057,6 +1087,7 @@ class Handler(BaseHTTPRequestHandler):
                 "captions_ok": caps in ("ass", "subtitles"),
                 "ffmpeg_hint": R.ffmpeg_fix_hint(),
                 "chatterbox": CB.installed(),
+                "voice": voice,
                 "device": dev,
                 "gpu_ok": dev.get("device") in ("cuda", "mps"),
                 "clip": VIS.capability(cfg),

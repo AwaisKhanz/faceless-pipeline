@@ -1738,8 +1738,22 @@ async function viewSettings() {
       ({ ass: 'styled, via libass', subtitles: 'basic, via libass',
          drawtext: 'plain, no libass', none: 'unavailable — no libass' }[d.captions]
         || d.captions), d.ffmpeg_hint),
-    line(d.chatterbox, 'Voice engine', d.chatterbox ? 'installed' : 'missing',
-      'run setup.sh / setup.bat'),
+    (() => {
+      const vo = d.voice || {};
+      const eng = vo.active === 'higgs' ? 'Higgs Audio' : 'Chatterbox Multilingual';
+      const detail = eng + (vo.model && vo.active === 'higgs' ? ' · ' + vo.model : '')
+        + (vo.device ? ' · ' + vo.device : '');
+      const ok = vo.active === 'higgs' ? vo.higgs_installed : vo.chatterbox_installed;
+      return line(ok, 'Voice engine', detail, 'run setup.sh / setup.bat');
+    })(),
+    (() => {
+      const vo = d.voice || {};
+      // config asked for Higgs but it isn't installed -> we're on Chatterbox.
+      return vo.fallback ? el('tr', {}, el('td', {}),
+        el('td', { class: 'sub', colspan: '2' },
+          'Higgs is set in config.json but not installed here — narrating with '
+          + 'Chatterbox. Install it (see below), then reload.')) : null;
+    })(),
     line(d.chatterbox ? d.gpu_ok : null, 'GPU',
       dev.name ? dev.name + (dev.vram_gb ? ' · ' + dev.vram_gb + ' GB' : '') : 'none',
       'PyTorch has no CUDA build — see README section 6'),
