@@ -12,6 +12,7 @@ Mozilla Common Voice, or a public-domain LibriVox reading.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import subprocess
@@ -26,6 +27,18 @@ PREPARED = ROOT / "cache" / "refs"   # normalised reference copies
 # Calm documentary narration: low exaggeration keeps it from performing at the
 # listener, which is wrong for this audience.
 DEFAULTS = {"exaggeration": 0.4, "cfg_weight": 0.5, "temperature": 0.7}
+
+# Only these define the VOICE (and so the cache key). retries/best_of/seed are
+# control knobs — they change how we reach a clean take, not the take we aim for,
+# so they must NOT enter the cache key or they'd invalidate every cached clip.
+_VOICE_KEYS = ("exaggeration", "cfg_weight", "temperature")
+RETRIES = 2            # extra attempts when a take comes out broken (stutter/silence)
+BEST_OF = 1            # takes to generate up front and keep the cleanest of
+
+
+def _voice_opts(o: dict) -> dict:
+    """The subset of options that actually shape the voice (the cache key)."""
+    return {k: o[k] for k in _VOICE_KEYS if k in o}
 
 # A script often carries formatting a listener should never hear: markdown
 # (#, *, _, `, ~, >), list bullets and numbering, emoji, markdown links, bare
@@ -333,52 +346,148 @@ def _save_wav(wav, sample_rate: int, out: Path) -> Path:
                 f"  wave:      {type(wave_err).__name__}: {wave_err}")
 
 
+class _RepCatcher(logging.Handler):
+    """Catches Chatterbox's own 'repetition detected / forcing EOS' warnings so we
+    can react to them, and (by disabling propagation while attached) keeps them
+    off the console instead of flooding the log."""
+
+    def __init__(self):
+        super().__init__()
+        self.repetition = False
+
+    def emit(self, record):
+        try:
+            m = record.getMessage().lower()
+        except Exception:
+            return
+        if "repetition" in m:
+            self.repetition = True
+
+
+def _seed_all(seed: int) -> None:
+    """Make one take reproducible — and, crucially, make the NEXT take different,
+    so a retry actually explores a new sample instead of repeating the glitch."""
+    try:
+        import random
+
+        import numpy as np
+        import torch
+        random.seed(seed)
+        np.random.seed(seed % (2 ** 32))
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except Exception:
+        pass
+
+
+def _take_quality(samples, sr: int, text: str, repetition: bool):
+    """Judge one generated take. Returns (ok, badness); lower badness is better.
+
+    Catches the three ways Chatterbox fails on this pipeline's short lines: a
+    repeated/forced-EOS stutter, near-silence/noise (no real voice), and a clip
+    far too short (a cut-off word) or far too long (it rambled)."""
+    import numpy as np
+    n = 0 if samples is None else int(getattr(samples, "size", len(samples)))
+    dur = n / float(sr or 24000)
+    rms = float(np.sqrt(np.mean(np.square(samples)))) if n else 0.0
+    words = max(1, len(text.split()))
+    expected = max(0.35, words * 0.33)              # ~seconds of narration
+    silent = rms < 0.005                            # produced silence / faint noise
+    too_short = dur < max(0.18, 0.30 * expected)    # a word got cut off
+    too_long = dur > expected * 5 + 4               # it rambled past the end
+    bad = bool(repetition or silent or too_short or too_long)
+    badness = (0.0 if not bad else 100.0) + abs(dur - expected) + (1000.0 if silent else 0.0)
+    return (not bad, badness)
+
+
+def _generate_capture(model, text: str, kw: dict, multilingual: bool, lang: str):
+    """One generation, returning (samples_np, sr, repetition_flag). Chatterbox's
+    repetition warnings are captured (and silenced) for the duration of the call."""
+    import numpy as np
+    import torch
+    alog = logging.getLogger("chatterbox.models.t3.inference.alignment_stream_analyzer")
+    catcher = _RepCatcher()
+    prev_propagate = alog.propagate
+    alog.addHandler(catcher)
+    alog.propagate = False                          # capture, don't spam the console
+    try:
+        try:
+            with torch.no_grad():
+                wav = model.generate(text, **kw)
+        except TypeError as e:
+            # This build rejected one of our tuning knobs — retry with the bare
+            # minimum. A TypeError from INSIDE generation is a real fault: re-raise.
+            if "unexpected keyword" not in str(e):
+                raise
+            bare = {"audio_prompt_path": kw.get("audio_prompt_path")}
+            if multilingual:
+                bare["language_id"] = lang_id(lang)
+            with torch.no_grad():
+                wav = model.generate(text, **bare)
+    finally:
+        alog.removeHandler(catcher)
+        alog.propagate = prev_propagate
+
+    sr = getattr(model, "sr", 24000)
+    if isinstance(wav, (tuple, list)) and len(wav) == 2:
+        wav, sr = wav
+    if wav is None:
+        return None, sr, True                       # no audio == the worst artifact
+    samples = (wav.detach().cpu().squeeze().numpy()
+               if hasattr(wav, "detach") else np.asarray(wav).squeeze())
+    del wav
+    return samples, sr, catcher.repetition
+
+
 def synth_one(text: str, ref_wav: Path, lang: str, out: Path,
-              opts: dict | None = None) -> Path:
+              opts: dict | None = None, log=None) -> Path:
+    """Generate ONE scene's audio, guarding against Chatterbox's short-line
+    artifacts: try again with a fresh seed when a take comes out as a stutter,
+    silence or a cut-off, and keep the cleanest take. `best_of` generates several
+    up front and picks the best; `retries` adds more attempts only when needed."""
     if not installed():
         raise ChatterboxError(install_hint())
     o = {**DEFAULTS, **(opts or {})}
     multilingual = lang.lower() != "en"
     model = load_model(multilingual=multilingual)
 
-    kw = dict(audio_prompt_path=str(ref_wav),
-              exaggeration=o["exaggeration"], cfg_weight=o["cfg_weight"],
-              temperature=o["temperature"])
+    base_kw = dict(audio_prompt_path=str(ref_wav),
+                   exaggeration=o["exaggeration"], cfg_weight=o["cfg_weight"],
+                   temperature=o["temperature"])
     if multilingual:
-        kw["language_id"] = lang_id(lang)
+        base_kw["language_id"] = lang_id(lang)
 
-    # Inference needs no autograd graph, and building one holds every
-    # intermediate activation alive — the single largest avoidable allocation
-    # per line. Harmless if Chatterbox already does this internally.
-    import torch
+    needed = max(1, int(o.get("best_of", BEST_OF)))
+    max_takes = needed + max(0, int(o.get("retries", RETRIES)))
+    seed0 = o.get("seed")
+    if seed0 is None:
+        seed0 = int(hashlib.sha1(text.encode("utf-8")).hexdigest()[:8], 16)
+
+    best = None                                     # (ok, badness, samples, sr)
+    taken = 0
     try:
-        with torch.no_grad():
-            wav = model.generate(text, **kw)
-    except TypeError as e:
-        # Only retry when this build rejected one of our tuning knobs. A
-        # TypeError from *inside* generation is a real fault and must surface —
-        # silently retrying it would change the voice without saying so.
-        if "unexpected keyword" not in str(e):
-            raise
-        kw = {"audio_prompt_path": str(ref_wav)}
-        if multilingual:
-            kw["language_id"] = lang_id(lang)
-        with torch.no_grad():
-            wav = model.generate(text, **kw)
+        for i in range(max_takes):
+            kw = dict(base_kw)
+            if i >= needed:                         # steadier on retries
+                kw["temperature"] = max(0.5, float(o["temperature"]) - 0.05 * (i - needed + 1))
+            _seed_all((seed0 + i) % (2 ** 31))
+            samples, sr, rep = _generate_capture(model, text, kw, multilingual, lang)
+            ok, badness = _take_quality(samples, sr, text, rep)
+            taken += 1
+            if best is None or badness < best[1]:
+                best = (ok, badness, samples, sr)
+            if ok and taken >= needed:              # good enough, and did our quota
+                break
 
-    # Some builds hand back (audio, sample_rate) instead of a bare tensor.
-    sr = getattr(model, "sr", 24000)
-    if isinstance(wav, (tuple, list)) and len(wav) == 2:
-        wav, sr = wav
-
-    if wav is None:
-        raise ChatterboxError(
-            f"Chatterbox returned no audio for: {text[:60]}...")
-    try:
-        return _save_wav(wav, sr, out)
+        if best is None or best[2] is None:
+            raise ChatterboxError(f"Chatterbox returned no audio for: {text[:60]}...")
+        ok, _, samples, sr = best
+        if log and (taken > 1 or not ok):
+            log("      · " + (f"{taken} takes, kept the cleanest"
+                              if ok else f"{taken} takes, still imperfect — kept the best"))
+        return _save_wav(samples, sr, out)
     finally:
-        # After the tensor is on disk nothing needs it on the GPU any more.
-        del wav
         _free_device_memory()
 
 
@@ -403,7 +512,8 @@ def expected_paths(scenes, lang: str, reference: str, cache: Path = CACHE,
     """
     o = {**DEFAULTS, **(opts or {})}
     ref_name = prepared_name(reference)
-    return [cache / f"cb_{lang}_{s.n:03d}_{_key(speech_text(s.narration), ref_name, lang, o)}.wav"
+    vo = _voice_opts(o)
+    return [cache / f"cb_{lang}_{s.n:03d}_{_key(speech_text(s.narration), ref_name, lang, vo)}.wav"
             for s in scenes]
 
 
@@ -414,14 +524,15 @@ def synth(scenes, lang: str, ref_wav: Path, cache: Path = CACHE,
     if not ref_wav.exists():
         raise ChatterboxError(f"Reference clip missing: {ref_wav}")
     o = {**DEFAULTS, **(opts or {})}
+    vo = _voice_opts(o)                          # MUST match expected_paths' key
     cache.mkdir(parents=True, exist_ok=True)
     out, made = [], 0
     for s in scenes:
         txt = speech_text(s.narration)          # what is actually spoken + cached
-        k = _key(txt, ref_wav.name, lang, o)
+        k = _key(txt, ref_wav.name, lang, vo)
         p = cache / f"cb_{lang}_{s.n:03d}_{k}.wav"
         if not p.exists() or p.stat().st_size < 1024:
-            synth_one(txt, ref_wav, lang, p, o)
+            synth_one(txt, ref_wav, lang, p, o, log=log)
             made += 1
             log(f"S{s.n:>3} voiced  ({txt[:52]}...)")
         out.append(p)

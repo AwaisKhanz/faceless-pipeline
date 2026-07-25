@@ -58,7 +58,10 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
     p = V.pref_for(lang)
     return CB.synth(scenes, lang, reference_for(lang, voice), cache,
                     {"exaggeration": p["exaggeration"],
-                     "cfg_weight": p["cfg_weight"]}, log=log)
+                     "cfg_weight": p["cfg_weight"],
+                     "temperature": p["temperature"],
+                     "retries": p["retries"],
+                     "best_of": p["best_of"]}, log=log)
 
 
 def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> list[Path]:

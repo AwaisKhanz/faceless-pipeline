@@ -30,6 +30,13 @@ LANGS = {
 # performing at the listener, which is wrong for this material.
 DEFAULT_EXAGGERATION = 0.4
 DEFAULT_CFG = 0.5
+DEFAULT_TEMPERATURE = 0.7
+# Anti-glitch controls (not part of the voice's sound): how hard to fight the
+# short-line stutters/silence Chatterbox can produce. retries adds attempts when
+# a take looks broken; best_of always generates N and keeps the cleanest (uses
+# more GPU for steadier output). All overridable per language in voices.json.
+DEFAULT_RETRIES = 2
+DEFAULT_BEST_OF = 1
 
 FALLBACK_LINE = {
     "en": "You're wide awake, and it's still dark. You know, without even "
@@ -59,6 +66,9 @@ def pref_for(lang: str) -> dict:
         "reference": p.get("reference", ""),
         "exaggeration": float(p.get("exaggeration", DEFAULT_EXAGGERATION)),
         "cfg_weight": float(p.get("cfg_weight", DEFAULT_CFG)),
+        "temperature": float(p.get("temperature", DEFAULT_TEMPERATURE)),
+        "retries": int(p.get("retries", DEFAULT_RETRIES)),
+        "best_of": int(p.get("best_of", DEFAULT_BEST_OF)),
     }
 
 
