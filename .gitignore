@@ -49,3 +49,6 @@ music/*
 Thumbs.db
 desktop.ini
 config.json.bak-*
+
+# Higgs Audio engine, cloned locally for the optional voice backend
+higgs-audio/

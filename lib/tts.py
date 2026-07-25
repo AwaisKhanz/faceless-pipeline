@@ -107,6 +107,14 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
             f"{', '.join(sorted(V.LANGS))}")
 
     cfg = _config()
+    # Say exactly what's about to narrate, so the Activity log is self-explanatory:
+    # engine · model · device · reference voice.
+    ref = _raw_ref(lang, voice)
+    try:
+        log(f"  Voice engine: {describe(lang)}")
+        log(f"  Reference clip: {ref or '(none — pick one in Voices)'}")
+    except Exception:
+        pass
     if _use_higgs(cfg):
         from . import higgs_engine as HG
         try:
