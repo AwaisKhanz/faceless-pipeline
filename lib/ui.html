@@ -672,6 +672,13 @@ async function viewProject(id) {
   const st = p.status || { languages: {}, scenes: 0, assets: 0 };
   const o = overall(st);
   const codes = Object.keys(st.languages || {});
+  // Does THIS project already have a job running or queued? If so, the run
+  // buttons would double-start work (and "Resume" while it's mid-voice is just
+  // confusing) — so they're disabled with a pointer to Activity.
+  const busy = ((S.queue && S.queue.jobs) || [])
+    .some(j => j.project === p.id && (j.status === 'running' || j.status === 'queued'));
+  const busyTitle = 'This project has a job running — watch it in Activity.';
+  const complete = o.text === 'complete';
 
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' },
@@ -690,16 +697,19 @@ async function viewProject(id) {
   v.append(el('div', { class: 'card', style: 'margin-bottom:22px' },
     el('div', { class: 'row' },
       el('button', {
-        class: 'btn' + (st.assets ? '' : ' primary'),
+        class: 'btn' + (st.assets ? '' : ' primary'), disabled: busy,
+        title: busy ? busyTitle : '',
         onclick: async e => {
           e.target.disabled = true;
           const r = await api('/api/source', { id: p.id });
           if (r.started) go('/activity'); else e.target.disabled = false;
         }
       }, st.assets ? 'Re-source all' : 'Find visuals'),
-      el('button', {
-        class: 'btn',
-        title: 'Find visuals, then voice and render every language — no stops.',
+      // Only offer "Auto-process the rest" while there IS a rest to do — a
+      // finished project has nothing left to chain.
+      complete ? null : el('button', {
+        class: 'btn', disabled: busy,
+        title: busy ? busyTitle : 'Find visuals, then voice and render every language — no stops.',
         onclick: async e => {
           e.target.disabled = true;
           const r = await api('/api/source', { id: p.id, auto: true });
@@ -776,20 +786,21 @@ async function viewProject(id) {
               onclick: () => playVideo(l.mp4, p.id + ' · ' + (l.name || code))
             }, 'Play') : null,
             el('button', {
-              class: 'btn sm', disabled: !l.voice_ref,
-              title: l.voice_ref ? '' : 'Choose a voice for this language first',
+              class: 'btn sm', disabled: busy || !l.voice_ref,
+              title: busy ? busyTitle : l.voice_ref ? '' : 'Choose a voice for this language first',
               onclick: () => run([code], ['voice'], false)
             }, l.voice ? 'Re-check' : l.voice_n ? 'Resume' : 'Voice'),
             l.voice_n ? el('button', {
-              class: 'btn sm danger',
+              class: 'btn sm danger', disabled: busy,
+              title: busy ? busyTitle : '',
               onclick: () => confirm(`Delete ${l.voice_n} cached narration file(s) for `
                 + `${l.name || code} and generate them from scratch?`)
                 && run([code], ['voice'], true)
             }, 'Redo') : null,
             el('button', {
               class: 'btn sm' + (l.voice && !l.render ? ' primary' : ''),
-              disabled: !l.voice_ref,
-              title: l.voice_ref ? '' : 'Choose a voice for this language first',
+              disabled: busy || !l.voice_ref,
+              title: busy ? busyTitle : l.voice_ref ? '' : 'Choose a voice for this language first',
               onclick: () => run([code], ['render'], false)
             }, l.render ? 'Re-render' : 'Render')))))) ),
     el('div', { class: 'hr' }),
@@ -811,8 +822,8 @@ async function viewProject(id) {
         el('option', { value: '' }, 'None'), S.music.map(m => el('option', { value: m }, m))),
       el('button', {
         class: 'btn primary',
-        disabled: !codes.every(c => st.languages[c].voice_ref),
-        title: codes.every(c => st.languages[c].voice_ref) ? ''
+        disabled: busy || !codes.every(c => st.languages[c].voice_ref),
+        title: busy ? busyTitle : codes.every(c => st.languages[c].voice_ref) ? ''
           : 'Every language needs a voice first',
         onclick: () => run(codes, ['voice', 'render'], false)
       }, 'Build every language'))));

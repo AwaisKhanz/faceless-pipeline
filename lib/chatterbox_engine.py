@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -25,6 +26,20 @@ PREPARED = ROOT / "cache" / "refs"   # normalised reference copies
 # Calm documentary narration: low exaggeration keeps it from performing at the
 # listener, which is wrong for this audience.
 DEFAULTS = {"exaggeration": 0.4, "cfg_weight": 0.5, "temperature": 0.7}
+
+# Markdown / list symbols a script often carries ("#4 - Everest", "*bold*") that
+# the model would otherwise read ALOUD as "hashtag", "asterisk", "underscore".
+# Strip the symbols, keep the words and numbers, so "#4 - Everest" is spoken as
+# "4 - Everest" and "*Savage Mountain*" as "Savage Mountain".
+_SPEAK_STRIP = re.compile(r"[*_`#>~•‣▪]+")
+
+
+def speech_text(text: str) -> str:
+    """Sheet narration → clean spoken text: drop symbols the TTS pronounces by
+    name, keep everything a listener should actually hear."""
+    t = _SPEAK_STRIP.sub(" ", text or "")
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t or (text or "")
 
 # Languages the multilingual model speaks.
 SUPPORTED = ("ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "it",
@@ -372,7 +387,7 @@ def expected_paths(scenes, lang: str, reference: str, cache: Path = CACHE,
     """
     o = {**DEFAULTS, **(opts or {})}
     ref_name = prepared_name(reference)
-    return [cache / f"cb_{lang}_{s.n:03d}_{_key(s.narration, ref_name, lang, o)}.wav"
+    return [cache / f"cb_{lang}_{s.n:03d}_{_key(speech_text(s.narration), ref_name, lang, o)}.wav"
             for s in scenes]
 
 
@@ -386,12 +401,13 @@ def synth(scenes, lang: str, ref_wav: Path, cache: Path = CACHE,
     cache.mkdir(parents=True, exist_ok=True)
     out, made = [], 0
     for s in scenes:
-        k = _key(s.narration, ref_wav.name, lang, o)
+        txt = speech_text(s.narration)          # what is actually spoken + cached
+        k = _key(txt, ref_wav.name, lang, o)
         p = cache / f"cb_{lang}_{s.n:03d}_{k}.wav"
         if not p.exists() or p.stat().st_size < 1024:
-            synth_one(s.narration, ref_wav, lang, p, o)
+            synth_one(txt, ref_wav, lang, p, o)
             made += 1
-            log(f"S{s.n:>3} voiced  ({s.narration[:52]}...)")
+            log(f"S{s.n:>3} voiced  ({txt[:52]}...)")
         out.append(p)
     log(f"Chatterbox: {made} generated, {len(scenes) - made} from cache "
         f"({device_in_use()}).")
