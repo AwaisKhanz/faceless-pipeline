@@ -1359,7 +1359,9 @@ async function viewVoices(lang) {
       placeholder: 'What is spoken in the chosen clip… (leave blank — Higgs will '
         + 'transcribe it automatically the first time)'
     });
-    ta.value = (d.chosen || {}).reference_text || '';
+    // Show the transcript actually in use: the manual override, else the
+    // auto-generated .txt on disk (so you can see and edit the auto one here).
+    ta.value = d.transcript || (d.chosen || {}).reference_text || '';
     v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
       el('div', { class: 'sub', style: 'margin-bottom:6px' },
         'Reference transcript · used by the Higgs engine to clone your voice'),

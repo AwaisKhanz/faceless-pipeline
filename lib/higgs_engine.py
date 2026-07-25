@@ -143,6 +143,19 @@ def _auto_transcribe(clip_path: Path, lang: str, cfg: dict, log) -> str:
         return ""
 
 
+def sibling_transcript(reference: str) -> str:
+    """The transcript already saved next to a clip (the .txt), if any. Never runs
+    ASR — for display in the Voices panel only, so the box shows the transcript
+    that's actually in use (auto-generated or hand-written)."""
+    try:
+        side = V.resolve(reference).with_suffix(".txt")
+        if side.exists():
+            return side.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _transcript_for(lang: str, reference: str, cfg: dict | None = None, log=print) -> str:
     """The words spoken in the reference clip, needed to clone the voice. In order
     of preference: voices.json "reference_text", a sibling .txt next to the clip,

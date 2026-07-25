@@ -1123,12 +1123,23 @@ class Handler(BaseHTTPRequestHandler):
             engine = {"selected": selected,
                       "active": "higgs" if (selected == "higgs" and higgs_ok) else "chatterbox",
                       "higgs_installed": higgs_ok}
+            # The transcript actually in use for the chosen clip: the manual
+            # override, else the auto-generated .txt on disk (display only).
+            chosen_pref = vx.pref_for(lang)
+            transcript = (chosen_pref.get("reference_text") or "").strip()
+            if not transcript and chosen_pref.get("reference"):
+                try:
+                    from lib import higgs_engine as _HG2
+                    transcript = _HG2.sibling_transcript(chosen_pref["reference"])
+                except Exception:
+                    transcript = ""
             return self._json({
                 "lang": lang,
                 "lang_name": vx.LANGS.get(lang, lang),
                 "languages": vx.LANGS,
                 "status": vx.status(lang),
                 "engine": engine,
+                "transcript": transcript,
                 # Only this language's clips, plus any left loose — a German
                 # list full of English voices is noise, not choice.
                 "references": [r for r in refs if r["lang"] == lang],
