@@ -667,6 +667,11 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
         gen_mode = "off"
     gen_min = float(cfg.get("generate_min") or 0.60)
     gen_cap = int(cfg.get("generate_max") or 40)
+    # Scenes the sheet marks `exact` (a specific named thing a search can't be
+    # trusted to get) are GENERATED regardless of any search score — but only when
+    # generation is on. Toggle with generate_exact (default on).
+    gen_exact = str(cfg.get("generate_exact", "auto")).strip().lower() \
+        not in ("off", "false", "no", "0", "none")
     _gen = None
     if gen_mode != "off":
         try:
@@ -678,6 +683,14 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     if gen_mode != "off" and _gen is None:
         log("  ⚠ generation is on but Vertex is not configured — searching only.")
         gen_mode = "off"
+    # Tell the user when scenes that WANT an exact (generated) visual won't get one
+    # because generation is off — those fall back to a best-effort search.
+    n_exact = sum(1 for s in scenes if getattr(s, "exact", False))
+    if n_exact and (gen_mode == "off" or not gen_exact):
+        why = "generation is off" if gen_mode == "off" else "generate_exact is off"
+        log(f"  ⓘ {n_exact} scene(s) are marked for an exact AI-generated visual, "
+            f"but {why} — searching for them instead. Turn generation on for "
+            f"exact visuals, or generate them by hand in Review.")
     gen_count = [0]                     # images generated so far (mutable closure)
     # PARALLEL SCENES. The machine sits idle during sourcing — it is all network
     # waiting — so running several scenes at once is close to a linear speed-up.
@@ -732,16 +745,22 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                 can_gen = (_gen is not None and s.media == "IMAGE"
                            and not real_person and gen_count[0] < gen_cap)
 
-            # ALL mode: generate instead of searching. A generation failure falls
-            # through to a normal search, so a scene is never left empty by it.
-            if gen_mode == "all" and can_gen:
+            # An `exact` scene needs a specific visual a search can't be trusted to
+            # get, so it's generated up front (like all-mode) rather than searched.
+            want_exact = gen_exact and bool(getattr(s, "exact", False))
+
+            # ALL mode, OR an exact scene in any generation mode: generate instead
+            # of searching. A generation failure falls through to a normal search,
+            # so a scene is never left empty by it.
+            if can_gen and (gen_mode == "all" or want_exact):
                 a = _generate_one(_gen, s, cache, cfg, used, emit)
                 if a and _claim(a["path"], mine):
                     with _state_lock:
                         out[s.n] = a
                         gen_count[0] += 1
                     chosen = a["path"]
-                    emit(f"✦ S{s.n:>3} image · generated · \"{a['query'][:46]}\"")
+                    tag = " (exact)" if want_exact and gen_mode != "all" else ""
+                    emit(f"✦ S{s.n:>3} image · generated{tag} · \"{a['query'][:46]}\"")
                     return
 
             got = None

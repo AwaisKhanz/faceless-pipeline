@@ -42,6 +42,11 @@ class Scene:
     # scene. Routing prefers it over word-matching, which is what lets any subject
     # reach the right archive. "" for old sheets → routing falls back to words.
     topic: str = ""
+    # The model flags a scene `exact` when a stock/search photo would NOT reliably
+    # show the specific thing named (a particular fruit, a labelled diagram, a
+    # specific product…). When generation is on, those are AI-generated instead of
+    # searched. False for ordinary b-roll. Defaults False so old sheets still load.
+    exact: bool = False
 
 
 @dataclass
@@ -101,6 +106,11 @@ def render_main_script(plan: dict, scenes: list[Scene], pid: str, lang: str = "e
             add(f"- Domain: {s.domain}")
         if getattr(s, "topic", ""):
             add(f"- Topic: {s.topic}")
+        if getattr(s, "exact", False):
+            # Marks a scene the model judged needs an EXACT visual — generated
+            # (not searched) when generation is on. Its own optional line, so
+            # older parsers ignore it.
+            add("- Exact: yes")
         fb = [q.strip().strip('`') for q in getattr(s, "fallbacks", []) if q.strip()]
         if fb:
             # Its own line so sheets from before the ladder existed stay valid —
@@ -218,11 +228,16 @@ def _validate_split(original: dict, parts: list[dict] | None) -> list[dict] | No
     if len(queries) < 2:                         # no point splitting into dupes
         return None
     # The parent's hero/note marker belongs on the first beat only, not every one.
+    # `exact` rides onto EVERY part: the specific subject that needed an exact
+    # visual could land in any of them, so all beats of a split exact scene are
+    # generated rather than risk the wrong one being searched.
     new[0]["hero"] = original.get("hero", False)
     new[0]["note"] = original.get("note", "") or ""
     for p in new[1:]:
         p["hero"] = False
         p["note"] = ""
+    for p in new:
+        p["exact"] = bool(original.get("exact"))
     return new
 
 
@@ -334,7 +349,8 @@ def split_into_scenes(script: str, plan: dict, key: str, model: str,
                                            (s.get("safety_query") or "").strip())
                                if q],
                     note=s.get("note", "") or "",
-                    hero=bool(s.get("hero")))
+                    hero=bool(s.get("hero")),
+                    exact=bool(s.get("exact")))
               for i, s in enumerate(all_scenes, start=1)]
 
     for s in scenes:

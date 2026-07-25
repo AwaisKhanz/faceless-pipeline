@@ -2499,11 +2499,15 @@ async function viewScript(pid) {
     (cur.scenes || []).forEach(s => body.append(
       el('div', { style: 'display:flex;gap:11px;padding:9px 0;border-bottom:1px solid var(--line)' },
         el('span', { class: 'sub mono', style: 'flex:none;width:32px;padding-top:1px' }, 'S' + s.n),
-        el('div', { style: 'min-width:0' },
+        el('div', { style: 'min-width:0;flex:1' },
           el('div', { style: 'font-size:14.5px;line-height:1.5' },
             s.narration || el('span', { class: 'sub' }, '(no narration)')),
           el('div', { class: 'sub mono', style: 'margin-top:3px;white-space:pre-wrap' },
-            (s.media === 'VIDEO' ? '▶ ' : '\u{1F5BC} ') + (s.query || '—'))))));
+            (s.media === 'VIDEO' ? '▶ ' : '\u{1F5BC} ') + (s.query || '—'))),
+        s.exact
+          ? el('span', { class: 'pill ok', style: 'flex:none;align-self:flex-start',
+              title: 'The AI marked this scene as needing an exact visual — it is AI-generated (not searched) when generation is on.' }, '✦ exact')
+          : null)));
   };
   const paintTabs = () => {
     tabs.innerHTML = '';

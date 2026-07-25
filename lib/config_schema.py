@@ -158,6 +158,8 @@ _FIELDS: list[dict] = [
      "show_if": {"generate": ["mixed", "all"]}},
     {"key": "generate_style", "section": "imagegen", "type": "text",
      "show_if": {"generate": ["mixed", "all"]}},
+    {"key": "generate_exact", "section": "imagegen", "type": "bool",
+     "show_if": {"generate": ["mixed", "all"]}},
 
     # ── video (Veo) ─────────────────────────────────────────────────────────
     {"key": "veo_max", "section": "videogen", "type": "number", "int": True, "min": 1, "max": 20, "step": 1},

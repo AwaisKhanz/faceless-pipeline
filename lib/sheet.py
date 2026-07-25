@@ -24,6 +24,9 @@ class Scene:
     en_narration: str = ""
     note: str = ""        # e.g. "title card", "Arthur intro"
     hero: bool = False    # flagged recurring-character / title-card scene
+    # The model judged this scene needs an EXACT visual (a specific named object,
+    # a diagram…) — AI-generated instead of searched when generation is on.
+    exact: bool = False
 
 
 # **S12 ⬜** · IMAGE   /  **S12 ✅** · VIDEO ⚑ title card
@@ -41,6 +44,9 @@ DOMAIN_RE = re.compile(r"^-\s*Domain:\s*([a-z]+)\s*$", re.I)
 # Optional canonical topic line (newer sheets). Older sheets have none, and must
 # keep parsing exactly as before, so this is treated as optional everywhere.
 TOPIC_RE = re.compile(r"^-\s*Topic:\s*([a-z]+)\s*$", re.I)
+# Optional. Marks a scene the model wants generated (an exact visual). Older
+# sheets have none → exact defaults False, so nothing changes for them.
+EXACT_RE = re.compile(r"^-\s*Exact:\s*(yes|true|1|on)\s*$", re.I)
 
 # **S31** · EN: "..."   then next line   DE: "..."  / ES: "..."
 TR_KEY_RE = re.compile(r'^\*\*S(\d+)\*\*\s*·\s*EN:\s*"(.*)"\s*$')
@@ -65,7 +71,7 @@ def parse_main_script(path: Path) -> list[Scene]:
             cur = {"n": int(m.group(1)), "media": m.group(2),
                    "note": tail.replace("⚑", "").replace("*", "").strip(),
                    "narration": "", "query": "", "fallbacks": [],
-                   "domain": "", "topic": ""}
+                   "domain": "", "topic": "", "exact": False}
             continue
         if cur is None:
             continue
@@ -84,6 +90,10 @@ def parse_main_script(path: Path) -> list[Scene]:
         m = TOPIC_RE.match(line)
         if m:
             cur["topic"] = m.group(1).strip().lower()
+            continue
+        m = EXACT_RE.match(line)
+        if m:
+            cur["exact"] = True
             continue
         m = FALLBACK_RE.match(line)
         if m:
@@ -110,7 +120,8 @@ def _finish(d: dict) -> Scene:
     return Scene(n=d["n"], media=d["media"], narration=d["narration"],
                  query=d["query"], fallbacks=d.get("fallbacks") or [],
                  domain=d.get("domain") or "", topic=d.get("topic") or "",
-                 en_narration=d["narration"], note=note, hero=hero)
+                 en_narration=d["narration"], note=note, hero=hero,
+                 exact=bool(d.get("exact")))
 
 
 def _unescape(s: str) -> str:

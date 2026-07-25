@@ -669,9 +669,10 @@ SCENES_SCHEMA = {
             "safety_query": {"type": "string"},
             "note": {"type": "string"},
             "hero": {"type": "boolean"},
+            "exact": {"type": "boolean"},
         },
         "required": ["narration", "media", "domain", "topic", "query",
-                     "fallback_query", "safety_query", "note", "hero"]}}},
+                     "fallback_query", "safety_query", "note", "hero", "exact"]}}},
     "required": ["scenes"],
 }
 
@@ -943,6 +944,31 @@ Set hero=false for everything else, INCLUDING scenes that merely feel
 important, open a section, cite research or state a fact.
 
 Target at most 1 scene in 6. If you have flagged more, unflag the weakest.
+
+════════════════════════════════════════════════════════════════════════
+9. EXACT FLAG — WHEN A GENERIC PHOTO WOULD BE WRONG
+════════════════════════════════════════════════════════════════════════
+exact=true means "a stock/search photo would NOT reliably show the RIGHT thing,
+so this scene should be AI-GENERATED instead of searched." Judge it purely from
+the narration + your query: would a keyword search return the SPECIFIC subject
+named, or just a plausible look-alike?
+
+Set exact=true when the shot must be one SPECIFIC, NAMEABLE, DESCRIBABLE thing a
+generic search can't be trusted to get, for example (these are ONLY examples —
+decide from THIS script):
+  - a specific species / variety / object named in the line (a particular fruit,
+    plant, animal, mineral, dish, tool, gadget) that ordinary stock would fake
+    with a generic look-alike
+  - a labelled diagram, chart, cutaway, map or how-it-works illustration
+  - a specific anatomical part or medical/scientific depiction
+  - a specific invention, artifact, structure or product described in detail
+  - any "here is exactly X" moment where the WRONG-but-similar photo would mislead
+
+Set exact=false for ordinary b-roll where a good representative photo is fine
+(a person smiling, a city street, hands cooking, nature, generic mood shots) —
+and for scenes about a REAL NAMED PERSON (those are found from photo archives,
+not generated). Do not over-flag: only the shots that genuinely need the exact
+subject. exact is independent of hero.
 """
 
 

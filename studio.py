@@ -788,7 +788,8 @@ def script_data(pid: str) -> dict:
         except Exception:
             scenes = []
         rows = [{"n": s.n, "narration": s.narration, "query": s.query,
-                 "media": s.media, "hero": bool(getattr(s, "hero", False))}
+                 "media": s.media, "hero": bool(getattr(s, "hero", False)),
+                 "exact": bool(getattr(s, "exact", False))}
                 for s in scenes]
         text = " ".join(r["narration"] for r in rows if r["narration"]).strip()
         langs.append({"code": code, "name": lg.get("name", code), "scenes": rows,
