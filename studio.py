@@ -208,6 +208,19 @@ def cancelled() -> bool:
     return bool(job and job.cancel)
 
 
+def _stopper():
+    """A Stop check that works from ANY thread. cancelled() reads a thread-local
+    job id, so it's blind inside the pipeline's own worker threads (parallel
+    sourcing, etc.); this captures the job id now and reads the live flag straight
+    from the store, which is lock-protected and thread-safe."""
+    jid = _cur_id()
+
+    def stop() -> bool:
+        job = STORE.get(jid)
+        return bool(job and job.cancel)
+    return stop
+
+
 class Cancelled(Exception):
     """Raised inside a job when the user asks it to stop."""
 
@@ -289,10 +302,16 @@ def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
         log(f"Generating sheets for '{pid}' via {LLM.capability(cfg)['provider']} "
             f"— {', '.join(langs)}")
 
+        def onp(d, t, m):
+            if cancelled():
+                raise Cancelled()
+            progress(d, t, m)
+            log(f"  {m}")
+
         res = compose.generate(
             scripts, pid, LLM.key_for(cfg),
             model=LLM.model_for(cfg),
-            on_progress=lambda d, t, m: (progress(d, t, m), log(f"  {m}")),
+            on_progress=onp,
             on_warn=lambda m: log(f"  ⚠ {m}"),
             name_people=pl._flag(cfg.get("name_real_people")))
 
@@ -314,6 +333,9 @@ def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
                 outputs=[{"lang": "-", "name": n, "path": str(sdir / n),
                           "size_mb": 0} for n in written],
                 warnings=res.warnings)
+    except Cancelled:
+        log("Stopped before the sheets were written.")
+        return                               # scheduler marks it Stopped
     except Exception as e:
         set_job(stage="error", error=str(e))
         log(f"ERROR: {e}")
@@ -401,9 +423,17 @@ def run_sourcing(pid: str, redo: list[int] | None,
                 except Exception as e:
                     log(f"  visual matching unavailable ({e}) — ranking by size only.")
 
+        stop = _stopper()
         assets = pl.source_stock(scenes, sheet, cfg, redo=redo,
-                                 on_progress=onp, log=log)
+                                 on_progress=onp, log=log, should_cancel=stop)
         end_step()
+
+        # Stop was pressed mid-source: keep whatever was already found, and let
+        # the scheduler mark the job Stopped (its cancel flag is set) rather than
+        # parking it at 'Needs review'.
+        if stop():
+            log("Stopped — kept the visuals already sourced.")
+            return
 
         # Be honest about the outcome. A scene with no asset at all breaks the
         # render; a placeholder builds but carries a generic background. Either
@@ -452,9 +482,13 @@ def run_regenerate(pid: str, which: list[int]) -> None:
         def onp(d, t, m):
             progress(d, t, m)
 
+        stop = _stopper()
         res = pl.generate_scenes(scenes, sheet, cfg, which or [],
-                                 on_progress=onp, log=log)
+                                 on_progress=onp, log=log, should_cancel=stop)
         end_step()
+        if stop():
+            log("Stopped — kept the images already generated.")
+            return
         gen, failed = res["generated"], res["failed"]
         if failed:
             set_job(stage="approve",
@@ -491,9 +525,13 @@ def run_regenerate_video(pid: str, which: list[int]) -> None:
         def onp(d, t, m):
             progress(d, t, m)
 
+        stop = _stopper()
         res = pl.generate_videos(scenes, sheet, cfg, which or [],
-                                 on_progress=onp, log=log)
+                                 on_progress=onp, log=log, should_cancel=stop)
         end_step()
+        if stop():
+            log("Stopped — kept the clips already generated.")
+            return
         gen, failed, skipped = res["generated"], res["failed"], res["skipped"]
         if skipped:
             log(f"Held back {len(skipped)} scene(s) past the per-run cap "
@@ -532,6 +570,8 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
         begin_job(pid, langs, "voice")
 
         for li, lang in enumerate(langs):
+            if cancelled():
+                raise Cancelled()
             tag = f"[{li + 1}/{len(langs)}] {pl.LANG_NAMES.get(lang, lang)}"
             tr = pl.narration_file(sdir, pid, lang)
             scenes = pl.load_scenes(sheet, lang, tr)
@@ -540,10 +580,16 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
             set_job(label=f"{tag} — narration")
             log(f"{tag}: generating narration ({len(scenes)} lines)")
             t0 = time.time()
+
+            def on_voice(d, t, m, tag=tag):
+                if cancelled():
+                    raise Cancelled()
+                progress(d, t, f"{tag} — voicing line {d} of {t}")
+                log(f"  {m}")
+
             vs = pl.generate_voice(
                 scenes, lang, sheet, voice=voices.get(lang) or None,
-                on_progress=lambda d, t, m: (progress(d, t, f"{tag} — voicing line {d} of {t}"),
-                                             log(f"  {m}")))
+                on_progress=on_voice)
             log(f"{tag}: narration done in {time.time() - t0:.0f}s")
             end_step(len(scenes))
 
@@ -573,6 +619,9 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
 
         set_job(stage="done", label="all videos built")
         log("All done.")
+    except Cancelled:
+        log("Stopped — kept any videos already finished.")
+        return                               # scheduler marks it Stopped
     except Exception as e:
         set_job(stage="error", error=str(e))
         log(f"ERROR: {e}")
@@ -705,8 +754,8 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
         set_job(stage="done", label="finished")
         log("Done.")
     except Cancelled:
-        set_job(stage="done", label="stopped")
         log("Stopped. Whatever was already generated is kept and reused.")
+        return                               # scheduler marks it Stopped
     except Exception as e:
         set_job(stage="error", error=str(e))
         log(f"ERROR: {e}")

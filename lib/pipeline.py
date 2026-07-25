@@ -721,7 +721,7 @@ def _expand_scene_queries(scenes, p, cfg: dict, on_progress=lambda *_: None) -> 
 
 
 def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
-                 on_progress=noop, log=noop) -> dict[int, dict]:
+                 on_progress=noop, log=noop, should_cancel=None) -> dict[int, dict]:
     """Fetch a visual per scene. Visuals are language-independent, so this is
     done once per project and reused by every language.
 
@@ -791,7 +791,7 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
         fresh = stock.fetch_all(
             todo, p["stockcache"], cfg.get("pexels_key"), cfg.get("pixabay_key"),
             picks=picks, log=log, cfg=cfg, already=keep,
-            on_progress=on_progress)
+            on_progress=on_progress, should_cancel=should_cancel)
     finally:
         if _logf is not None:
             _logf.write(f"\nSaved {rel_log}\n")
@@ -806,7 +806,7 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
 
 
 def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
-                    on_progress=noop, log=noop) -> dict:
+                    on_progress=noop, log=noop, should_cancel=None) -> dict:
     """Generate a fresh AI image for each scene number in `which`, replacing its
     asset. This is the MANUAL, on-demand path from the review page — distinct
     from the automatic `generate` modes in source_stock.
@@ -841,6 +841,8 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
     failed: list[tuple] = []
 
     for i, n in enumerate(want):
+        if should_cancel and should_cancel():
+            break
         s = by_n[n]
         on_progress(i + 1, len(want), f"S{n} generating")
         picks[n] = picks.get(n, 0) + 1                # fresh take, new filename
@@ -869,7 +871,7 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
 
 
 def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
-                    on_progress=noop, log=noop) -> dict:
+                    on_progress=noop, log=noop, should_cancel=None) -> dict:
     """Generate a Veo video clip for each scene in `which` — the MANUAL, capped,
     expensive path. Only ever called from the review page, one clip at a time,
     and never more than `veo_max` per run so a slip of the finger can't spend the
@@ -904,6 +906,8 @@ def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
     failed: list[tuple] = []
 
     for i, n in enumerate(want):
+        if should_cancel and should_cancel():
+            break
         s = by_n[n]
         on_progress(i + 1, len(want), f"S{n} rendering video (1–2 min)")
         picks[n] = picks.get(n, 0) + 1               # fresh take, new filename

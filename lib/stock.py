@@ -611,7 +611,7 @@ def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
               picks: dict[int, int] | None = None, log=print,
               cfg: dict | None = None, already: dict | None = None,
-              on_progress=None) -> dict[int, dict]:
+              on_progress=None, should_cancel=None) -> dict[int, dict]:
     """Fetch a visual for every scene. Failures are reported, not fatal.
 
     Two things happen here beyond a plain search.
@@ -704,6 +704,11 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             return True
 
     def _source_scene(i, s) -> None:
+        # Stop was pressed: don't start this scene. Scenes already in flight
+        # finish (a few seconds), but the queue empties fast instead of grinding
+        # through every remaining scene.
+        if should_cancel and should_cancel():
+            return
         lines: list = []
         emit = lines.append             # buffer this scene's log; flush at the end
         mine: set = set()               # paths this scene reserved
