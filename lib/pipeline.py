@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import align, captions as cap, render, sheet as sheetlib, stock, tts
 from . import voices as V
+from .chatterbox_engine import speech_text as _speech   # the one spoken-text cleaner
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -1102,12 +1103,17 @@ def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n,
 
     out, changed = [], False
     for i, s in enumerate(scenes):
+        # Align and DISPLAY the same cleaned text the engine actually spoke, so
+        # the captions never show "#5 -" or "Hook:" the voice didn't say, and the
+        # word highlight stays in step. Keyed on the cleaned text so a change to
+        # the cleaner re-aligns instead of reusing stale word timings.
+        clean = _speech(s.narration)
         rec = cache.get(str(s.n))
-        if not (rec and rec.get("text") == s.narration and rec.get("words")):
+        if not (rec and rec.get("text") == clean and rec.get("words")):
             words = align.align_words(
-                voices[i], s.narration, lang, cfg=cfg, dur=vdurs[i],
+                voices[i], clean, lang, cfg=cfg, dur=vdurs[i],
                 log=lambda m: on_progress(n + 3, n + 4, m.strip()))
-            cache[str(s.n)] = rec = {"text": s.narration, "words": words}
+            cache[str(s.n)] = rec = {"text": clean, "words": words}
             changed = True
         # Relative -> absolute (and lead-shifted), so every scene's words sit at
         # the right moment in the finished audio, a hair ahead for a locked feel.
@@ -1251,7 +1257,9 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     silent = p["base"] / "muxed.mp4"
     render.mux(vid, aud, silent)
 
-    texts = [s.narration for s in scenes]
+    # Captions show the cleaned, spoken text — matching the audio, not the raw
+    # sheet line (which may carry "#5 -", "Hook:" etc.).
+    texts = [_speech(s.narration) for s in scenes]
     render.write_srt(texts, starts, vdurs, p["srt"])
 
     # Captions are the LAST step and the most fragile - they depend on how this

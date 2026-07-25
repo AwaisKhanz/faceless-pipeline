@@ -36,8 +36,8 @@ def main() -> int:
         bad += not ok
 
     print("\n  Higgs text normalisation (clean, terminated, no symbols):")
-    check("markdown stripped + terminal punctuation added",
-          HG._norm("#4 - Matterhorn steht "), "4 - Matterhorn steht.")
+    check("countdown marker stripped + terminal punctuation added",
+          HG._norm("#4 - Matterhorn steht "), "Matterhorn steht.")
     check("degree units are spoken, not symbols",
           HG._norm("bei -40°C"), "bei -40 degrees Celsius.")
     check("already-terminated line is left as-is",

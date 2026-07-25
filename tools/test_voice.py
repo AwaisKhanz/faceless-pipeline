@@ -115,6 +115,20 @@ def main() -> int:
         {"exaggeration": 0.4, "cfg_weight": 0.5, "temperature": 0.6}))
     check("temperature (a real voice knob) DOES change the key", k_temp != k_plain, True)
 
+    print("\n  speech_text strips speaking artifacts, keeps real words/numbers:")
+    S = CB.speech_text
+    check("countdown marker '#5 - ' removed", S("#5 - Camu Camu"), "Camu Camu")
+    check("plain '5. ' list number removed", S("5. Jabuticaba"), "Jabuticaba")
+    check("trailing 'Hook:' label removed",
+          S("5 Superfruits You've Never Tried Hook:"), "5 Superfruits You've Never Tried")
+    check("leading 'Hook:' label removed", S("Hook: Forget apples."), "Forget apples.")
+    check("dangling trailing dash removed",
+          S("packed with health benefits-"), "packed with health benefits")
+    check("slash becomes a space", S("Pitanga/Surinam Cherry"), "Pitanga Surinam Cherry")
+    check("a real leading number is KEPT", S("5 Superfruits"), "5 Superfruits")
+    check("an ordinary hyphenated word is KEPT", S("cold-pressed juice"), "cold-pressed juice")
+    check("markdown/emoji still stripped", S("## **Big** 🍎 news"), "Big news")
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

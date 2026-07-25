@@ -51,6 +51,20 @@ def _voice_opts(o: dict) -> dict:
 # text (it's usually real content like "(8,849 meters)").
 _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")           # [label](url) -> label
 _URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)      # bare links
+# A countdown / list-number marker a listener should never hear: "#5 - ", "5. ",
+# "5) ", "#5: ", "#5 ". A bare "5 Superfruits" (a number with NO '#' and no
+# separator after it) is real content and is kept. So a marker qualifies only
+# when it starts with '#', or the number is followed by a - . ) or : separator.
+_COUNTDOWN = re.compile(
+    r"^\s*(?:#\s*\d{1,3}\s*[-–—.):]?\s+|\d{1,3}\s*[-–—.):]\s+)")
+# Script section labels ("Hook:", "Intro:", "Outro:", "CTA:") at either end. The
+# colon is required, so the ordinary word "hook" inside a sentence is left alone.
+_LABELS = r"hook|intro|introduction|outro|cta|call to action|teaser"
+_LABEL_LEAD = re.compile(r"^\s*(?:%s)\s*:\s*" % _LABELS, re.I)
+_LABEL_TRAIL = re.compile(r"[\s,\-–—]*(?:%s)\s*:\s*$" % _LABELS, re.I)
+_SLASH = re.compile(r"\s*/\s*")                           # "Pitanga/Surinam" -> "Pitanga Surinam"
+_SPACED_DASH = re.compile(r"\s+[-–—]{1,2}\s+")            # a dash used as punctuation -> pause
+_TRAIL_DASH = re.compile(r"[\s]*[-–—]+\s*$")              # a dangling "benefits-" -> "benefits"
 _LEAD_LIST = re.compile(r"^\s*(?:[-–—*•‣▪◦·]+|\d{1,2}[.)])\s+")  # "- ", "1. ", "• "
 _SYMS = re.compile(r"[*_`#>~^|=•‣▪◦·♦★☆●◆▶►▸→←«»]+")   # markdown + bullet/symbol glyphs
 _EMOJI = re.compile(
@@ -59,17 +73,31 @@ _EMOJI = re.compile(
 
 
 def speech_text(text: str) -> str:
-    """Sheet narration → clean spoken text: strip formatting/symbols/emoji the
-    TTS would pronounce by name, keeping every real word and number."""
+    """Sheet narration → clean spoken text.
+
+    Strips the things a voice should never READ ALOUD but a script often carries:
+    markdown/symbols/emoji, bare URLs, countdown markers ("#5 - "), script labels
+    ("Hook:"), slashes ("a/b" → "a b"), and dangling dashes — while keeping every
+    real word and number. Used for BOTH the audio and the burned captions, so the
+    two always match.
+    """
     t = text or ""
     t = _MD_LINK.sub(r"\1", t)          # keep the link's words, drop the URL
     t = _URL.sub(" ", t)                # a spoken URL is gibberish
     t = _EMOJI.sub(" ", t)
-    t = _LEAD_LIST.sub("", t)           # drop a leading "- " / "1. " / "• "
+    t = _LABEL_LEAD.sub("", t)          # "Hook: Forget apples" -> "Forget apples"
+    t = _LABEL_TRAIL.sub("", t)         # "... Never Tried Hook:" -> "... Never Tried"
+    t = _COUNTDOWN.sub("", t)           # "#5 - Camu Camu" -> "Camu Camu"
+    t = _LEAD_LIST.sub("", t)           # any leftover leading "- " / "1. " / "• "
     t = t.replace("&", " and ")         # "&" reads as "ampersand" otherwise
+    t = _SLASH.sub(" ", t)              # "Pitanga/Surinam" -> "Pitanga Surinam"
+    t = _TRAIL_DASH.sub("", t)          # drop a dangling trailing dash
+    t = _SPACED_DASH.sub(", ", t)       # a spaced dash becomes a natural pause
     t = _SYMS.sub(" ", t)               # remaining markdown / bullet symbols
     t = re.sub(r"\s+([,.;:!?])", r"\1", t)   # tidy " ," left by removals
+    t = re.sub(r"(,\s*){2,}", ", ", t)       # collapse ",," a dash->comma can make
     t = re.sub(r"\s{2,}", " ", t).strip()
+    t = t.strip(" ,;:")                       # trim stray edge punctuation
     return t or (text or "")
 
 # Languages the multilingual model speaks.
