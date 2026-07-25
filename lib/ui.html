@@ -143,6 +143,19 @@ input[type=range]{accent-color:var(--accent)}
 .cfgrow.wide{display:block}
 .cfgctl{min-width:0}
 .cfgctl input,.cfgctl select,.cfgctl>div>select,.cfgctl>div>input{width:100%}
+/* collapsible settings sections (accordion) */
+.card.acc{padding:0}
+.acc{margin-bottom:12px;overflow:hidden}
+.acc-head{display:flex;align-items:center;gap:13px;cursor:pointer;user-select:none;padding:15px 18px}
+.acc-head:hover{background:var(--surface2)}
+.acc-chev{flex:none;width:14px;text-align:center;color:var(--ink3);font-size:12px;
+  transition:transform .16s ease;transform:rotate(0deg)}
+.acc.collapsed .acc-chev{transform:rotate(-90deg)}
+.acc-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.11em;color:var(--ink2)}
+.acc-desc{font-size:12.5px;color:var(--ink3);margin-top:3px;line-height:1.45}
+.acc-count{margin-left:auto;flex:none;font-size:11.5px;color:var(--ink3);white-space:nowrap}
+.acc-body{padding:0 18px 8px;border-top:1px solid var(--line)}
+.acc.collapsed .acc-body{display:none}
 /* ─── dropdown multi-select ──────────────────────────────────────────────── */
 .msel{position:relative}
 .msel .control{display:flex;align-items:center;gap:8px;min-height:44px;
@@ -1942,8 +1955,26 @@ async function viewConfig() {
     el('code', { class: 'sub', style: 'margin-left:8px;opacity:.55' }, f.key),
     f.help ? el('div', { class: 'sub', style: 'margin-top:3px;line-height:1.5' }, f.help) : null);
 
+  // Which sections are collapsed — remembered across reloads.
+  let collapsed = {};
+  try { collapsed = JSON.parse(localStorage.getItem('cfgCollapsed') || '{}') || {}; } catch (_) {}
+  const saveCollapsed = () => { try { localStorage.setItem('cfgCollapsed', JSON.stringify(collapsed)); } catch (_) {} };
+  const cards = [];
+
+  // Expand / collapse all.
+  const bulk = open => {
+    cards.forEach(c => c.classList.toggle('collapsed', !open));
+    collapsed = {};
+    if (!open) (d.sections || []).forEach(s => { collapsed[s.id] = true; });
+    saveCollapsed();
+  };
+  v.append(el('div', { class: 'row', style: 'gap:8px;margin-bottom:12px' },
+    el('div', { style: 'flex:1' }),
+    el('button', { class: 'btn sm', onclick: () => bulk(true) }, 'Expand all'),
+    el('button', { class: 'btn sm', onclick: () => bulk(false) }, 'Collapse all')));
+
   (d.sections || []).forEach(s => {
-    const body = el('div', {});
+    const body = el('div', { class: 'acc-body' });
     (s.fields || []).forEach(f => {
       // Standard fields: label left, control in a fixed-width right column so
       // every control lines up. Wide fields: control stacked under the label.
@@ -1953,9 +1984,25 @@ async function viewConfig() {
       rows.push({ def: f, row });
       body.append(row);
     });
-    v.append(el('div', { class: 'sec' }, el('h2', {}, s.title),
-      s.help ? el('span', { class: 'sub' }, s.help) : null));
-    v.append(el('div', { class: 'card' }, body));
+    const n = (s.fields || []).length;
+    const card = el('div', { class: 'card acc' + (collapsed[s.id] ? ' collapsed' : '') });
+    const head = el('div', {
+      class: 'acc-head',
+      onclick: () => {
+        const nowCollapsed = !card.classList.contains('collapsed');
+        card.classList.toggle('collapsed', nowCollapsed);
+        collapsed[s.id] = nowCollapsed;
+        saveCollapsed();
+      }
+    },
+      el('span', { class: 'acc-chev' }, '▾'),
+      el('div', { style: 'min-width:0' },
+        el('div', { class: 'acc-title' }, s.title),
+        s.help ? el('div', { class: 'acc-desc' }, s.help) : null),
+      el('span', { class: 'acc-count' }, n + (n === 1 ? ' setting' : ' settings')));
+    card.append(head, body);
+    cards.push(card);
+    v.append(card);
   });
 
   applyVisibility();
