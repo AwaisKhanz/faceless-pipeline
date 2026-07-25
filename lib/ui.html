@@ -1373,36 +1373,65 @@ async function viewVoices(lang) {
     } else {
       const list = d.google_voices || [];
       const cur = d.google_voice || '';
+      const favs = d.google_favorites || [];
+      const favNames = new Set(favs.map(f => f.name));
+
+      // Shared actions, reused by the favourites row and the full picker.
+      const chirpPreview = async (name, btn) => {
+        if (!name) { toast('Pick a voice to preview.'); return; }
+        const t = btn.textContent; btn.textContent = 'Generating…'; btn.disabled = true;
+        const j = await api('/api/preview', { lang, google_voice: name, text: d.sample });
+        btn.textContent = t; btn.disabled = false;
+        if (j.url) new Audio(j.url + '?t=' + Date.now()).play();
+        else toast('Preview failed: ' + (j.error || 'unknown error'));
+      };
+      const chirpUse = async name => {
+        if (!name) { toast('Pick a voice first.'); return; }
+        await api('/api/choose_voice', { lang, google_voice: name });
+        toast(name + ' will now read ' + d.lang_name + '.');
+        viewVoices(lang);
+      };
+      const chirpFav = async (name, on) => {
+        if (!name) { toast('Pick a voice to favourite.'); return; }
+        await api('/api/favorite_voice', { engine: 'google', name, on });
+        toast(on ? ('★ ' + name + ' added to favourites.') : (name + ' removed from favourites.'));
+        viewVoices(lang);
+      };
+
+      // ── favourites: your starred voices, pinned to the top ────────────────
+      if (favs.length) {
+        const favRow = f => el('div', { class: 'row', style: 'justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)' },
+          el('div', { style: 'min-width:0' },
+            el('b', {}, '★ ' + f.name),
+            f.gender ? el('span', { class: 'sub', style: 'margin-left:8px' }, f.gender) : null,
+            (f.name === cur) ? el('span', { class: 'pill ok', style: 'margin-left:8px' }, 'in use') : null),
+          el('div', { class: 'row', style: 'gap:6px' },
+            el('button', { class: 'btn sm', onclick: e => chirpPreview(f.name, e.target) }, 'Preview'),
+            el('button', { class: 'btn sm primary', onclick: () => chirpUse(f.name) }, 'Use'),
+            el('button', { class: 'btn sm', title: 'Remove from favourites', onclick: () => chirpFav(f.name, false) }, '✕')));
+        v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
+          el('div', { class: 'sub', style: 'margin-bottom:6px' }, '★ Favourite voices · ' + d.lang_name),
+          favs.map(favRow)));
+      }
+
+      // ── full picker: dropdown + preview / use / star ──────────────────────
       const sel = el('select', { style: 'min-width:280px' },
         el('option', { value: '' }, list.length ? 'Choose a voice…' : 'No voices returned for this language'),
         list.map(gv => el('option', { value: gv.name, selected: gv.name === cur },
-          gv.name + (gv.gender ? ' · ' + gv.gender : ''))));
-      // Audition the currently-selected voice on a real line from the script,
-      // before committing — same idea as the Chatterbox preview.
-      const previewBtn = el('button', {
-        class: 'btn sm',
-        onclick: async e => {
-          if (!sel.value) { toast('Pick a voice to preview.'); return; }
-          const btn = e.target; btn.textContent = 'Generating…'; btn.disabled = true;
-          const j = await api('/api/preview', { lang, google_voice: sel.value, text: d.sample });
-          btn.textContent = 'Preview'; btn.disabled = false;
-          if (j.url) new Audio(j.url + '?t=' + Date.now()).play();
-          else toast('Preview failed: ' + (j.error || 'unknown error'));
-        }
-      }, 'Preview');
-      const useBtn = el('button', {
-        class: 'btn sm primary',
-        onclick: async () => {
-          if (!sel.value) { toast('Pick a voice first.'); return; }
-          await api('/api/choose_voice', { lang, google_voice: sel.value });
-          toast(sel.value + ' will now read ' + d.lang_name + '.');
-          viewVoices(lang);
-        }
-      }, 'Use this voice');
+          (favNames.has(gv.name) ? '★ ' : '') + gv.name + (gv.gender ? ' · ' + gv.gender : ''))));
+      const starBtn = el('button', {
+        class: 'btn sm', title: 'Add the selected voice to favourites',
+        onclick: () => sel.value
+          ? chirpFav(sel.value, !favNames.has(sel.value))
+          : toast('Pick a voice to favourite.')
+      }, '☆ Favourite');
+      const previewBtn = el('button', { class: 'btn sm', onclick: e => chirpPreview(sel.value, e.target) }, 'Preview');
+      const useBtn = el('button', { class: 'btn sm primary', onclick: () => chirpUse(sel.value) }, 'Use this voice');
+
       v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
         el('div', { class: 'sub', style: 'margin-bottom:6px' },
           'Google Chirp 3 HD voice for ' + d.lang_name + ' · ' + list.length + ' available'),
-        el('div', { class: 'row' }, sel, previewBtn, useBtn),
+        el('div', { class: 'row', style: 'flex-wrap:wrap;gap:6px' }, sel, previewBtn, starBtn, useBtn),
         // When the catalogue is empty, say WHY (usually: the Text-to-Speech API
         // isn't enabled) with a direct link, instead of a silent "0 available".
         (!list.length && d.google_error)
@@ -1415,8 +1444,9 @@ async function viewVoices(lang) {
             el('a', { href: 'https://console.cloud.google.com/apis/library/texttospeech.googleapis.com', target: '_blank', style: 'color:var(--accent)' },
               'console.cloud.google.com → Text-to-Speech API'))
           : el('div', { class: 'sub', style: 'margin-top:8px' },
-            'No reference clip needed — these are Google’s studio voices. '
-            + 'Cost is ~$30 per 1M characters, with ~1M free each month.')));
+            'No reference clip needed — these are Google’s studio voices. Star (☆) the '
+            + 'ones you like to pin them to the top. Cost is ~$30 per 1M characters, '
+            + 'with ~1M free each month.')));
     }
   }
 

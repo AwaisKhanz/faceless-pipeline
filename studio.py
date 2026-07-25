@@ -1195,6 +1195,7 @@ class Handler(BaseHTTPRequestHandler):
             google_ok = False
             google_voices: list = []
             google_error = ""
+            google_favorites: list = []
             try:
                 from lib import gtts_engine as _GT
                 google_ok = _GT.usable(cfg_v)
@@ -1204,6 +1205,15 @@ class Handler(BaseHTTPRequestHandler):
                         google_error = _GT.last_voice_error()
                 elif selected == "chirp" and not google_ok:
                     google_error = _GT.install_hint()
+                # Favourites for THIS language (voice names carry their locale, so
+                # match on the language's first segment: en, de, …). Gender is
+                # pulled from the catalogue when we have it.
+                base = lang.split("-")[0]
+                gender = {v["name"]: v.get("gender", "") for v in google_voices}
+                google_favorites = [{"name": n, "gender": gender.get(n, ""),
+                                     "favorite": True}
+                                    for n in vx.favorites("google")
+                                    if n.split("-")[0] == base]
             except Exception as e:
                 google_ok, google_voices, google_error = False, [], str(e)
             active = ("higgs" if (selected == "higgs" and higgs_ok)
@@ -1235,6 +1245,7 @@ class Handler(BaseHTTPRequestHandler):
                 "google_voices": google_voices,
                 "google_voice": chosen_pref.get("google_voice", ""),
                 "google_error": google_error,
+                "google_favorites": google_favorites,
                 # Only this language's clips, plus any left loose — a German
                 # list full of English voices is noise, not choice.
                 "references": [r for r in refs if r["lang"] == lang],
@@ -1366,6 +1377,15 @@ class Handler(BaseHTTPRequestHandler):
             saved = vx.save_pref(lang, **fields)
             log(f"Voice for {lang}: {tts.describe(lang)}")
             return self._json({"saved": saved})
+
+        if path == "/api/favorite_voice":
+            # Star / unstar a Google voice so it stays at the top of the picker.
+            name = (b.get("name") or "").strip()
+            if not name:
+                return self._json({"error": "no voice name"}, 400)
+            favs, on = vx.toggle_favorite(b.get("engine") or "google", name,
+                                          b.get("on"))
+            return self._json({"favorites": favs, "favorite": on})
 
         if path == "/api/generate":
             # `scripts` maps language -> that language's pasted script. A legacy

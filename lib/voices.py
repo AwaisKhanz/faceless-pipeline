@@ -93,7 +93,57 @@ def save_pref(lang: str, **kw) -> dict:
 
 
 def all_prefs() -> dict:
-    return {k: pref_for(k) for k in _read()}
+    # Reserved keys (like the favourites store) start with "__" and are not
+    # languages — skip them so they never masquerade as a per-language pref.
+    return {k: pref_for(k) for k in _read() if not k.startswith("__")}
+
+
+# ------------------------------------------------------------- favourites
+#
+# A small starred list so you don't have to scroll a 200+ voice catalogue or
+# re-audition every time. Stored in voices.json under a reserved key, keyed by
+# engine ("google" for Chirp), as a flat list of voice names. Voice names carry
+# their own locale (en-US-Chirp3-HD-Kore), so the panel filters them per language.
+
+_FAV_KEY = "__favorites__"
+
+
+def favorites(engine: str = "google") -> list[str]:
+    """The starred voice names for an engine, in the order they were added."""
+    store = _read().get(_FAV_KEY, {})
+    if isinstance(store, dict):
+        got = store.get(engine, [])
+        return [v for v in got if isinstance(v, str)]
+    return []
+
+
+def set_favorites(engine: str, names: list[str]) -> list[str]:
+    prefs = _read()
+    store = prefs.get(_FAV_KEY)
+    if not isinstance(store, dict):
+        store = {}
+    # De-duplicate while preserving order.
+    seen, clean = set(), []
+    for n in names:
+        if n and n not in seen:
+            seen.add(n)
+            clean.append(n)
+    store[engine] = clean
+    prefs[_FAV_KEY] = store
+    PREFS.write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
+    return clean
+
+
+def toggle_favorite(engine: str, name: str, on: bool | None = None) -> tuple[list[str], bool]:
+    """Star/unstar a voice. `on=None` flips it. Returns (list, is_now_starred)."""
+    cur = favorites(engine)
+    has = name in cur
+    want = (not has) if on is None else bool(on)
+    if want and not has:
+        cur = cur + [name]
+    elif not want and has:
+        cur = [n for n in cur if n != name]
+    return set_favorites(engine, cur), want
 
 
 def supported(lang: str) -> bool:

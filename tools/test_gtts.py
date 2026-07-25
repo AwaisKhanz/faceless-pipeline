@@ -126,6 +126,26 @@ def main() -> int:
           [p.name for p in GT.expected_paths(scenes, "en", "en-US-Chirp3-HD-Kore",
                                              cache=tmp, opts={"speaking_rate": 1.0})])
 
+    print("\n  favourites (voices.py): star/unstar, dedupe, isolated from langs:")
+    import lib.voices as V
+    favtmp = pathlib.Path(tempfile.mkdtemp()) / "voices.json"
+    V.PREFS = favtmp
+    V.set_favorites("google", [])
+    _, on1 = V.toggle_favorite("google", "en-US-Chirp3-HD-Kore")
+    check("starring returns True", on1, True)
+    check("favourite is stored", V.favorites("google"), ["en-US-Chirp3-HD-Kore"])
+    V.toggle_favorite("google", "en-US-Chirp3-HD-Kore", on=True)   # explicit add = idempotent
+    V.toggle_favorite("google", "de-DE-Chirp3-HD-Charon", on=True)
+    check("dedup + order kept",
+          V.favorites("google"), ["en-US-Chirp3-HD-Kore", "de-DE-Chirp3-HD-Charon"])
+    _, on2 = V.toggle_favorite("google", "en-US-Chirp3-HD-Kore", on=False)
+    check("unstarring returns False", on2, False)
+    check("removed", V.favorites("google"), ["de-DE-Chirp3-HD-Charon"])
+    # the reserved favourites key must NOT show up as a language pref
+    V.save_pref("en", google_voice="en-US-Chirp3-HD-Kore")
+    check("favourites key is not treated as a language",
+          "__favorites__" not in V.all_prefs(), True)
+
     print("\n  tts router:")
     check("chirp selected + creds -> routes to Google",
           tts._use_gtts({"voice_engine": "chirp", "vertex_project": "p"}), True)
