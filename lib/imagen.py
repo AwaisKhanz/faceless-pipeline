@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -33,8 +34,25 @@ from . import llm
 DEFAULT_LOCATION = "global"
 DEFAULT_MODEL = "gemini-2.5-flash-image"       # "Nano Banana", ~$0.039/image
 DEFAULT_ASPECT = "16:9"
-DEFAULT_STYLE = ("cinematic documentary photograph, natural light, realistic, "
-                 "high detail, shallow depth of field")
+# Strong photoreal styling so a generated scene reads as a REAL photograph, not
+# an AI illustration/render. Kept explicit (and with the "not a…" negatives that
+# these models respond to) because the default otherwise drifts arty.
+PHOTO_STYLE = ("a real photograph, photorealistic, shot on a full-frame DSLR, "
+               "50mm lens, natural lighting, realistic skin and textures with "
+               "natural imperfections, documentary photography, high detail, "
+               "shallow depth of field")
+PHOTO_NEG = ("Not an illustration, not a drawing, not a painting, not a cartoon, "
+             "not anime, not a 3D render, not CGI, not digital art, no "
+             "over-smoothing, no plastic look, no text or watermark.")
+DEFAULT_STYLE = PHOTO_STYLE               # back-compat alias
+# When the scene ITSELF asks for a non-photographic look, respect it — don't
+# force realism onto a deliberately illustrated/animated/rendered request.
+_NONPHOTO = re.compile(
+    r"\b(illustrat\w*|drawing|drawn|sketch\w*|cartoon|anime|manga|"
+    r"paint\w*|watercolou?r|oil painting|vector|flat design|3d ?render|"
+    r"\brender\b|cgi|clay|claymation|pixar|comic|caricature|logo|icon|"
+    r"diagram|chart|infographic|blueprint|low ?poly|pixel art|graffiti|"
+    r"mural|concept art|storybook|cel[- ]?shaded|stylised|stylized)\b", re.I)
 TIMEOUT = 120                              # a generation is slower than a search
 
 
@@ -51,12 +69,25 @@ def available(cfg: dict | None) -> bool:
 
 
 def prompt_for(query: str, cfg: dict | None = None) -> str:
-    """Turn a scene's search phrase into a generation prompt: the literal subject,
-    then a consistent style so the whole video looks like it belongs together."""
+    """Turn a scene's search phrase into a generation prompt.
+
+    Default is a strong PHOTOREAL look (real photograph, not an illustration) so
+    generated scenes match the stock footage around them. Two escapes:
+      • config `generate_style` — if you set one, it's used verbatim (you're in
+        charge of the look);
+      • the scene subject itself asking for a non-photo style (e.g. 'watercolour
+        illustration of…') — then realism is NOT forced, and the request stands.
+    """
     cfg = cfg or {}
-    style = (cfg.get("generate_style") or DEFAULT_STYLE).strip()
     subject = (query or "").strip().rstrip(".")
-    return f"{subject}. {style}." if subject else style
+    override = (cfg.get("generate_style") or "").strip()
+    if override:                                   # user took control of the look
+        return f"{subject}. {override}." if subject else override
+    if _NONPHOTO.search(subject):                  # scene deliberately non-photo
+        return f"{subject}. High quality, detailed." if subject else "A detailed image."
+    if not subject:
+        return f"{PHOTO_STYLE}. {PHOTO_NEG}"
+    return f"A real photograph of {subject}. {PHOTO_STYLE}. {PHOTO_NEG}"
 
 
 def _endpoint(project: str, location: str, model: str) -> str:

@@ -27,17 +27,33 @@ PREPARED = ROOT / "cache" / "refs"   # normalised reference copies
 # listener, which is wrong for this audience.
 DEFAULTS = {"exaggeration": 0.4, "cfg_weight": 0.5, "temperature": 0.7}
 
-# Markdown / list symbols a script often carries ("#4 - Everest", "*bold*") that
-# the model would otherwise read ALOUD as "hashtag", "asterisk", "underscore".
-# Strip the symbols, keep the words and numbers, so "#4 - Everest" is spoken as
-# "4 - Everest" and "*Savage Mountain*" as "Savage Mountain".
-_SPEAK_STRIP = re.compile(r"[*_`#>~•‣▪]+")
+# A script often carries formatting a listener should never hear: markdown
+# (#, *, _, `, ~, >), list bullets and numbering, emoji, markdown links, bare
+# URLs. Left in, the model reads them ALOUD ("hashtag", "asterisk", "bullet",
+# "h t t p colon"). We strip the noise but keep every real word and number, so
+# "#4 - Everest" is spoken "4 - Everest" and "*Savage Mountain*" as "Savage
+# Mountain". Deliberately conservative: never removes bracketed/parenthetical
+# text (it's usually real content like "(8,849 meters)").
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")           # [label](url) -> label
+_URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)      # bare links
+_LEAD_LIST = re.compile(r"^\s*(?:[-–—*•‣▪◦·]+|\d{1,2}[.)])\s+")  # "- ", "1. ", "• "
+_SYMS = re.compile(r"[*_`#>~^|=•‣▪◦·♦★☆●◆▶►▸→←«»]+")   # markdown + bullet/symbol glyphs
+_EMOJI = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000026FF\U00002700-\U000027BF"
+    "\U0001F1E6-\U0001F1FF\U00002190-\U000021FF\U00002B00-\U00002BFF\U0000FE0F]")
 
 
 def speech_text(text: str) -> str:
-    """Sheet narration → clean spoken text: drop symbols the TTS pronounces by
-    name, keep everything a listener should actually hear."""
-    t = _SPEAK_STRIP.sub(" ", text or "")
+    """Sheet narration → clean spoken text: strip formatting/symbols/emoji the
+    TTS would pronounce by name, keeping every real word and number."""
+    t = text or ""
+    t = _MD_LINK.sub(r"\1", t)          # keep the link's words, drop the URL
+    t = _URL.sub(" ", t)                # a spoken URL is gibberish
+    t = _EMOJI.sub(" ", t)
+    t = _LEAD_LIST.sub("", t)           # drop a leading "- " / "1. " / "• "
+    t = t.replace("&", " and ")         # "&" reads as "ampersand" otherwise
+    t = _SYMS.sub(" ", t)               # remaining markdown / bullet symbols
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)   # tidy " ," left by removals
     t = re.sub(r"\s{2,}", " ", t).strip()
     return t or (text or "")
 

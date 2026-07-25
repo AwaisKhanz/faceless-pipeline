@@ -72,7 +72,7 @@
   "generate_location": "global",
   "_generate_aspect": "Image shape. \"16:9\" fills the video frame; other values (1:1, 9:16, 4:3, 3:4) also work.",
   "generate_aspect": "16:9",
-  "_generate_style": "Optional. A style phrase appended to every generation prompt so the whole video looks consistent, e.g. 'cinematic documentary photograph, natural light'. Empty uses a sensible default.",
+  "_generate_style": "Optional. Empty (default) forces a strong PHOTOREAL look — generated scenes come out as real photographs, not AI illustrations/renders — unless the scene itself asks for another style (e.g. 'watercolour illustration of…'), which is respected. Set a phrase here to TAKE OVER the look for every generated image (e.g. 'moody cinematic, teal and orange'); your phrase is then used verbatim and realism is no longer forced.",
   "generate_style": "",
   "_veo": "AI VIDEO generation with Vertex Veo. This is the EXPENSIVE one — roughly $1-3 per short clip — so there is NO automatic mode: video is only ever generated when you click 'Generate video' on marked scenes in the review page, and it asks for confirmation first. Uses the same vertex_project/service_account as everything else.",
   "_veo_max": "Hard cap on Veo clips generated per run — a cost guardrail. Default 2. Mark more scenes than this and the extras are held back with a note; run again to continue.",

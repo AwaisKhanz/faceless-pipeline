@@ -30,7 +30,10 @@ def main() -> int:
 
     p = im.prompt_for("data center servers", {})
     check("prompt keeps the subject", "data center servers" in p)
-    check("prompt adds a consistent style", "cinematic" in p)
+    check("prompt forces a photoreal look by default", "photorealistic" in p)
+    check("prompt tells the model NOT to illustrate", "not an illustration" in p.lower())
+    check("a scene that asks for illustration is left non-photo",
+          "photorealistic" not in im.prompt_for("watercolour illustration of a fox", {}))
     check("a custom style overrides the default",
           "neon" in im.prompt_for("x", {"generate_style": "neon"}))
 
