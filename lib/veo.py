@@ -24,7 +24,11 @@ from pathlib import Path
 from . import llm
 
 DEFAULT_LOCATION = "us-central1"
-DEFAULT_MODEL = "veo-3.0-generate-001"
+# Veo 3.0 (veo-3.0-generate-001 / -fast-) reached its shutdown date on
+# 2026-06-30 and now 404s. veo-3.1-generate-001 is the GA successor; its
+# request/response shape on Vertex is identical (instances[{prompt}] +
+# parameters, :predictLongRunning → :fetchPredictOperation, response.videos[]).
+DEFAULT_MODEL = "veo-3.1-generate-001"
 DEFAULT_SECONDS = 8
 POLL_EVERY = 12                   # seconds between "is it done yet?" checks
 POLL_TIMEOUT = 360                # give up after six minutes of rendering
@@ -121,7 +125,21 @@ def video(prompt: str, cfg: dict, dest: Path, on_wait=None) -> Path:
     try:
         op = _post(f"{base}:predictLongRunning", body, _auth())
     except urllib.error.HTTPError as e:
-        raise VeoError(f"Veo submit failed (HTTP {e.code})") from None
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "ignore").strip()[:300]
+        except Exception:
+            pass
+        if e.code == 404:
+            raise VeoError(
+                f"Veo model {model!r} not found (HTTP 404). The Veo 3.0 models "
+                f"were retired on 2026-06-30 — set \"veo_model\" to "
+                f"\"veo-3.1-generate-001\" (or \"veo-3.1-fast-generate-001\") in "
+                f"config.json, and check \"veo_location\" is a region such as "
+                f"us-central1." + (f" · {detail}" if detail else "")) from None
+        raise VeoError(
+            f"Veo submit failed (HTTP {e.code})"
+            + (f": {detail}" if detail else "")) from None
     except Exception as e:
         raise VeoError(f"Veo submit failed: {e}") from None
 

@@ -498,9 +498,10 @@ def run_regenerate(pid: str, which: list[int]) -> None:
         if failed:
             set_job(stage="approve",
                     label=f"generated {len(gen)}, {len(failed)} could not")
-            log(f"⚠ {len(failed)} scene(s) could not be generated — often a real "
-                f"person or a safety filter. They kept their current picture: "
-                f"{[n for n, _ in failed]}")
+            log(f"⚠ {len(failed)} scene(s) could not be generated: "
+                f"{[n for n, _ in failed]} — kept their current picture.")
+            for n, reason in failed:               # the ACTUAL reason, per scene
+                log(f"    S{n}: {str(reason)[:160]}")
         else:
             set_job(stage="approve", label=f"generated {len(gen)} image(s)")
             log("Done — the new images are below.")
@@ -544,9 +545,10 @@ def run_regenerate_video(pid: str, which: list[int]) -> None:
         if failed:
             set_job(stage="approve",
                     label=f"video: {len(gen)} done, {len(failed)} could not")
-            log(f"⚠ {len(failed)} scene(s) could not be generated (a safety filter "
-                f"or a named real person): {[n for n, _ in failed]} — kept their "
-                f"current picture.")
+            log(f"⚠ {len(failed)} scene(s) could not be generated: "
+                f"{[n for n, _ in failed]} — kept their current picture.")
+            for n, reason in failed:               # the ACTUAL reason, per scene
+                log(f"    S{n}: {str(reason)[:160]}")
         else:
             set_job(stage="approve", label=f"generated {len(gen)} video clip(s)")
             log("Done — the new clips are below.")
