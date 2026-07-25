@@ -64,6 +64,10 @@ def pref_for(lang: str) -> dict:
     p = _read().get(lang, {})
     return {
         "reference": p.get("reference", ""),
+        # Higgs-only: the words spoken in the reference clip, needed to clone the
+        # voice. Chatterbox ignores it. Empty is fine (Higgs then uses a generic
+        # voice, Chatterbox is unaffected).
+        "reference_text": p.get("reference_text", ""),
         "exaggeration": float(p.get("exaggeration", DEFAULT_EXAGGERATION)),
         "cfg_weight": float(p.get("cfg_weight", DEFAULT_CFG)),
         "temperature": float(p.get("temperature", DEFAULT_TEMPERATURE)),

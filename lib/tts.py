@@ -1,17 +1,64 @@
-"""Narration.
+"""Narration — the front the pipeline calls, and the engine ROUTER.
 
-A thin front for the Chatterbox engine. `synth()` is the only function the
-pipeline calls, so nothing downstream knows or cares how audio is produced.
+`synth()` is the only function the pipeline uses, so nothing downstream knows or
+cares which backend produced the audio. Two backends plug in behind the same
+interface:
 
-One file per scene, cached by a hash of the exact text and settings — change a
-word in scene 47 and only scene 47 is regenerated.
+  * chatterbox (default) — MIT, ultra-stable, on any GPU/CPU.
+  * higgs         — Apache-2.0, higher quality, heavier; used only when
+                    config "voice_engine" is "higgs" AND it's installed.
+
+Selection is per run from config; if Higgs is asked for but not installed, we
+fall back to Chatterbox so a render never dead-ends. One file per scene, cached
+by a hash of the exact text and settings — and the two engines use different
+cache prefixes, so switching never mixes their clips.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from . import chatterbox_engine as CB
 from . import voices as V
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _config() -> dict:
+    """Read config.json directly (no import cycle with pipeline)."""
+    try:
+        f = ROOT / "config.json"
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except Exception:
+        return {}
+
+
+def _use_higgs(cfg: dict) -> bool:
+    """True only when Higgs is both selected and actually installed."""
+    if str(cfg.get("voice_engine", "chatterbox")).strip().lower() not in ("higgs", "higgs-audio"):
+        return False
+    from . import higgs_engine as HG
+    return HG.installed()
+
+
+def _raw_ref(lang: str, voice: str | None) -> str:
+    """A stable reference name shared by synth and voice_paths (so their cache
+    keys match). Resolved to the voices_refs-relative path when possible."""
+    name = voice or V.pref_for(lang)["reference"]
+    if not name:
+        return ""
+    try:
+        return V.resolve(name).relative_to(V.REFS).as_posix()
+    except (FileNotFoundError, ValueError):
+        return name
+
+
+def _higgs_opts(lang: str, cfg: dict) -> dict:
+    p = V.pref_for(lang)
+    return {"temperature": p["temperature"], "retries": p["retries"],
+            "best_of": p["best_of"],
+            "top_p": float(cfg.get("higgs_top_p", 0.95)),
+            "top_k": int(cfg.get("higgs_top_k", 50))}
 
 
 def describe(lang: str) -> str:
@@ -19,6 +66,10 @@ def describe(lang: str) -> str:
     p = V.pref_for(lang)
     if not p["reference"]:
         return "NO REFERENCE SET"
+    cfg = _config()
+    if _use_higgs(cfg):
+        from . import higgs_engine as HG
+        return f"{HG.describe(lang, cfg)} · {p['reference']}"
     return (f"Chatterbox · {p['reference']} · "
             f"expression {p['exaggeration']:.2f} · guidance {p['cfg_weight']:.2f}")
 
@@ -55,6 +106,15 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
             f"Chatterbox cannot speak '{lang}'. It supports: "
             f"{', '.join(sorted(V.LANGS))}")
 
+    cfg = _config()
+    if _use_higgs(cfg):
+        from . import higgs_engine as HG
+        # Same prepared reference clip; Higgs also needs its transcript, which it
+        # looks up from the raw reference name we pass through.
+        return HG.synth(scenes, lang, reference_for(lang, voice), cache,
+                        _higgs_opts(lang, cfg), log=log, cfg=cfg,
+                        reference=_raw_ref(lang, voice))
+
     p = V.pref_for(lang)
     return CB.synth(scenes, lang, reference_for(lang, voice), cache,
                     {"exaggeration": p["exaggeration"],
@@ -70,13 +130,16 @@ def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> lis
     Returns an empty list when no reference clip has been chosen — that is not
     an error here, it just means nothing can have been voiced yet.
     """
-    name = voice or V.pref_for(lang)["reference"]
-    if not name or not V.supported(lang):
+    if not (voice or V.pref_for(lang)["reference"]) or not V.supported(lang):
         return []
-    try:
-        name = V.resolve(name).relative_to(V.REFS).as_posix()
-    except (FileNotFoundError, ValueError):
+    name = _raw_ref(lang, voice)
+    if not name:
         return []
+    cfg = _config()
+    if _use_higgs(cfg):
+        from . import higgs_engine as HG
+        return HG.expected_paths(scenes, lang, name, cache,
+                                 _higgs_opts(lang, cfg), cfg=cfg)
     p = V.pref_for(lang)
     return CB.expected_paths(scenes, lang, name, cache,
                              {"exaggeration": p["exaggeration"],

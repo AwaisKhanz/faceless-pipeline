@@ -19,6 +19,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import voice_common as _vc    # shared artifact-retry policy
+
 ROOT = Path(__file__).resolve().parent.parent
 REFS = ROOT / "voices_refs"          # drop reference clips here
 CACHE = ROOT / "cache" / "voice"
@@ -364,43 +366,6 @@ class _RepCatcher(logging.Handler):
             self.repetition = True
 
 
-def _seed_all(seed: int) -> None:
-    """Make one take reproducible — and, crucially, make the NEXT take different,
-    so a retry actually explores a new sample instead of repeating the glitch."""
-    try:
-        import random
-
-        import numpy as np
-        import torch
-        random.seed(seed)
-        np.random.seed(seed % (2 ** 32))
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-    except Exception:
-        pass
-
-
-def _take_quality(samples, sr: int, text: str, repetition: bool):
-    """Judge one generated take. Returns (ok, badness); lower badness is better.
-
-    Catches the three ways Chatterbox fails on this pipeline's short lines: a
-    repeated/forced-EOS stutter, near-silence/noise (no real voice), and a clip
-    far too short (a cut-off word) or far too long (it rambled)."""
-    import numpy as np
-    n = 0 if samples is None else int(getattr(samples, "size", len(samples)))
-    dur = n / float(sr or 24000)
-    rms = float(np.sqrt(np.mean(np.square(samples)))) if n else 0.0
-    words = max(1, len(text.split()))
-    expected = max(0.35, words * 0.33)              # ~seconds of narration
-    silent = rms < 0.005                            # produced silence / faint noise
-    too_short = dur < max(0.18, 0.30 * expected)    # a word got cut off
-    too_long = dur > expected * 5 + 4               # it rambled past the end
-    bad = bool(repetition or silent or too_short or too_long)
-    badness = (0.0 if not bad else 100.0) + abs(dur - expected) + (1000.0 if silent else 0.0)
-    return (not bad, badness)
-
-
 def _generate_capture(model, text: str, kw: dict, multilingual: bool, lang: str):
     """One generation, returning (samples_np, sr, repetition_flag). Chatterbox's
     repetition warnings are captured (and silenced) for the duration of the call."""
@@ -459,33 +424,19 @@ def synth_one(text: str, ref_wav: Path, lang: str, out: Path,
         base_kw["language_id"] = lang_id(lang)
 
     needed = max(1, int(o.get("best_of", BEST_OF)))
-    max_takes = needed + max(0, int(o.get("retries", RETRIES)))
-    seed0 = o.get("seed")
-    if seed0 is None:
-        seed0 = int(hashlib.sha1(text.encode("utf-8")).hexdigest()[:8], 16)
 
-    best = None                                     # (ok, badness, samples, sr)
-    taken = 0
+    def _one(i: int):
+        kw = dict(base_kw)
+        if i >= needed:                             # steadier on a retry
+            kw["temperature"] = max(0.5, float(o["temperature"]) - 0.05 * (i - needed + 1))
+        return _generate_capture(model, text, kw, multilingual, lang)
+
     try:
-        for i in range(max_takes):
-            kw = dict(base_kw)
-            if i >= needed:                         # steadier on retries
-                kw["temperature"] = max(0.5, float(o["temperature"]) - 0.05 * (i - needed + 1))
-            _seed_all((seed0 + i) % (2 ** 31))
-            samples, sr, rep = _generate_capture(model, text, kw, multilingual, lang)
-            ok, badness = _take_quality(samples, sr, text, rep)
-            taken += 1
-            if best is None or badness < best[1]:
-                best = (ok, badness, samples, sr)
-            if ok and taken >= needed:              # good enough, and did our quota
-                break
-
-        if best is None or best[2] is None:
+        samples, sr, ok, taken = _vc.best_take(
+            _one, text, best_of=needed, retries=int(o.get("retries", RETRIES)),
+            seed0=o.get("seed"), log=log)
+        if samples is None:
             raise ChatterboxError(f"Chatterbox returned no audio for: {text[:60]}...")
-        ok, _, samples, sr = best
-        if log and (taken > 1 or not ok):
-            log("      · " + (f"{taken} takes, kept the cleanest"
-                              if ok else f"{taken} takes, still imperfect — kept the best"))
         return _save_wav(samples, sr, out)
     finally:
         _free_device_memory()
