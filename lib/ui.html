@@ -1748,11 +1748,17 @@ async function viewSettings() {
     })(),
     (() => {
       const vo = d.voice || {};
-      // config asked for Higgs but it isn't installed -> we're on Chatterbox.
-      return vo.fallback ? el('tr', {}, el('td', {}),
-        el('td', { class: 'sub', colspan: '2' },
-          'Higgs is set in config.json but not installed here — narrating with '
-          + 'Chatterbox. Install it (see below), then reload.')) : null;
+      if (!vo.fallback) return null;
+      // config asked for Higgs but we're on Chatterbox — say WHY: installed but
+      // it couldn't run here (e.g. Mac/MPS), or simply not installed.
+      const msg = vo.higgs_installed
+        ? ('Higgs is installed but couldn’t run here'
+          + (vo.higgs_reason ? ' (' + vo.higgs_reason + ')' : '')
+          + ' — narrating with Chatterbox. Higgs needs an NVIDIA (CUDA) GPU; '
+          + 'on a Mac it falls back. It’ll run on your RTX machine.')
+        : 'Higgs is set in config.json but not installed here — narrating with '
+          + 'Chatterbox. Install it (see below), then reload.';
+      return el('tr', {}, el('td', {}), el('td', { class: 'sub', colspan: '2' }, msg));
     })(),
     line(d.chatterbox ? d.gpu_ok : null, 'GPU',
       dev.name ? dev.name + (dev.vram_gb ? ' · ' + dev.vram_gb + ' GB' : '') : 'none',

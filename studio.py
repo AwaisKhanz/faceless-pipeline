@@ -1055,10 +1055,12 @@ class Handler(BaseHTTPRequestHandler):
                 in ("higgs", "higgs-audio") else "chatterbox"
             try:
                 from lib import higgs_engine as HG
-                higgs_ok = HG.installed()
+                higgs_ok = HG.usable()          # installed AND not failed this session
+                higgs_present = HG.installed()
+                higgs_reason = HG.unusable_reason()
                 higgs_dev = HG.device_info(cfg) if higgs_ok else {}
             except Exception:
-                higgs_ok, higgs_dev = False, {}
+                higgs_ok, higgs_present, higgs_reason, higgs_dev = False, False, "", {}
             v_active = "higgs" if (v_selected == "higgs" and higgs_ok) else "chatterbox"
             if v_active == "higgs":
                 v_model = str(cfg.get("higgs_model") or HG.DEFAULT_MODEL).split("/")[-1]
@@ -1070,12 +1072,14 @@ class Handler(BaseHTTPRequestHandler):
                 "selected": v_selected,
                 "active": v_active,
                 "chatterbox_installed": CB.installed(),
-                "higgs_installed": higgs_ok,
+                "higgs_installed": higgs_present,
+                "higgs_usable": higgs_ok,
+                "higgs_reason": higgs_reason,
                 "model": v_model,
                 "device": v_devinfo.get("device") or "cpu",
                 "device_name": v_devinfo.get("name"),
                 "fallback": v_selected == "higgs" and not higgs_ok,
-                "install_hint": (HG.install_hint() if v_selected == "higgs" and not higgs_ok else ""),
+                "install_hint": (HG.install_hint() if v_selected == "higgs" and not higgs_present else ""),
             }
 
             return self._json({
@@ -1148,12 +1152,13 @@ class Handler(BaseHTTPRequestHandler):
                 in ("higgs", "higgs-audio") else "chatterbox"
             try:
                 from lib import higgs_engine as _HG
-                higgs_ok = _HG.installed()
+                higgs_ok = _HG.usable()
+                higgs_installed = _HG.installed()
             except Exception:
-                higgs_ok = False
+                higgs_ok = higgs_installed = False
             engine = {"selected": selected,
                       "active": "higgs" if (selected == "higgs" and higgs_ok) else "chatterbox",
-                      "higgs_installed": higgs_ok}
+                      "higgs_installed": higgs_installed}
             # The transcript actually in use for the chosen clip: the manual
             # override, else the auto-generated .txt on disk (display only).
             chosen_pref = vx.pref_for(lang)

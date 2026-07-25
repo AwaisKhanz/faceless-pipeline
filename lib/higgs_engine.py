@@ -82,7 +82,30 @@ def install_hint() -> str:
 
 
 def available(cfg: dict | None = None) -> bool:
-    return installed()
+    return usable()
+
+
+# Once Higgs fails to load/run on THIS machine (e.g. an MPS build that can't run
+# the model), it's marked unusable for the rest of the session so the WHOLE
+# pipeline — synth AND the status/render lookups — agrees on Chatterbox. Without
+# this, voice would fall back to Chatterbox per call while the dashboard still
+# looked for Higgs' files, and report 'not voiced' even though it was.
+_UNUSABLE = False
+_UNUSABLE_REASON = ""
+
+
+def usable() -> bool:
+    return installed() and not _UNUSABLE
+
+
+def unusable_reason() -> str:
+    return _UNUSABLE_REASON
+
+
+def mark_unusable(reason: str = "") -> None:
+    global _UNUSABLE, _UNUSABLE_REASON
+    _UNUSABLE = True
+    _UNUSABLE_REASON = reason or "failed to run on this machine"
 
 
 # ------------------------------------------------------------------ device
@@ -362,6 +385,13 @@ def _synth_one(engine, text, ref_wav, transcript, scene, max_new, o, out, log):
         _one, text, best_of=int(o.get("best_of", 1)), retries=int(o.get("retries", 2)), log=log)
     if samples is None:
         raise HiggsError(f"Higgs returned no audio for: {text[:60]}...")
+    # A device that can't actually run the model (e.g. some MPS builds) returns
+    # near-silence for every take. Rather than write empty clips the render then
+    # can't find, raise so the caller falls back to Chatterbox for the session.
+    import numpy as np
+    if float(np.sqrt(np.mean(np.square(np.asarray(samples, dtype="float32"))))) < 0.003:
+        raise HiggsError("produced silent audio — this device likely can't run "
+                         "the Higgs model (Higgs needs an NVIDIA/CUDA GPU).")
     _save_wav(samples, sr, out)
 
 

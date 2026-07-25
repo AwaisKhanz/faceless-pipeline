@@ -34,11 +34,13 @@ def _config() -> dict:
 
 
 def _use_higgs(cfg: dict) -> bool:
-    """True only when Higgs is both selected and actually installed."""
+    """True only when Higgs is selected AND usable here — usable() goes False
+    after Higgs fails once this session, so synth and the status/render lookups
+    stay in agreement instead of one using Higgs and the other Chatterbox."""
     if str(cfg.get("voice_engine", "chatterbox")).strip().lower() not in ("higgs", "higgs-audio"):
         return False
     from . import higgs_engine as HG
-    return HG.installed()
+    return HG.usable()
 
 
 def _raw_ref(lang: str, voice: str | None) -> str:
@@ -126,10 +128,15 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
         except SystemExit:
             raise                                   # a real "pick a voice" message
         except Exception as e:
-            # Higgs was selected but couldn't run — don't dead-end the render;
-            # fall through to Chatterbox and say why.
-            log(f"  ⚠ Higgs couldn't run ({e}). Falling back to Chatterbox for "
-                f"this language. {HG.install_hint()}")
+            # Higgs was selected but couldn't run on this machine — don't dead-end
+            # the render. Mark it unusable for the whole session so the status and
+            # render lookups also switch to Chatterbox (otherwise the dashboard
+            # keeps looking for Higgs files and reports 'not voiced'), then fall
+            # through to Chatterbox here.
+            HG.mark_unusable(str(e))
+            log(f"  ⚠ Higgs couldn't run ({e}). Using Chatterbox for the rest of "
+                f"this session. If this is a Mac, Higgs needs CUDA — it runs on "
+                f"your NVIDIA machine. {HG.install_hint()}")
 
     p = V.pref_for(lang)
     return CB.synth(scenes, lang, reference_for(lang, voice), cache,
