@@ -1377,6 +1377,19 @@ async function viewVoices(lang) {
         el('option', { value: '' }, list.length ? 'Choose a voice…' : 'No voices returned for this language'),
         list.map(gv => el('option', { value: gv.name, selected: gv.name === cur },
           gv.name + (gv.gender ? ' · ' + gv.gender : ''))));
+      // Audition the currently-selected voice on a real line from the script,
+      // before committing — same idea as the Chatterbox preview.
+      const previewBtn = el('button', {
+        class: 'btn sm',
+        onclick: async e => {
+          if (!sel.value) { toast('Pick a voice to preview.'); return; }
+          const btn = e.target; btn.textContent = 'Generating…'; btn.disabled = true;
+          const j = await api('/api/preview', { lang, google_voice: sel.value, text: d.sample });
+          btn.textContent = 'Preview'; btn.disabled = false;
+          if (j.url) new Audio(j.url + '?t=' + Date.now()).play();
+          else toast('Preview failed: ' + (j.error || 'unknown error'));
+        }
+      }, 'Preview');
       const useBtn = el('button', {
         class: 'btn sm primary',
         onclick: async () => {
@@ -1389,7 +1402,7 @@ async function viewVoices(lang) {
       v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
         el('div', { class: 'sub', style: 'margin-bottom:6px' },
           'Google Chirp 3 HD voice for ' + d.lang_name + ' · ' + list.length + ' available'),
-        el('div', { class: 'row' }, sel, useBtn),
+        el('div', { class: 'row' }, sel, previewBtn, useBtn),
         // When the catalogue is empty, say WHY (usually: the Text-to-Speech API
         // isn't enabled) with a direct link, instead of a silent "0 available".
         (!list.length && d.google_error)

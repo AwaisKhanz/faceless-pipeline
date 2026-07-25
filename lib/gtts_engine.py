@@ -285,6 +285,21 @@ def _http_detail(e: urllib.error.HTTPError) -> str:
         return e.reason if getattr(e, "reason", None) else "request failed"
 
 
+def preview(text: str, lang: str, voice: str, cfg: dict | None = None,
+            out_dir: Path | None = None, rate: float = 1.0, log=print) -> Path:
+    """Render (or reuse) a short sample of one Google voice, so you can audition
+    it before committing. Written into the previews folder and served like any
+    Chatterbox preview. Cached by (voice, rate, text) so re-clicking is instant."""
+    cfg = cfg or {}
+    out_dir = Path(out_dir or (Path(__file__).resolve().parent.parent / "cache" / "previews"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t = _norm(text)
+    out = out_dir / f"gc_prev_{_key(t, voice, lang, float(rate))}.wav"
+    if not out.exists() or out.stat().st_size < 1024:
+        _synth_one(t, voice, locale_for(lang, cfg), float(rate), out, cfg, log=log)
+    return out
+
+
 def synth(scenes, lang: str, ref_wav=None, cache: Path = CACHE,
           opts: dict | None = None, log=print, cfg: dict | None = None,
           reference: str = "") -> list[Path]:

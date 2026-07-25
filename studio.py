@@ -1329,6 +1329,18 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/preview":
             try:
+                # Google Chirp: audition a catalogue voice (no reference clip).
+                if b.get("google_voice"):
+                    from lib import gtts_engine as GT
+                    cfg_p = pl.load_config()
+                    lang_p = b.get("lang") or "en"
+                    f = GT.preview(
+                        b.get("text") or vx.sample_line(lang_p),
+                        lang_p, b.get("google_voice"), cfg=cfg_p,
+                        out_dir=vx.PREVIEWS,
+                        rate=float(cfg_p.get("google_tts_rate", 1.0) or 1.0),
+                        log=lambda *_: None)
+                    return self._json({"url": f"/preview/{f.name}"})
                 f = vx.preview(
                     b.get("text") or "", b.get("lang") or "en",
                     reference=b.get("reference") or "",
