@@ -146,6 +146,23 @@ LANG_NAMES = {"en": "English", "de": "German", "es": "Spanish",
 LANG_FILE_WORDS = {"en": ("ENGLISH", "EN"), "de": ("GERMAN", "DE"),
                    "es": ("SPANISH", "ES"), "fr": ("FRENCH", "FR"),
                    "it": ("ITALIAN", "IT"), "pt": ("PORTUGUESE", "PT")}
+# Every accepted filename token -> its language code. Built from the table above
+# so both spellings work: files are named with the language NAME for known langs
+# (…_GERMAN_narration.md) but fall back to the CODE for others (…_EN_narration.md).
+_TOKEN_TO_CODE = {tok.upper(): code
+                  for code, toks in LANG_FILE_WORDS.items() for tok in toks}
+
+
+def _narration_lang(pid: str, stem: str) -> str | None:
+    """The language code a narration filename encodes, or None.
+
+    Matches the token that sits EXACTLY between '{pid}_' and '_narration', so
+    'EN' identifies English without a bare-substring 'EN' also matching 'FRENCH'.
+    """
+    if not (stem.startswith(pid + "_") and stem.endswith("_narration")):
+        return None
+    token = stem[len(pid) + 1: -len("_narration")].upper()
+    return _TOKEN_TO_CODE.get(token)
 
 
 def main_lang(sheet: Path) -> str:
@@ -232,14 +249,13 @@ def find_projects(_root: Path | None = None) -> list[dict]:
                 mlang = main_lang(f)
                 # The structure language reads from the main script; no side file.
                 langs = [{"code": mlang, "name": LANG_NAMES.get(mlang, mlang), "file": None}]
-                narr = sorted(sd.glob(f"{pid}_*_narration.md"))
-                for code, words in LANG_FILE_WORDS.items():
-                    if code == mlang:
-                        continue
-                    hit = next((nf for nf in narr if words[0] in nf.stem.upper()), None)
-                    if hit:
+                seen = {mlang}
+                for nf in sorted(sd.glob(f"{pid}_*_narration.md")):
+                    code = _narration_lang(pid, nf.stem)
+                    if code and code not in seen:
+                        seen.add(code)
                         langs.append({"code": code, "name": LANG_NAMES.get(code, code),
-                                      "file": hit.name})
+                                      "file": nf.name})
                 try:
                     n = len(sheetlib.parse_main_script(f))
                 except SystemExit:
@@ -495,11 +511,8 @@ def narration_file(sheets_dir: Path, pid: str, lang: str) -> Path | None:
     main_script = sheets_dir / f"{pid}_main_script.md"
     if main_script.exists() and main_lang(main_script) == lang:
         return None
-    words = LANG_FILE_WORDS.get(lang, ())
-    if not words:
-        return None
     for nf in sorted(sheets_dir.glob(f"{pid}_*_narration.md")):
-        if words[0] in nf.stem.upper():
+        if _narration_lang(pid, nf.stem) == lang:
             return nf
     return None
 
