@@ -109,11 +109,19 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
     cfg = _config()
     if _use_higgs(cfg):
         from . import higgs_engine as HG
-        # Same prepared reference clip; Higgs also needs its transcript, which it
-        # looks up from the raw reference name we pass through.
-        return HG.synth(scenes, lang, reference_for(lang, voice), cache,
-                        _higgs_opts(lang, cfg), log=log, cfg=cfg,
-                        reference=_raw_ref(lang, voice))
+        try:
+            # Same prepared reference clip; Higgs also needs its transcript, which
+            # it looks up from the raw reference name we pass through.
+            return HG.synth(scenes, lang, reference_for(lang, voice), cache,
+                            _higgs_opts(lang, cfg), log=log, cfg=cfg,
+                            reference=_raw_ref(lang, voice))
+        except SystemExit:
+            raise                                   # a real "pick a voice" message
+        except Exception as e:
+            # Higgs was selected but couldn't run — don't dead-end the render;
+            # fall through to Chatterbox and say why.
+            log(f"  ⚠ Higgs couldn't run ({e}). Falling back to Chatterbox for "
+                f"this language. {HG.install_hint()}")
 
     p = V.pref_for(lang)
     return CB.synth(scenes, lang, reference_for(lang, voice), cache,

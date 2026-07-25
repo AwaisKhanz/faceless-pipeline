@@ -52,16 +52,33 @@ class HiggsError(RuntimeError):
 
 # ------------------------------------------------------------- availability
 
+_INSTALLED = None
+
+
 def installed() -> bool:
-    """Is the Higgs package importable? (We never import the heavy bits here.)"""
-    import importlib.util
-    return importlib.util.find_spec("boson_multimodal") is not None
+    """Is Higgs actually USABLE? We check the serve engine module specifically,
+    not just the top package — a `pip install git+…` wheel builds
+    `boson_multimodal` but can drop the `serve` subpackage, and claiming 'ready'
+    then errors a whole voice job instead of falling back to Chatterbox."""
+    global _INSTALLED
+    if _INSTALLED is None:
+        import importlib.util
+        try:
+            _INSTALLED = importlib.util.find_spec(
+                "boson_multimodal.serve.serve_engine") is not None
+        except Exception:
+            _INSTALLED = False
+    return _INSTALLED
 
 
 def install_hint() -> str:
-    return ("Higgs Audio is not installed. On the machine with the GPU:\n"
-            "  pip install git+https://github.com/boson-ai/higgs-audio.git\n"
-            "then set \"voice_engine\": \"higgs\" in config.json.")
+    return ("Higgs Audio isn't fully installed (the serve engine is missing — a\n"
+            "'pip install git+…' wheel can drop it). Install it EDITABLE from a\n"
+            "clone so every sub-package is included, into THIS project's venv:\n"
+            "  git clone https://github.com/boson-ai/higgs-audio.git\n"
+            "  .venv/bin/pip install -e higgs-audio          # macOS/Linux\n"
+            "  .venv\\Scripts\\pip install -e higgs-audio      # Windows\n"
+            "then set \"voice_engine\": \"higgs\" in config.json and reload.")
 
 
 def available(cfg: dict | None = None) -> bool:
