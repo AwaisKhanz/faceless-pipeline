@@ -1390,9 +1390,20 @@ async function viewVoices(lang) {
         el('div', { class: 'sub', style: 'margin-bottom:6px' },
           'Google Chirp 3 HD voice for ' + d.lang_name + ' · ' + list.length + ' available'),
         el('div', { class: 'row' }, sel, useBtn),
-        el('div', { class: 'sub', style: 'margin-top:8px' },
-          'No reference clip needed — these are Google’s studio voices. '
-          + 'Cost is ~$30 per 1M characters, with ~1M free each month.')));
+        // When the catalogue is empty, say WHY (usually: the Text-to-Speech API
+        // isn't enabled) with a direct link, instead of a silent "0 available".
+        (!list.length && d.google_error)
+          ? el('div', { class: 'sub', style: 'margin-top:10px;color:var(--bad);white-space:pre-wrap' },
+            'Couldn’t load voices: ' + d.google_error)
+          : null,
+        (!list.length)
+          ? el('div', { class: 'sub', style: 'margin-top:8px' },
+            'Enable the Text-to-Speech API on your Vertex project, then reload: ',
+            el('a', { href: 'https://console.cloud.google.com/apis/library/texttospeech.googleapis.com', target: '_blank', style: 'color:var(--accent)' },
+              'console.cloud.google.com → Text-to-Speech API'))
+          : el('div', { class: 'sub', style: 'margin-top:8px' },
+            'No reference clip needed — these are Google’s studio voices. '
+            + 'Cost is ~$30 per 1M characters, with ~1M free each month.')));
     }
   }
 

@@ -1194,13 +1194,18 @@ class Handler(BaseHTTPRequestHandler):
             # call, pointless otherwise). google_ok = Vertex creds are ready.
             google_ok = False
             google_voices: list = []
+            google_error = ""
             try:
                 from lib import gtts_engine as _GT
                 google_ok = _GT.usable(cfg_v)
                 if selected == "chirp" and google_ok:
                     google_voices = _GT.voices(lang, cfg_v)
-            except Exception:
-                google_ok, google_voices = False, []
+                    if not google_voices:
+                        google_error = _GT.last_voice_error()
+                elif selected == "chirp" and not google_ok:
+                    google_error = _GT.install_hint()
+            except Exception as e:
+                google_ok, google_voices, google_error = False, [], str(e)
             active = ("higgs" if (selected == "higgs" and higgs_ok)
                       else "chirp" if (selected == "chirp" and google_ok)
                       else "chatterbox")
@@ -1229,6 +1234,7 @@ class Handler(BaseHTTPRequestHandler):
                 # engine (or creds aren't ready) — the panel hides the dropdown.
                 "google_voices": google_voices,
                 "google_voice": chosen_pref.get("google_voice", ""),
+                "google_error": google_error,
                 # Only this language's clips, plus any left loose — a German
                 # list full of English voices is noise, not choice.
                 "references": [r for r in refs if r["lang"] == lang],

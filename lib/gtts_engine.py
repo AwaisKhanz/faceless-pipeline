@@ -107,14 +107,22 @@ def _project(cfg: dict) -> str:
 
 
 def _headers(cfg: dict) -> dict:
-    """Bearer token (reused from the LLM's Vertex auth) plus the billing-project
-    header Google requires when the token is a user/ADC credential."""
+    """Bearer token, reused from the LLM's Vertex auth.
+
+    The x-goog-user-project (quota/billing) header is set ONLY for user/ADC
+    credentials, which need it to name a quota project. A service account already
+    carries its own project, and adding the header then demands the
+    serviceusage.services.use permission on it — which a minimal SA often lacks,
+    causing a 403 even when the Text-to-Speech API is enabled. So we omit it when
+    a service-account file is configured.
+    """
     sa = str((cfg or {}).get("vertex_service_account") or "")
     token = llm._vertex_token(sa)
     h = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    proj = _project(cfg)
-    if proj:
-        h["x-goog-user-project"] = proj
+    if not sa:
+        proj = _project(cfg)
+        if proj:
+            h["x-goog-user-project"] = proj
     return h
 
 
@@ -131,6 +139,13 @@ def locale_for(lang: str, cfg: dict | None = None) -> str:
 # --------------------------------------------------------------- catalogue
 
 _VOICE_CACHE: dict = {}
+_LAST_ERROR = ""
+
+
+def last_voice_error() -> str:
+    """Why the most recent voices() call came back empty (for the UI to show).
+    Empty string means the last call succeeded."""
+    return _LAST_ERROR
 
 
 def voices(lang: str, cfg: dict | None = None, log=lambda *_: None) -> list[dict]:
@@ -138,9 +153,11 @@ def voices(lang: str, cfg: dict | None = None, log=lambda *_: None) -> list[dict
 
     This is what makes "Google supplies the voices" real: the Voices panel calls
     this and shows the list to pick from. Cached per locale for the session.
-    Returns [] (not an error) if the catalogue can't be fetched, so the panel
-    degrades to a free-text box rather than breaking.
+    Returns [] if the catalogue can't be fetched — but records WHY in
+    last_voice_error() so the panel can tell you (usually: the Text-to-Speech API
+    isn't enabled on the project) instead of a mystifying "0 available".
     """
+    global _LAST_ERROR
     cfg = cfg or {}
     loc = locale_for(lang, cfg)
     if loc in _VOICE_CACHE:
@@ -159,7 +176,17 @@ def voices(lang: str, cfg: dict | None = None, log=lambda *_: None) -> list[dict
                         "locale": (v.get("languageCodes") or [loc])[0],
                         "gender": (v.get("ssmlGender") or "").title()})
         out.sort(key=lambda d: d["name"])
+        if not out:
+            _LAST_ERROR = (f"The catalogue returned no Chirp 3 HD voices for "
+                           f"{loc}. Try a different locale via google_tts_locale.")
+        else:
+            _LAST_ERROR = ""
+    except urllib.error.HTTPError as e:
+        _LAST_ERROR = _http_detail(e)
+        log(f"  (couldn't list Google voices for {loc}: {_LAST_ERROR})")
+        return []
     except Exception as e:                              # noqa: BLE001
+        _LAST_ERROR = str(e)
         log(f"  (couldn't list Google voices for {loc}: {e})")
         return []
     _VOICE_CACHE[loc] = out

@@ -87,6 +87,20 @@ def main() -> int:
     check("default_voice is the first catalogue voice",
           GT.default_voice("en", cfg), "en-US-Chirp3-HD-Charon")
 
+    print("\n  empty catalogue records WHY (API-not-enabled surfaces to the UI):")
+    GT._VOICE_CACHE.clear()
+    import urllib.error
+    err_body = json.dumps({"error": {"message":
+        "Cloud Text-to-Speech API has not been used in project 123 before or it is disabled."}}).encode()
+
+    def raise_403(req, timeout=0):
+        raise urllib.error.HTTPError("http://x", 403, "Forbidden", {}, io.BytesIO(err_body))
+
+    GT.urllib.request.urlopen = raise_403
+    check("403 -> empty list", GT.voices("de", cfg), [])
+    check("reason captured for the UI",
+          "has not been used" in GT.last_voice_error(), True)
+
     print("\n  synth: writes gc_ wavs, caches, skips on re-run:")
     tmp = pathlib.Path(tempfile.mkdtemp())
     calls = {"n": 0}
