@@ -1336,18 +1336,65 @@ async function viewVoices(lang) {
   const eng = d.engine || { active: 'chatterbox', selected: 'chatterbox', higgs_installed: false };
   const enginePill = eng.active === 'higgs'
     ? el('span', { class: 'pill ok' }, 'Engine: Higgs')
-    : eng.selected === 'higgs'
-      ? el('span', { class: 'pill part', title: 'Higgs is selected in config.json but not installed on this machine — using Chatterbox.' },
-        'Engine: Chatterbox (Higgs not installed)')
-      : el('span', { class: 'pill plain none' }, 'Engine: Chatterbox');
+    : eng.active === 'chirp'
+      ? el('span', { class: 'pill ok' }, 'Engine: Google Chirp 3 HD')
+      : eng.selected === 'chirp'
+        ? el('span', { class: 'pill part', title: 'Chirp is selected but your Vertex credentials / Text-to-Speech API aren’t ready — using Chatterbox.' },
+          'Engine: Chatterbox (Chirp not ready)')
+        : eng.selected === 'higgs'
+          ? el('span', { class: 'pill part', title: 'Higgs is selected in config.json but not installed on this machine — using Chatterbox.' },
+            'Engine: Chatterbox (Higgs not installed)')
+          : el('span', { class: 'pill plain none' }, 'Engine: Chatterbox');
 
   v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
     el('div', { class: 'row' }, tabs,
       el('div', { style: 'flex:1' }),
       enginePill,
-      chosenRel
-        ? el('span', { class: 'pill ok' }, 'Using: ' + (d.status.reference_label || chosenRel))
-        : el('span', { class: 'pill none' }, 'no clip chosen'))));
+      eng.selected === 'chirp'
+        ? (d.google_voice
+          ? el('span', { class: 'pill ok' }, 'Using: ' + d.google_voice)
+          : el('span', { class: 'pill none' }, 'no voice chosen'))
+        : chosenRel
+          ? el('span', { class: 'pill ok' }, 'Using: ' + (d.status.reference_label || chosenRel))
+          : el('span', { class: 'pill none' }, 'no clip chosen'))));
+
+  // ── Google Chirp voice picker ───────────────────────────────────────────
+  // Chirp doesn't clone a clip — Google supplies the voices — so when it's the
+  // chosen engine the panel offers its catalogue for this language instead of
+  // (well, above) the reference clips.
+  if (eng.selected === 'chirp') {
+    if (!eng.google_ready) {
+      v.append(el('div', { class: 'card', style: 'margin-bottom:14px;border-color:var(--bad)' },
+        el('b', {}, 'Google Chirp is selected, but Vertex isn’t ready here. '),
+        el('div', { class: 'sub', style: 'margin-top:6px' },
+          'Set vertex_project (and vertex_service_account if you use one) in '
+          + 'config.json — the same ones Imagen/Veo use — and enable the '
+          + 'Text-to-Speech API on that project. Narrating with Chatterbox until then.')));
+    } else {
+      const list = d.google_voices || [];
+      const cur = d.google_voice || '';
+      const sel = el('select', { style: 'min-width:280px' },
+        el('option', { value: '' }, list.length ? 'Choose a voice…' : 'No voices returned for this language'),
+        list.map(gv => el('option', { value: gv.name, selected: gv.name === cur },
+          gv.name + (gv.gender ? ' · ' + gv.gender : ''))));
+      const useBtn = el('button', {
+        class: 'btn sm primary',
+        onclick: async () => {
+          if (!sel.value) { toast('Pick a voice first.'); return; }
+          await api('/api/choose_voice', { lang, google_voice: sel.value });
+          toast(sel.value + ' will now read ' + d.lang_name + '.');
+          viewVoices(lang);
+        }
+      }, 'Use this voice');
+      v.append(el('div', { class: 'card', style: 'margin-bottom:14px' },
+        el('div', { class: 'sub', style: 'margin-bottom:6px' },
+          'Google Chirp 3 HD voice for ' + d.lang_name + ' · ' + list.length + ' available'),
+        el('div', { class: 'row' }, sel, useBtn),
+        el('div', { class: 'sub', style: 'margin-top:8px' },
+          'No reference clip needed — these are Google’s studio voices. '
+          + 'Cost is ~$30 per 1M characters, with ~1M free each month.')));
+    }
+  }
 
   // ── reference transcript (Higgs voice cloning) ──────────────────────────
   // Higgs clones from the clip PLUS what's said in it. Left blank, Higgs
@@ -1740,24 +1787,36 @@ async function viewSettings() {
         || d.captions), d.ffmpeg_hint),
     (() => {
       const vo = d.voice || {};
-      const eng = vo.active === 'higgs' ? 'Higgs Audio' : 'Chatterbox Multilingual';
-      const detail = eng + (vo.model && vo.active === 'higgs' ? ' · ' + vo.model : '')
+      const eng = vo.active === 'higgs' ? 'Higgs Audio'
+        : vo.active === 'chirp' ? 'Google Chirp 3 HD'
+        : 'Chatterbox Multilingual';
+      const showModel = (vo.active === 'higgs' || vo.active === 'chirp') && vo.model;
+      const detail = eng + (showModel ? ' · ' + vo.model : '')
         + (vo.device ? ' · ' + vo.device : '');
-      const ok = vo.active === 'higgs' ? vo.higgs_installed : vo.chatterbox_installed;
+      const ok = vo.active === 'higgs' ? vo.higgs_installed
+        : vo.active === 'chirp' ? vo.google_ready
+        : vo.chatterbox_installed;
       return line(ok, 'Voice engine', detail, 'run setup.sh / setup.bat');
     })(),
     (() => {
       const vo = d.voice || {};
       if (!vo.fallback) return null;
-      // config asked for Higgs but we're on Chatterbox — say WHY: installed but
-      // it couldn't run here (e.g. Mac/MPS), or simply not installed.
-      const msg = vo.higgs_installed
-        ? ('Higgs is installed but couldn’t run here'
+      // The picked engine isn't the active one — say WHY, per engine.
+      let msg;
+      if (vo.selected === 'chirp') {
+        msg = 'Google Chirp is selected but couldn’t run here'
+          + (vo.google_reason ? ' (' + vo.google_reason + ')' : '')
+          + ' — narrating with Chatterbox. Set vertex_project + enable the '
+          + 'Text-to-Speech API on that project, then reload.';
+      } else if (vo.higgs_installed) {
+        msg = 'Higgs is installed but couldn’t run here'
           + (vo.higgs_reason ? ' (' + vo.higgs_reason + ')' : '')
           + ' — narrating with Chatterbox. Higgs needs an NVIDIA (CUDA) GPU; '
-          + 'on a Mac it falls back. It’ll run on your RTX machine.')
-        : 'Higgs is set in config.json but not installed here — narrating with '
+          + 'on a Mac it falls back. It’ll run on your RTX machine.';
+      } else {
+        msg = 'Higgs is set in config.json but not installed here — narrating with '
           + 'Chatterbox. Install it (see below), then reload.';
+      }
       return el('tr', {}, el('td', {}), el('td', { class: 'sub', colspan: '2' }, msg));
     })(),
     line(d.chatterbox ? d.gpu_ok : null, 'GPU',

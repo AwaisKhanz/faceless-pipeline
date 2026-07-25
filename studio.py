@@ -1051,8 +1051,13 @@ class Handler(BaseHTTPRequestHandler):
 
             # Voice engine — say clearly WHICH backend is narrating right now,
             # which model, and on what device, so Settings isn't a guessing game.
-            v_selected = "higgs" if str(cfg.get("voice_engine", "chatterbox")).strip().lower() \
-                in ("higgs", "higgs-audio") else "chatterbox"
+            _ve = str(cfg.get("voice_engine", "chatterbox")).strip().lower()
+            if _ve in ("higgs", "higgs-audio"):
+                v_selected = "higgs"
+            elif _ve in ("chirp", "chirp3", "google", "google-tts", "gtts", "vertex-tts"):
+                v_selected = "chirp"
+            else:
+                v_selected = "chatterbox"
             try:
                 from lib import higgs_engine as HG
                 higgs_ok = HG.usable()          # installed AND not failed this session
@@ -1061,13 +1066,34 @@ class Handler(BaseHTTPRequestHandler):
                 higgs_dev = HG.device_info(cfg) if higgs_ok else {}
             except Exception:
                 higgs_ok, higgs_present, higgs_reason, higgs_dev = False, False, "", {}
-            v_active = "higgs" if (v_selected == "higgs" and higgs_ok) else "chatterbox"
+            try:
+                from lib import gtts_engine as GT
+                google_ok = GT.usable(cfg)          # Vertex creds ready + not failed
+                google_reason = GT.unusable_reason()
+            except Exception:
+                google_ok, google_reason = False, ""
+
+            v_active = ("higgs" if (v_selected == "higgs" and higgs_ok)
+                        else "chirp" if (v_selected == "chirp" and google_ok)
+                        else "chatterbox")
             if v_active == "higgs":
                 v_model = str(cfg.get("higgs_model") or HG.DEFAULT_MODEL).split("/")[-1]
                 v_devinfo = higgs_dev
+            elif v_active == "chirp":
+                v_model = "Google Chirp 3 HD"
+                v_devinfo = {"device": "cloud", "name": "Google Cloud TTS"}
             else:
                 v_model = "Chatterbox Multilingual"
                 v_devinfo = dev
+            # A fallback happened when the picked engine isn't the active one.
+            _fell = ((v_selected == "higgs" and not higgs_ok)
+                     or (v_selected == "chirp" and not google_ok))
+            if v_selected == "chirp" and not google_ok:
+                v_hint = GT.install_hint()
+            elif v_selected == "higgs" and not higgs_present:
+                v_hint = HG.install_hint()
+            else:
+                v_hint = ""
             voice = {
                 "selected": v_selected,
                 "active": v_active,
@@ -1075,11 +1101,13 @@ class Handler(BaseHTTPRequestHandler):
                 "higgs_installed": higgs_present,
                 "higgs_usable": higgs_ok,
                 "higgs_reason": higgs_reason,
+                "google_ready": google_ok,
+                "google_reason": google_reason,
                 "model": v_model,
                 "device": v_devinfo.get("device") or "cpu",
                 "device_name": v_devinfo.get("name"),
-                "fallback": v_selected == "higgs" and not higgs_ok,
-                "install_hint": (HG.install_hint() if v_selected == "higgs" and not higgs_present else ""),
+                "fallback": _fell,
+                "install_hint": v_hint,
             }
 
             return self._json({
@@ -1148,17 +1176,37 @@ class Handler(BaseHTTPRequestHandler):
             vx.ensure_folders()
             refs = vx.references(lang)
             cfg_v = pl.load_config()
-            selected = "higgs" if str(cfg_v.get("voice_engine", "chatterbox")).strip().lower() \
-                in ("higgs", "higgs-audio") else "chatterbox"
+            _ve = str(cfg_v.get("voice_engine", "chatterbox")).strip().lower()
+            if _ve in ("higgs", "higgs-audio"):
+                selected = "higgs"
+            elif _ve in ("chirp", "chirp3", "google", "google-tts", "gtts", "vertex-tts"):
+                selected = "chirp"
+            else:
+                selected = "chatterbox"
             try:
                 from lib import higgs_engine as _HG
                 higgs_ok = _HG.usable()
                 higgs_installed = _HG.installed()
             except Exception:
                 higgs_ok = higgs_installed = False
-            engine = {"selected": selected,
-                      "active": "higgs" if (selected == "higgs" and higgs_ok) else "chatterbox",
-                      "higgs_installed": higgs_installed}
+            # Google Chirp: list the catalogue voices for this language so the
+            # panel can offer them (only when Chirp is selected — it's a network
+            # call, pointless otherwise). google_ok = Vertex creds are ready.
+            google_ok = False
+            google_voices: list = []
+            try:
+                from lib import gtts_engine as _GT
+                google_ok = _GT.usable(cfg_v)
+                if selected == "chirp" and google_ok:
+                    google_voices = _GT.voices(lang, cfg_v)
+            except Exception:
+                google_ok, google_voices = False, []
+            active = ("higgs" if (selected == "higgs" and higgs_ok)
+                      else "chirp" if (selected == "chirp" and google_ok)
+                      else "chatterbox")
+            engine = {"selected": selected, "active": active,
+                      "higgs_installed": higgs_installed,
+                      "google_ready": google_ok}
             # The transcript actually in use for the chosen clip: the manual
             # override, else the auto-generated .txt on disk (display only).
             chosen_pref = vx.pref_for(lang)
@@ -1176,6 +1224,11 @@ class Handler(BaseHTTPRequestHandler):
                 "status": vx.status(lang),
                 "engine": engine,
                 "transcript": transcript,
+                # Google Chirp: the catalogue for the panel dropdown + the chosen
+                # voice name. Empty catalogue simply means Chirp isn't the active
+                # engine (or creds aren't ready) — the panel hides the dropdown.
+                "google_voices": google_voices,
+                "google_voice": chosen_pref.get("google_voice", ""),
                 # Only this language's clips, plus any left loose — a German
                 # list full of English voices is noise, not choice.
                 "references": [r for r in refs if r["lang"] == lang],
@@ -1288,6 +1341,10 @@ class Handler(BaseHTTPRequestHandler):
             # actually sent it, so choosing a clip never wipes an existing one.
             if "reference_text" in b:
                 fields["reference_text"] = b.get("reference_text")
+            # Google Chirp voice, likewise only when sent, so picking a Chatterbox
+            # clip never clears the Google choice and vice versa.
+            if "google_voice" in b:
+                fields["google_voice"] = b.get("google_voice")
             saved = vx.save_pref(lang, **fields)
             log(f"Voice for {lang}: {tts.describe(lang)}")
             return self._json({"saved": saved})

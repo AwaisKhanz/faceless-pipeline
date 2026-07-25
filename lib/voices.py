@@ -68,6 +68,11 @@ def pref_for(lang: str) -> dict:
         # voice. Chatterbox ignores it. Empty is fine (Higgs then uses a generic
         # voice, Chatterbox is unaffected).
         "reference_text": p.get("reference_text", ""),
+        # Chirp-only: the Google catalogue voice NAME for this language (e.g.
+        # en-US-Chirp3-HD-Kore). Chirp doesn't clone a clip — Google supplies the
+        # voice — so this is stored separately from `reference` and the two never
+        # collide when you switch engines. Ignored by Chatterbox/Higgs.
+        "google_voice": p.get("google_voice", ""),
         "exaggeration": float(p.get("exaggeration", DEFAULT_EXAGGERATION)),
         "cfg_weight": float(p.get("cfg_weight", DEFAULT_CFG)),
         "temperature": float(p.get("temperature", DEFAULT_TEMPERATURE)),

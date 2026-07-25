@@ -43,6 +43,35 @@ def _use_higgs(cfg: dict) -> bool:
     return HG.usable()
 
 
+_GTTS_NAMES = ("chirp", "chirp3", "google", "google-tts", "gtts", "vertex-tts")
+
+
+def _use_gtts(cfg: dict) -> bool:
+    """True only when Google Chirp 3 HD is selected AND usable here. Like Higgs,
+    usable() latches off after a failure this session so synth and the
+    status/render lookups both fall back to Chatterbox together."""
+    if str(cfg.get("voice_engine", "chatterbox")).strip().lower() not in _GTTS_NAMES:
+        return False
+    from . import gtts_engine as GT
+    return GT.usable(cfg)
+
+
+def _gtts_opts(cfg: dict) -> dict:
+    return {"speaking_rate": float(cfg.get("google_tts_rate", 1.0) or 1.0)}
+
+
+def _google_voice(lang: str, voice: str | None, cfg: dict) -> str:
+    """The Google catalogue voice for a language: an explicit override, else the
+    saved google_voice, else Google's default for the locale."""
+    if voice:
+        return voice
+    gv = V.pref_for(lang).get("google_voice") or ""
+    if gv:
+        return gv
+    from . import gtts_engine as GT
+    return GT.default_voice(lang, cfg)
+
+
 def _raw_ref(lang: str, voice: str | None) -> str:
     """A stable reference name shared by synth and voice_paths (so their cache
     keys match). Resolved to the voices_refs-relative path when possible."""
@@ -66,9 +95,15 @@ def _higgs_opts(lang: str, cfg: dict) -> dict:
 def describe(lang: str) -> str:
     """One line describing how a language will be read — used in logs and doctor."""
     p = V.pref_for(lang)
+    cfg = _config()
+    # Google Chirp first — it needs no reference clip (Google supplies the voice),
+    # so it must not trip the "NO REFERENCE SET" guard below. No network here:
+    # just the stored voice name.
+    if _use_gtts(cfg):
+        gv = p.get("google_voice") or "(pick a voice in Voices)"
+        return f"Google Chirp 3 HD · cloud · {gv}"
     if not p["reference"]:
         return "NO REFERENCE SET"
-    cfg = _config()
     if _use_higgs(cfg):
         from . import higgs_engine as HG
         return f"{HG.describe(lang, cfg)} · {p['reference']}"
@@ -103,12 +138,39 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
     `rate` and `pitch` are accepted and ignored — Chatterbox has no equivalent
     knobs, and dropping them from the signature would break existing callers.
     """
+    cfg = _config()
+
+    # Google Chirp 3 HD — cloud, no reference clip, its own language coverage, so
+    # it's handled before the Chatterbox-supported guard. On any failure it marks
+    # itself unusable (so status/render agree) and falls through to Chatterbox.
+    if _use_gtts(cfg):
+        from . import gtts_engine as GT
+        gv = _google_voice(lang, voice, cfg)
+        try:
+            log(f"  Voice engine: {describe(lang)}")
+            log(f"  Google voice: {gv or '(none — pick one in Voices)'}")
+        except Exception:
+            pass
+        try:
+            return GT.synth(scenes, lang, None, cache, _gtts_opts(cfg),
+                            log=log, cfg=cfg, reference=gv)
+        except SystemExit:
+            raise
+        except Exception as e:
+            GT.mark_unusable(str(e))
+            log("")
+            log("  ⚠ VOICE ENGINE FELL BACK TO CHATTERBOX")
+            log(f"      Google Chirp couldn't run here: {e}")
+            log("      Switched to Chatterbox for the rest of this session so this")
+            log("      render still completes. Check the Text-to-Speech API is")
+            log("      enabled on your Vertex project and a voice is chosen.")
+            log("")
+
     if not V.supported(lang):
         raise SystemExit(
             f"Chatterbox cannot speak '{lang}'. It supports: "
             f"{', '.join(sorted(V.LANGS))}")
 
-    cfg = _config()
     # Say exactly what's about to narrate, so the Activity log is self-explanatory:
     # engine · model · device · reference voice.
     ref = _raw_ref(lang, voice)
@@ -157,12 +219,21 @@ def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> lis
     Returns an empty list when no reference clip has been chosen — that is not
     an error here, it just means nothing can have been voiced yet.
     """
+    cfg = _config()
+    # Google Chirp: the "voice" is a Google catalogue name, not a file, so this
+    # is checked first (the reference-clip guard below would otherwise return []).
+    if _use_gtts(cfg):
+        from . import gtts_engine as GT
+        gv = voice or V.pref_for(lang).get("google_voice") or ""
+        if not gv:
+            return []
+        return GT.expected_paths(scenes, lang, gv, cache, _gtts_opts(cfg), cfg=cfg)
+
     if not (voice or V.pref_for(lang)["reference"]) or not V.supported(lang):
         return []
     name = _raw_ref(lang, voice)
     if not name:
         return []
-    cfg = _config()
     if _use_higgs(cfg):
         from . import higgs_engine as HG
         return HG.expected_paths(scenes, lang, name, cache,
