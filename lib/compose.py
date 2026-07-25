@@ -218,11 +218,6 @@ def split_into_scenes(script: str, plan: dict, key: str, model: str,
             if G.words(joined) != G.words(sec):
                 feedback = ("Your narration did not reproduce the section exactly.\n"
                             + G.diff_words(sec, joined))
-                if attempt == 3:
-                    res.warnings.append(
-                        f"Section {i}: narration still differs from the script after "
-                        f"3 attempts.\n{G.diff_words(sec, joined)}")
-                    on_warn(f"Section {i} did not match the script — see warnings")
                 continue
 
             # Soft gate: push back on scenes that bundle several visuals into one
@@ -238,6 +233,22 @@ def split_into_scenes(script: str, plan: dict, key: str, model: str,
                     f"Section {i}: {len(coarse)} scene(s) may still hold more than "
                     f"one picture — check them in review and split if needed.")
             break
+
+        # After the retries, if the model STILL drifted from the script on a word
+        # or two, repair it: snap the narration back to the author's exact words
+        # (keeping the model's scene cuts) so the video never speaks a word the
+        # author didn't write. Only warn if even that can't guarantee a match.
+        joined = " ".join(s.get("narration", "") for s in (got or []))
+        if got and G.words(joined) != G.words(sec):
+            snapped = G.snap_to_script(sec, got)
+            if snapped is not None:
+                got, changed = snapped
+                tick(f"section {i}: corrected {changed} word(s) back to your script")
+            else:
+                res.warnings.append(
+                    f"Section {i}: narration still differs from the script after "
+                    f"3 attempts.\n{G.diff_words(sec, joined)}")
+                on_warn(f"Section {i} did not match the script — see warnings")
         all_scenes.extend(got or [])
 
     scenes = [Scene(n=i, narration=s.get("narration", ""),

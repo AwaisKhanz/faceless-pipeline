@@ -74,6 +74,34 @@ def main() -> int:
     check("topic enum is the canonical set", G.SCENES_SCHEMA["properties"]["scenes"]
           ["items"]["properties"]["topic"]["enum"], list(G.CANON_TOPICS))
 
+    print("\n  snap_to_script repairs the model's drift back to the author's words:")
+
+    def _snap_ok(section, scenes):
+        r = G.snap_to_script(section, scenes)
+        if r is None:
+            return None
+        out, _ = r
+        return G.words(" ".join(s["narration"] for s in out)) == G.words(section)
+
+    check("a mis-transcribed word is corrected to the script",
+          _snap_ok("Er liefert den knackigen, erfrischenden Biss.",
+                   [{"narration": "Er liefert den knackigen, erfrishingen Biss.",
+                     "query": "a"}]), True)
+    check("a dropped word is restored to the right scene",
+          _snap_ok("the quick brown fox jumps over the lazy dog",
+                   [{"narration": "the quick brown fox", "query": "a"},
+                    {"narration": "jumps over lazy dog", "query": "b"}]), True)
+    check("an invented word is dropped",
+          _snap_ok("hello world", [{"narration": "hello there world", "query": "a"}]), True)
+    check("boundaries are kept (still two scenes)",
+          len(G.snap_to_script("one two three four",
+                               [{"narration": "one two", "query": "a"},
+                                {"narration": "three four x", "query": "b"}])[0]), 2)
+    check("bails (None) rather than empty a scene",
+          G.snap_to_script("alpha beta",
+                           [{"narration": "totally different words", "query": "a"},
+                            {"narration": "alpha beta", "query": "b"}]), None)
+
     EN = "The sea is deep. Fish swim in the dark. Light fades below."
     DE = "Das Meer ist tief. Fische schwimmen im Dunkeln. Licht schwindet unten."
     ES = "El mar es profundo. Los peces nadan. La luz se apaga."

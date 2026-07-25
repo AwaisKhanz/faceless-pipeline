@@ -472,6 +472,61 @@ def diff_words(expected: str, got: str, context: int = 6) -> str:
     return "  (no word differences — only punctuation or spacing)"
 
 
+def snap_to_script(section: str, scenes: list[dict]) -> tuple[list[dict], int] | None:
+    """Force the scenes' narration to reproduce `section` WORD-FOR-WORD while
+    keeping the model's scene boundaries.
+
+    When it splits a script, the model occasionally mis-transcribes or drops a
+    word (e.g. writes 'erfrishingen' for 'erfrischenden'). Rather than let a wrong
+    word get spoken, we redistribute the AUTHOR'S exact text — with the author's
+    own punctuation — across the same cut points the model chose. Returns
+    (new_scenes, words_changed), or None if an exact match can't be guaranteed
+    (the caller then keeps the model's version and warns).
+    """
+    import difflib
+    S = section.split()                        # author tokens, punctuation kept
+    per = [((s.get("narration", "") or "").split()) for s in scenes]
+    J = [w for toks in per for w in toks]       # model tokens, flattened
+    if not S or not J:
+        return None
+    scene_at = []                               # scene index for each J position
+    for k, toks in enumerate(per):
+        scene_at.extend([k] * len(toks))
+
+    def norm(w):                                # compare on words, not punctuation
+        return re.sub(r"[^a-z0-9']+", "", w.lower())
+
+    sm = difflib.SequenceMatcher(None, [norm(w) for w in S], [norm(w) for w in J])
+    owner: list = [None] * len(S)               # which scene each author token joins
+    changed = 0
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for t in range(i2 - i1):
+                owner[i1 + t] = scene_at[j1 + t]
+        elif tag in ("replace", "delete"):
+            sc = scene_at[min(j1, len(J) - 1)]  # give these author words a home
+            for i in range(i1, i2):
+                owner[i] = sc
+            changed += (i2 - i1)
+        # 'insert' = words the model invented with no source → dropped
+    if any(o is None for o in owner):
+        return None
+    new_narr: list = [[] for _ in scenes]
+    for i, sc in enumerate(owner):
+        new_narr[sc].append(S[i])
+    out = []
+    for k, s in enumerate(scenes):
+        text = " ".join(new_narr[k]).strip()
+        if not text:                            # a scene emptied out → unsafe, bail
+            return None
+        s2 = dict(s)
+        s2["narration"] = text
+        out.append(s2)
+    if words(" ".join(x["narration"] for x in out)) != words(section):
+        return None                             # never return an imperfect match
+    return out, changed
+
+
 # ------------------------------------------------------------------- schemas
 
 PLAN_SCHEMA = {
