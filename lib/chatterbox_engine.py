@@ -486,6 +486,8 @@ def synth(scenes, lang: str, ref_wav: Path, cache: Path = CACHE,
             synth_one(txt, ref_wav, lang, p, o, log=log)
             made += 1
             log(f"S{s.n:>3} voiced  ({txt[:52]}...)")
+        else:
+            log(f"S{s.n:>3} cached  ({txt[:52]}...)")
         out.append(p)
     log(f"Chatterbox: {made} generated, {len(scenes) - made} from cache "
         f"({device_in_use()}).")

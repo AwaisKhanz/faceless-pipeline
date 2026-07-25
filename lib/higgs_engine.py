@@ -344,6 +344,8 @@ def synth(scenes, lang: str, ref_wav, cache: Path = CACHE, opts: dict | None = N
             _synth_one(engine, text, ref_wav, transcript, scene_desc, max_new, o, p, log)
             made += 1
             log(f"S{s.n:>3} voiced  ({text[:52]}...)")
+        else:
+            log(f"S{s.n:>3} cached  ({text[:52]}...)")
         out.append(p)
     log(f"Higgs: {made} generated, {len(scenes) - made} from cache "
         f"({device_info(cfg)['device']}).")

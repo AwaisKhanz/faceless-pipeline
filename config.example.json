@@ -48,6 +48,8 @@
   "clip_min": 0.45,
   "_source_log": "How much per-scene detail the live Output shows while sourcing. Default (any value but \"full\") gives a clean result line plus the top few candidates. Set \"full\" to list EVERY scored candidate for every scene — the complete firehose.",
   "source_log": "",
+  "_log_detail": "Verbosity of the live Output across ALL steps (voice, render, captions, generation), not just sourcing. \"normal\" (default) shows the key lines; \"full\" adds deep per-step detail — the exact engine/model/device in use, every scene voiced or served from cache, render timing (gap/dissolve/tail), each clip's length, the assembled audio length and measured loudness, and the caption method. Use it to see exactly what happened.",
+  "log_detail": "normal",
   "_search_all_sources": "Off by default: each scene is sent only to the few libraries that match its subject (fast, fewer requests). Set true to ask EVERY reachable library for every scene and let visual-matching pick the best across all of them — this catches things topic-routing misses (a named public figure like a politician lives on Wikimedia/Openverse, not on stock, but reads as 'people'). Sources are queried in parallel, so this is fast; everything is cached, so re-sourcing is free.",
   "search_all_sources": false,
   "_disable_sources": "Optional speed lever. A list of source names never to query, e.g. [\"openverse\"] if it always fails on your network (an ISP block), or a slow archive you don't need. Skipping it means no requests are wasted failing it. Names: pexels, pixabay, openverse, wikimedia, loc, nasa, smithsonian, europeana, ia, met, aic, cleveland.",

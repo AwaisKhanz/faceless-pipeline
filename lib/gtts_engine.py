@@ -332,6 +332,8 @@ def synth(scenes, lang: str, ref_wav=None, cache: Path = CACHE,
             _synth_one(text, voice, locale, rate, p, cfg, log=log)
             made += 1
             log(f"S{s.n:>3} voiced  ({text[:52]}...)")
+        else:
+            log(f"S{s.n:>3} cached  ({text[:52]}...)")
         out.append(p)
     log(f"Chirp: {made} generated, {len(scenes) - made} from cache (cloud).")
     return out

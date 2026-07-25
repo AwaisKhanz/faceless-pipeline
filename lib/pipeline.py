@@ -589,6 +589,13 @@ def write_config_file(data: dict) -> Path:
     return CONFIG_FILE
 
 
+def detailed_log(cfg: dict | None = None) -> bool:
+    """Whether the live Output should be verbose (config log_detail = full).
+    One helper so every step decides the same way."""
+    v = (cfg if cfg is not None else load_config()).get("log_detail", "normal")
+    return str(v).strip().lower() in ("full", "all", "verbose", "on", "true")
+
+
 def _flag(v, default: bool = True) -> bool:
     """Read a config value as an on/off switch. 'auto'/'on'/True are on;
     'off'/'no'/'false'/'0'/False are off. Missing falls back to `default`."""
@@ -1034,6 +1041,9 @@ def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
             "assets": assets}
 
 
+_VOICE_SCENE_LINE = re.compile(r"S\s*\d+\s+(?:voiced|cached)", re.I)
+
+
 def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
                    on_progress=noop) -> list[Path]:
     """`voice` names a reference clip, overriding the one saved for this language."""
@@ -1042,9 +1052,16 @@ def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
     total = len(scenes)
 
     def log(msg: str) -> None:
-        if isinstance(msg, str) and msg.lstrip().startswith("S"):
-            done[0] += 1
-            on_progress(done[0], total, msg.strip())
+        # Forward EVERY line the engine emits to the live Output — the engine
+        # header (which engine / model / device / voice), any fallback notice,
+        # per-scene lines and the final summary — so the log is self-explanatory.
+        # Only a real per-scene line ("S 3 voiced/cached …") advances the bar; a
+        # line that merely starts with 'S' (e.g. "Switched to Chatterbox…") must
+        # not be miscounted.
+        line = msg if isinstance(msg, str) else str(msg)
+        if _VOICE_SCENE_LINE.match(line.lstrip()):
+            done[0] = min(total, done[0] + 1)
+        on_progress(done[0], total, line.rstrip())
 
     return tts.synth(scenes, lang, p["voicecache"], voice=voice, log=log)
 
@@ -1130,6 +1147,13 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     GAP = float(rcfg.get("scene_gap", 0.35) or 0.0)
     TAIL_L = GAP + DISS
     lead = max(0.0, float(rcfg.get("caption_lead", 0.12) or 0.0))
+    verbose = detailed_log(rcfg)
+    n = len(scenes)
+    if verbose:
+        on_progress(0, n + 4,
+                    f"timing · gap {GAP:.2f}s · dissolve {DISS:.2f}s · tail {TAIL_L:.2f}s "
+                    f"· caption lead {lead:.2f}s · trim_silence "
+                    f"{'on' if _flag(rcfg.get('trim_silence', True)) else 'off'}")
 
     # Strip the dead air each TTS clip carries at its head/tail, so the only
     # silence between lines is `scene_gap`. The trimmed clips are used for
@@ -1143,7 +1167,6 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
             trimmed.append(render.trim_silence(Path(v), t))
         voices = trimmed
 
-    n = len(scenes)
     clips, vdurs = [], []
     for i, s in enumerate(scenes):
         vd = render.duration_of(voices[i])
@@ -1162,13 +1185,19 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         stale = out.exists() and (
             render.pix_fmt_of(out) not in ("yuv420p", "yuvj420p")
             or abs(_dur_safe(out) - target) > (1.5 / render.FPS))
-        if not out.exists() or stale:
+        was_built = (not out.exists()) or stale
+        if was_built:
             if src.suffix.lower() in (".mp4", ".mov", ".webm"):
                 render.make_video_clip(src, vd + TAIL_L, out)
             else:
                 render.make_image_clip(src, vd + TAIL_L, out, zoom=zoom)
         clips.append((out, render.duration_of(out)))
-        on_progress(i + 1, n + 4, f"scene {i + 1} of {n}")
+        msg = f"scene {i + 1} of {n}"
+        if verbose:
+            kind = "video" if src.suffix.lower() in (".mp4", ".mov", ".webm") else "image"
+            msg += (f" · {kind} · voice {vd:.1f}s → clip {clips[-1][1]:.1f}s"
+                    f" · {'built' if was_built else 'cached'}")
+        on_progress(i + 1, n + 4, msg)
 
     # The crossfade chain is the single most expensive step - tens of minutes for
     # 115 scenes. Reuse it when no clip has changed since it was built, so a retry
@@ -1187,6 +1216,10 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     gaps = [max(0.0, cd - vd - DISS) for (_, cd), vd in zip(clips, vdurs)]
     aud = p["base"] / "audio_track.wav"
     starts = render.build_audio(voices, gaps, aud, p["tmp"], tail=DISS)
+    if verbose:
+        on_progress(n + 2, n + 4,
+                    f"audio track {_dur_safe(aud):.1f}s · {n} lines · "
+                    f"{sum(vdurs):.1f}s speech + {sum(gaps):.1f}s gaps")
 
     acfg = load_config()
     if music:
@@ -1204,8 +1237,13 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         on_progress(n + 3, n + 4, f"mastering audio to {lufs:g} LUFS")
         try:
             mastered = p["base"] / "audio_master.wav"
-            render.master_audio(aud, mastered, lufs=lufs)
+            info = render.master_audio(aud, mastered, lufs=lufs)
             aud = mastered
+            if verbose:
+                on_progress(n + 3, n + 4,
+                            f"mastered · target {info.get('target_lufs')} LUFS · "
+                            f"peak ceiling {info.get('tp')} dBTP · "
+                            f"{'2-pass measured' if info.get('measured') else '1-pass'}")
         except Exception as e:
             on_progress(n + 3, n + 4, f"mastering skipped ({e})")
 
@@ -1233,12 +1271,19 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
                                      on_progress, n, lead=lead)
         groups = cap.groups_from_scenes(scene_words, st)
         p["ass"].write_text(cap.build_ass(groups, st), encoding="utf-8")
+        if verbose:
+            words = sum(len(g.get("words", [])) for g in groups)
+            on_progress(n + 3, n + 4,
+                        f"captions · style '{st.name}' · {len(groups)} phrases · "
+                        f"{words} words · lead {lead:.2f}s")
 
         on_progress(n + 3, n + 4, "burning captions")
         try:
             method = render.burn_captions(silent, p["ass"], p["out"], texts=texts,
                                           starts=starts, durs=vdurs,
                                           size=st.size)
+            if verbose:
+                on_progress(n + 3, n + 4, f"caption method · {method}")
             if method == "drawtext":
                 on_progress(n + 4, n + 4,
                             "done (captions burned without libass - plainer style)")

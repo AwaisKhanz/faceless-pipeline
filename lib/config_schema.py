@@ -122,6 +122,8 @@ _FIELDS: list[dict] = [
      "options": _opt(("auto", "auto"), ("off", "off"))},
     {"key": "source_log", "section": "sourcing", "type": "select",
      "options": _opt(("", "clean (default)"), ("full", "full — every candidate"))},
+    {"key": "log_detail", "section": "sourcing", "type": "select",
+     "options": _opt(("normal", "normal"), ("full", "full — verbose everywhere"))},
 
     # ── visual matching ─────────────────────────────────────────────────────
     {"key": "clip", "section": "matching", "type": "select",
