@@ -61,6 +61,16 @@ def main() -> int:
     finally:
         pl.PROJECTS = _orig
 
+    print("\n  sentence-flow flags (tiny gap inside a sentence, full gap at its end):")
+    import types
+    mk = lambda t: types.SimpleNamespace(narration=t)
+    scenes = [mk("Packed with more vitamin C than any other fruit,"),  # continues
+              mk("helping support your immune system"),                # continues
+              mk("and healthy skin."),                                 # ends
+              mk("This unusual fruit grows on a tree trunk.")]         # ends (last)
+    check("flow flags mark mid-sentence joins",
+          pl._flow_flags(scenes), [True, True, False, False])
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

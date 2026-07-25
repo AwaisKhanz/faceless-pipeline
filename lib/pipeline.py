@@ -276,6 +276,28 @@ def _dur_safe(path: Path) -> float:
         return 0.0
 
 
+_SENT_END = re.compile(r"[.!?…]['\"’”)\]]*$")
+
+
+def _flow_flags(scenes) -> list[bool]:
+    """flow[i] is True when scene i runs MID-SENTENCE into the next one.
+
+    A sentence is often split across several scenes so each shows its own
+    picture ("… vitamin C than any other fruit," / "helping your immune system" /
+    "and healthy skin."). Spoken as separate clips they'd each full-stop; this
+    flags the joins so the render keeps almost no gap there — the fragments run
+    together as one sentence — while real sentence ends still get the full pause.
+    A scene ends a sentence when its cleaned narration ends with . ! ? or … .
+    """
+    n = len(scenes)
+    out = []
+    for i, s in enumerate(scenes):
+        t = _speech(s.narration)
+        ends = bool(_SENT_END.search(t)) or not t
+        out.append(i < n - 1 and not ends)
+    return out
+
+
 def _voiced_any(scenes, code: str, cache: Path) -> int:
     """How many scenes have SOME real cached narration clip, regardless of which
     engine (cb_/hg_ prefix) or which exact settings produced it. Used only as a
@@ -1164,10 +1186,16 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     rcfg = load_config()
     DISS = max(0.0, float(rcfg.get("scene_dissolve") or DISSOLVE))
     GAP = float(rcfg.get("scene_gap", 0.35) or 0.0)
-    TAIL_L = GAP + DISS
+    # A much smaller gap between fragments of ONE sentence, so a sentence split
+    # across scenes flows instead of stopping at every cut. 0 = butt them right up.
+    FLOW_GAP = max(0.0, float(rcfg.get("scene_flow_gap", 0.06) or 0.0))
     lead = max(0.0, float(rcfg.get("caption_lead", 0.12) or 0.0))
     verbose = detailed_log(rcfg)
     n = len(scenes)
+    # Per-scene gap AFTER each line: tiny inside a sentence, full at a sentence end.
+    flow = _flow_flags(scenes)
+    gap_after = [FLOW_GAP if flow[i] else GAP for i in range(n)]
+    TAIL_L = GAP + DISS      # kept for the fallback/last-scene hold
     if verbose:
         on_progress(0, n + 4,
                     f"timing · gap {GAP:.2f}s · dissolve {DISS:.2f}s · tail {TAIL_L:.2f}s "
@@ -1192,7 +1220,10 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         vdurs.append(vd)
         src = Path(assets[s.n]["path"])
         out = p["clips"] / f"c{s.n:04d}.mp4"
-        target = vd + TAIL_L
+        # The picture holds voice + this scene's own gap + the dissolve. Because
+        # the audio gap after this line is gap_after[i], the narration still lands
+        # exactly on each clip start (the render's core invariant holds per scene).
+        target = vd + gap_after[i] + DISS
         # Rebuild anything left over from before the 4:2:0 pin, so a cached clip
         # can't quietly drag the finished video back to an unplayable format.
         # yuvj420p is accepted: it is still 4:2:0 and plays everywhere - only the
@@ -1200,16 +1231,16 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         # re-encoding every cached clip for no visible gain.
         # ALSO rebuild when the clip's length no longer matches what this scene
         # now needs (voice + tail) — otherwise trimming the narration, or changing
-        # scene_gap, would silently reuse an old, too-long clip and re-open the gap.
+        # a gap, would silently reuse an old, too-long clip and re-open the gap.
         stale = out.exists() and (
             render.pix_fmt_of(out) not in ("yuv420p", "yuvj420p")
             or abs(_dur_safe(out) - target) > (1.5 / render.FPS))
         was_built = (not out.exists()) or stale
         if was_built:
             if src.suffix.lower() in (".mp4", ".mov", ".webm"):
-                render.make_video_clip(src, vd + TAIL_L, out)
+                render.make_video_clip(src, target, out)
             else:
-                render.make_image_clip(src, vd + TAIL_L, out, zoom=zoom)
+                render.make_image_clip(src, target, out, zoom=zoom)
         clips.append((out, render.duration_of(out)))
         msg = f"scene {i + 1} of {n}"
         if verbose:

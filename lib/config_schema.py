@@ -199,6 +199,7 @@ _FIELDS: list[dict] = [
     {"key": "music_duck", "section": "audio", "type": "bool"},
     {"key": "trim_silence", "section": "audio", "type": "bool"},
     {"key": "scene_gap", "section": "audio", "type": "number", "min": 0, "max": 1.5, "step": 0.05},
+    {"key": "scene_flow_gap", "section": "audio", "type": "number", "min": 0, "max": 0.5, "step": 0.02},
     {"key": "scene_dissolve", "section": "audio", "type": "number", "min": 0, "max": 2.0, "step": 0.05},
     {"key": "caption_lead", "section": "audio", "type": "number", "min": 0, "max": 0.5, "step": 0.01},
 ]

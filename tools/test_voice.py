@@ -128,6 +128,8 @@ def main() -> int:
     check("a real leading number is KEPT", S("5 Superfruits"), "5 Superfruits")
     check("an ordinary hyphenated word is KEPT", S("cold-pressed juice"), "cold-pressed juice")
     check("markdown/emoji still stripped", S("## **Big** 🍎 news"), "Big news")
+    check("a mid-sentence trailing comma is KEPT (continuation, not a full stop)",
+          S("more vitamin C than any other fruit,"), "more vitamin C than any other fruit,")
 
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0

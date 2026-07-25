@@ -97,7 +97,12 @@ def speech_text(text: str) -> str:
     t = re.sub(r"\s+([,.;:!?])", r"\1", t)   # tidy " ," left by removals
     t = re.sub(r"(,\s*){2,}", ", ", t)       # collapse ",," a dash->comma can make
     t = re.sub(r"\s{2,}", " ", t).strip()
-    t = t.strip(" ,;:")                       # trim stray edge punctuation
+    t = re.sub(r"^[\s,;:]+", "", t)          # drop leading stray punctuation
+    t = re.sub(r"[\s;:]+$", "", t)           # drop trailing space/;/: — but KEEP a
+    #                                          meaningful trailing comma: a scene
+    #                                          that ends mid-sentence ("…fruit,")
+    #                                          must stay a continuation, not become
+    #                                          a full stop.
     return t or (text or "")
 
 # Languages the multilingual model speaks.
