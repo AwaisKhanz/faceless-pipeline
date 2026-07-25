@@ -204,9 +204,77 @@ def reference_for(lang: str, override: str | None = None) -> Path:
     return CB.prepare_reference(ref)
 
 
+def _flow_mode(cfg: dict) -> bool:
+    """Sentence-flow ON: speak a whole sentence as one take and split it back into
+    per-scene clips, so a sentence spread over scenes keeps one intonation.
+    Opt-in via config voice_flow; off by default."""
+    return str(cfg.get("voice_flow", "off")).strip().lower() in (
+        "on", "sentence", "join", "flow", "auto", "true", "1")
+
+
+def _flow_voice(lang: str, voice: str | None, cfg: dict) -> str:
+    """A stable string identifying the chosen voice, for the flow cache key —
+    the Google voice name under Chirp, else the reference-clip name."""
+    if _use_gtts(cfg):
+        return _google_voice(lang, voice, cfg)
+    return _raw_ref(lang, voice)
+
+
 def synth(scenes, lang: str, cache: Path, voice: str | None = None,
           rate: str | None = None, pitch: str | None = None,
           log=print) -> list[Path]:
+    """One audio file per scene (scene order). Thin wrapper: when sentence-flow is
+    on it delegates to voice_flow (which joins sentences, then splits the audio);
+    otherwise it's the per-scene path below. Flow degrades to per-scene internally
+    when alignment can't run, so this never dead-ends."""
+    cfg = _config()
+    if _flow_mode(cfg):
+        try:
+            return _synth_flow(scenes, lang, Path(cache), voice, cfg, log)
+        except Exception as e:                       # noqa: BLE001 — never lose a render
+            log(f"  ⚠ sentence-flow couldn't run ({e}); voicing per scene.")
+    return _synth_raw(scenes, lang, cache, voice=voice, rate=rate, pitch=pitch, log=log)
+
+
+def _synth_flow(scenes, lang: str, cache: Path, voice, cfg: dict, log) -> list[Path]:
+    """Drive voice_flow with engine-agnostic callbacks."""
+    from . import align, render
+    from . import voice_flow as VF
+    engine = active_engine(cfg)
+    vkey = _flow_voice(lang, voice, cfg)
+    src_cache = cache / "_flow_src"
+
+    def raw_synth(text: str) -> Path:
+        one = [_TextScene(text)]
+        return _synth_raw(one, lang, src_cache, voice=voice, log=lambda *_: None)[0]
+
+    def align_words(wav, text):
+        return align.align_words(wav, text, lang, cfg=cfg)
+
+    # Cut sentences only where REAL forced alignment can run; otherwise flow still
+    # writes fl_ clips but voices each scene on its own (a guessed cut could clip a
+    # word). This is the silent per-scene fallback.
+    can_join = bool(align.capability(cfg).get("ok"))
+    return VF.synth(scenes, lang, cache, vkey, engine,
+                    raw_synth=raw_synth, align_words=align_words,
+                    duration_of=render.duration_of, slice_audio=render.slice_audio,
+                    can_join=can_join, log=log)
+
+
+class _TextScene:
+    """A minimal scene the engines can voice: they only read .n and .narration.
+    `n` is derived from the text so its raw cache file is stable and collision-free."""
+    __slots__ = ("n", "narration")
+
+    def __init__(self, text: str):
+        import hashlib
+        self.narration = text
+        self.n = int(hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:6], 16)
+
+
+def _synth_raw(scenes, lang: str, cache: Path, voice: str | None = None,
+               rate: str | None = None, pitch: str | None = None,
+               log=print) -> list[Path]:
     """Generate (or reuse) one audio file per scene. Returns paths in scene order.
 
     `voice` names a reference clip when given, overriding the saved choice.
@@ -280,6 +348,17 @@ def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> lis
     an error here, it just means nothing can have been voiced yet.
     """
     cfg = _config()
+    # Sentence-flow writes fl_ clips whose key comes from the joined-sentence text,
+    # so its lookup must be used whenever flow is on — otherwise status/render
+    # would look for the per-scene files that flow doesn't write. A voice must be
+    # chosen (a reference clip, or a Google voice under Chirp) for anything to exist.
+    if _flow_mode(cfg):
+        vkey = _flow_voice(lang, voice, cfg)
+        if not vkey or not V.supported(lang):
+            return []
+        from . import voice_flow as VF
+        return VF.expected_paths(scenes, lang, cache, vkey, active_engine(cfg))
+
     # Google Chirp: the "voice" is a Google catalogue name, not a file, so this
     # is checked first (the reference-clip guard below would otherwise return []).
     if _use_gtts(cfg):

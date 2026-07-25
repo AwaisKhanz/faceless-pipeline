@@ -101,6 +101,8 @@
   "google_tts_rate": 1.0,
   "_google_tts_locale": "Chirp only. Optional per-language locale override to force a regional accent, e.g. {\"en\": \"en-GB\", \"pt\": \"pt-PT\"}. Empty uses a sensible default per language (en->en-US, de->de-DE, es->es-ES, …). The Voices panel lists whatever voices the chosen locale actually offers.",
   "google_tts_locale": {},
+  "_voice_flow": "How a sentence that's split across several scenes is voiced. \"off\" (default) voices each scene as its own clip — simple and robust, but each fragment carries its own sentence intonation. \"sentence\" speaks the WHOLE sentence in one natural take, then splits the audio back into per-scene clips at the word boundaries (via forced alignment), so the sentence flows with one continuous intonation instead of resetting at every cut. Works with any engine. Needs torchaudio's forced alignment (the same one captions use); where that can't run, or a cut would be unsafe, it silently falls back to per-scene for that sentence — so it never sounds worse, only smoother. Its clips cache under an fl_ prefix, separate from the per-scene ones.",
+  "voice_flow": "off",
   "_higgs_model": "Higgs only. The model to load. Default bosonai/higgs-audio-v2-generation-3B-base (fits 16GB in bfloat16). Point it at the lighter V2.5 1B checkpoint if you have its id, or a local path.",
   "higgs_model": "bosonai/higgs-audio-v2-generation-3B-base",
   "_higgs_tokenizer": "Higgs only. The audio tokenizer that pairs with higgs_model.",

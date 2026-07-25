@@ -310,7 +310,7 @@ def _voiced_any(scenes, code: str, cache: Path) -> int:
         stem = f"_{code}_{s.n:03d}_"
         hit = any(
             (f.name.startswith("cb" + stem) or f.name.startswith("hg" + stem)
-             or f.name.startswith("gc" + stem))
+             or f.name.startswith("gc" + stem) or f.name.startswith("fl" + stem))
             and f.stat().st_size > 1024
             for f in cache.glob(f"*{stem}*.wav"))
         if hit:

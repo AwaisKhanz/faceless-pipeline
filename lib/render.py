@@ -269,6 +269,22 @@ def trim_silence(src: Path, out: Path, lead_pad: float = 0.05,
     return out
 
 
+def slice_audio(src: Path, start: float, end: float, out: Path) -> Path:
+    """Cut [start, end) out of a wav into `out` (48 kHz stereo PCM).
+
+    Used by sentence-flow: a whole sentence is spoken as one clip, then sliced
+    back into per-scene pieces at the word boundaries. `-ss` after `-i` seeks
+    sample-accurately on PCM, so a cut lands exactly where alignment says.
+    """
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    dur = max(0.02, float(end) - float(start))
+    run(["ffmpeg", "-y", "-i", str(src), "-ss", f"{max(0.0, float(start)):.3f}",
+         "-t", f"{dur:.3f}", "-ar", "48000", "-ac", "2",
+         "-c:a", "pcm_s16le", str(out)])
+    return out
+
+
 def build_audio(voices: list[Path], gaps: list[float], out: Path, work: Path,
                 tail: float = 0.0) -> list[float]:
     """Concatenate narration with a per-scene gap. Returns each line's start time.
