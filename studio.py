@@ -1056,63 +1056,43 @@ class Handler(BaseHTTPRequestHandler):
             cfg = pl.load_config()
 
             # Voice engine — say clearly WHICH backend is narrating right now,
-            # which model, and on what device, so Settings isn't a guessing game.
-            _ve = str(cfg.get("voice_engine", "chatterbox")).strip().lower()
-            if _ve in ("higgs", "higgs-audio"):
-                v_selected = "higgs"
-            elif _ve in ("chirp", "chirp3", "google", "google-tts", "gtts", "vertex-tts"):
-                v_selected = "chirp"
-            else:
-                v_selected = "chatterbox"
-            try:
-                from lib import higgs_engine as HG
-                higgs_ok = HG.usable()          # installed AND not failed this session
-                higgs_present = HG.installed()
-                higgs_reason = HG.unusable_reason()
-                higgs_dev = HG.device_info(cfg) if higgs_ok else {}
-            except Exception:
-                higgs_ok, higgs_present, higgs_reason, higgs_dev = False, False, "", {}
-            try:
-                from lib import gtts_engine as GT
-                google_ok = GT.usable(cfg)          # Vertex creds ready + not failed
-                google_reason = GT.unusable_reason()
-            except Exception:
-                google_ok, google_reason = False, ""
-
-            v_active = ("higgs" if (v_selected == "higgs" and higgs_ok)
-                        else "chirp" if (v_selected == "chirp" and google_ok)
-                        else "chatterbox")
+            # which model, and on what device, so Status isn't a guessing game.
+            # engine_status() is the one place selection/readiness is decided.
+            es = tts.engine_status(cfg)
+            v_selected, v_active = es["selected"], es["active"]
+            higgs_ok, higgs_present = es["higgs_usable"], es["higgs_installed"]
+            google_ok = es["google_ready"]
             if v_active == "higgs":
+                from lib import higgs_engine as HG
                 v_model = str(cfg.get("higgs_model") or HG.DEFAULT_MODEL).split("/")[-1]
-                v_devinfo = higgs_dev
+                v_devinfo = HG.device_info(cfg)
             elif v_active == "chirp":
                 v_model = "Google Chirp 3 HD"
                 v_devinfo = {"device": "cloud", "name": "Google Cloud TTS"}
             else:
                 v_model = "Chatterbox Multilingual"
                 v_devinfo = dev
-            # A fallback happened when the picked engine isn't the active one.
-            _fell = ((v_selected == "higgs" and not higgs_ok)
-                     or (v_selected == "chirp" and not google_ok))
+            # Why the picked engine isn't the active one (fallback), and how to fix.
+            v_hint = ""
             if v_selected == "chirp" and not google_ok:
+                from lib import gtts_engine as GT
                 v_hint = GT.install_hint()
             elif v_selected == "higgs" and not higgs_present:
+                from lib import higgs_engine as HG
                 v_hint = HG.install_hint()
-            else:
-                v_hint = ""
             voice = {
                 "selected": v_selected,
                 "active": v_active,
-                "chatterbox_installed": CB.installed(),
+                "chatterbox_installed": es["chatterbox_installed"],
                 "higgs_installed": higgs_present,
                 "higgs_usable": higgs_ok,
-                "higgs_reason": higgs_reason,
+                "higgs_reason": es["higgs_reason"],
                 "google_ready": google_ok,
-                "google_reason": google_reason,
+                "google_reason": es["google_reason"],
                 "model": v_model,
                 "device": v_devinfo.get("device") or "cpu",
                 "device_name": v_devinfo.get("name"),
-                "fallback": _fell,
+                "fallback": v_active != v_selected,
                 "install_hint": v_hint,
             }
 
@@ -1182,29 +1162,16 @@ class Handler(BaseHTTPRequestHandler):
             vx.ensure_folders()
             refs = vx.references(lang)
             cfg_v = pl.load_config()
-            _ve = str(cfg_v.get("voice_engine", "chatterbox")).strip().lower()
-            if _ve in ("higgs", "higgs-audio"):
-                selected = "higgs"
-            elif _ve in ("chirp", "chirp3", "google", "google-tts", "gtts", "vertex-tts"):
-                selected = "chirp"
-            else:
-                selected = "chatterbox"
-            try:
-                from lib import higgs_engine as _HG
-                higgs_ok = _HG.usable()
-                higgs_installed = _HG.installed()
-            except Exception:
-                higgs_ok = higgs_installed = False
+            es = tts.engine_status(cfg_v)      # single source of truth
+            selected, google_ok = es["selected"], es["google_ready"]
             # Google Chirp: list the catalogue voices for this language so the
             # panel can offer them (only when Chirp is selected — it's a network
-            # call, pointless otherwise). google_ok = Vertex creds are ready.
-            google_ok = False
+            # call, pointless otherwise), plus this language's starred favourites.
             google_voices: list = []
             google_error = ""
             google_favorites: list = []
             try:
                 from lib import gtts_engine as _GT
-                google_ok = _GT.usable(cfg_v)
                 if selected == "chirp" and google_ok:
                     google_voices = _GT.voices(lang, cfg_v)
                     if not google_voices:
@@ -1221,12 +1188,9 @@ class Handler(BaseHTTPRequestHandler):
                                     for n in vx.favorites("google")
                                     if n.split("-")[0] == base]
             except Exception as e:
-                google_ok, google_voices, google_error = False, [], str(e)
-            active = ("higgs" if (selected == "higgs" and higgs_ok)
-                      else "chirp" if (selected == "chirp" and google_ok)
-                      else "chatterbox")
-            engine = {"selected": selected, "active": active,
-                      "higgs_installed": higgs_installed,
+                google_voices, google_error = [], str(e)
+            engine = {"selected": selected, "active": es["active"],
+                      "higgs_installed": es["higgs_installed"],
                       "google_ready": google_ok}
             # The transcript actually in use for the chosen clip: the manual
             # override, else the auto-generated .txt on disk (display only).

@@ -156,6 +156,15 @@ def main() -> int:
     check("after a failure, usable() latches off",
           tts._use_gtts({"voice_engine": "chirp", "vertex_project": "p"}), False)
 
+    print("\n  canonical engine selection (one source of truth):")
+    check("alias google-tts -> chirp", tts.selected_engine({"voice_engine": "google-tts"}), "chirp")
+    check("alias higgs-audio -> higgs", tts.selected_engine({"voice_engine": "higgs-audio"}), "higgs")
+    check("unknown -> chatterbox", tts.selected_engine({"voice_engine": "nonsense"}), "chatterbox")
+    st = tts.engine_status({"voice_engine": "chirp", "vertex_project": "p"})
+    check("engine_status reports selected", st["selected"], "chirp")
+    check("engine_status carries readiness keys",
+          all(k in st for k in ("active", "google_ready", "higgs_usable", "chatterbox_installed")), True)
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

@@ -33,27 +33,76 @@ def _config() -> dict:
         return {}
 
 
+# The three engines and the config `voice_engine` spellings that select each.
+# One table so every place that maps a config value to an engine agrees.
+_ENGINE_ALIASES = {
+    "chatterbox": ("chatterbox", "cb", "default"),
+    "higgs": ("higgs", "higgs-audio"),
+    "chirp": ("chirp", "chirp3", "google", "google-tts", "gtts", "vertex-tts"),
+}
+
+
+def selected_engine(cfg: dict) -> str:
+    """The engine the config ASKS for (canonical name), before checking whether it
+    can actually run here. Unknown / unset → chatterbox."""
+    raw = str((cfg or {}).get("voice_engine", "chatterbox")).strip().lower()
+    for canon, aliases in _ENGINE_ALIASES.items():
+        if raw in aliases:
+            return canon
+    return "chatterbox"
+
+
+def active_engine(cfg: dict) -> str:
+    """The engine that will ACTUALLY narrate here: the selected one if it's usable,
+    otherwise chatterbox. usable() latches off after a runtime failure, so synth
+    and the status/render lookups always agree on the same engine."""
+    sel = selected_engine(cfg)
+    if sel == "higgs":
+        from . import higgs_engine as HG
+        return "higgs" if HG.usable() else "chatterbox"
+    if sel == "chirp":
+        from . import gtts_engine as GT
+        return "chirp" if GT.usable(cfg) else "chatterbox"
+    return "chatterbox"
+
+
+def engine_status(cfg: dict) -> dict:
+    """One snapshot of the voice engines for the UI: which is selected, which is
+    active, and each engine's readiness/reason. The single source of truth so the
+    Voices panel, Status page and router never disagree."""
+    from . import chatterbox_engine as CB
+    higgs_installed = higgs_usable = False
+    higgs_reason = ""
+    google_ready = False
+    google_reason = ""
+    try:
+        from . import higgs_engine as HG
+        higgs_installed, higgs_usable, higgs_reason = HG.installed(), HG.usable(), HG.unusable_reason()
+    except Exception:
+        pass
+    try:
+        from . import gtts_engine as GT
+        google_ready, google_reason = GT.usable(cfg), GT.unusable_reason()
+    except Exception:
+        pass
+    return {
+        "selected": selected_engine(cfg),
+        "active": active_engine(cfg),
+        "chatterbox_installed": CB.installed(),
+        "higgs_installed": higgs_installed,
+        "higgs_usable": higgs_usable,
+        "higgs_reason": higgs_reason,
+        "google_ready": google_ready,
+        "google_reason": google_reason,
+    }
+
+
 def _use_higgs(cfg: dict) -> bool:
-    """True only when Higgs is selected AND usable here — usable() goes False
-    after Higgs fails once this session, so synth and the status/render lookups
-    stay in agreement instead of one using Higgs and the other Chatterbox."""
-    if str(cfg.get("voice_engine", "chatterbox")).strip().lower() not in ("higgs", "higgs-audio"):
-        return False
-    from . import higgs_engine as HG
-    return HG.usable()
-
-
-_GTTS_NAMES = ("chirp", "chirp3", "google", "google-tts", "gtts", "vertex-tts")
+    return active_engine(cfg) == "higgs"
 
 
 def _use_gtts(cfg: dict) -> bool:
-    """True only when Google Chirp 3 HD is selected AND usable here. Like Higgs,
-    usable() latches off after a failure this session so synth and the
-    status/render lookups both fall back to Chatterbox together."""
-    if str(cfg.get("voice_engine", "chatterbox")).strip().lower() not in _GTTS_NAMES:
-        return False
-    from . import gtts_engine as GT
-    return GT.usable(cfg)
+    return active_engine(cfg) == "chirp"
 
 
 def _gtts_opts(cfg: dict) -> dict:
