@@ -134,9 +134,13 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
             # keeps looking for Higgs files and reports 'not voiced'), then fall
             # through to Chatterbox here.
             HG.mark_unusable(str(e))
-            log(f"  ⚠ Higgs couldn't run ({e}). Using Chatterbox for the rest of "
-                f"this session. If this is a Mac, Higgs needs CUDA — it runs on "
-                f"your NVIDIA machine. {HG.install_hint()}")
+            log("")
+            log("  ⚠ VOICE ENGINE FELL BACK TO CHATTERBOX")
+            log(f"      Higgs Audio couldn't run here: {e}")
+            log("      Switched to Chatterbox for the rest of this session, so this")
+            log("      render still completes. Higgs needs an NVIDIA (CUDA) GPU —")
+            log("      on a Mac (MPS) it always falls back. It'll run on your RTX box.")
+            log("")
 
     p = V.pref_for(lang)
     return CB.synth(scenes, lang, reference_for(lang, voice), cache,
@@ -166,7 +170,8 @@ def voice_paths(scenes, lang: str, cache: Path, voice: str | None = None) -> lis
     p = V.pref_for(lang)
     return CB.expected_paths(scenes, lang, name, cache,
                              {"exaggeration": p["exaggeration"],
-                              "cfg_weight": p["cfg_weight"]})
+                              "cfg_weight": p["cfg_weight"],
+                              "temperature": p["temperature"]})
 
 
 def list_voices(lang: str | None = None) -> None:
