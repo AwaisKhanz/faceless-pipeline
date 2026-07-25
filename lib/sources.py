@@ -1388,7 +1388,6 @@ def diagnose(name: str, cfg: dict | None = None) -> list[tuple]:
         browser agent works     -> our User-Agent is the problem
         everything resets       -> TLS, or something between here and there
     """
-    import ssl
     cfg = cfg or {}
     configure(cfg)
 

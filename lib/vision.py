@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import sys
 
 # Model tiers, all open weights on the Hugging Face hub. Two families:
 #   CLIP   — the original; reliable everywhere, incl. Apple MPS and CPU.

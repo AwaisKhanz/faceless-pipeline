@@ -21,7 +21,6 @@ import json
 import math
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 W, H, FPS = 1920, 1080, 25

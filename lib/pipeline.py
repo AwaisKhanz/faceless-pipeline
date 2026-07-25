@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from . import align, captions as cap, render, sheet as sheetlib, stock, tts
