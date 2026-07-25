@@ -89,6 +89,8 @@
   "veo_style": "",
   "_expand_queries": "Uses your Gemini key to generate a few concrete alternative image searches per scene, so a weak or abstract line (e.g. a 'hypnogram') still finds a real photo. \"auto\" is on when a Gemini key is set; \"off\" uses only the queries in the sheet. Cached per project, so a re-source costs nothing.",
   "expand_queries": "auto",
+  "_auto_split": "\"auto\" (default, on): when a scene's line still bundles several things a camera would show into one shot (e.g. 'walnuts, flax and fish'), the generator makes one extra LLM call to split JUST those scenes into a beat-per-picture, each with its own search query — so no single shot has to cover two ideas. Safe: your words are never changed (each split is snapped back to your exact text) and a split is only kept when its pieces have genuinely different pictures; anything it can't split cleanly is left whole and flagged. \"off\" keeps today's behaviour: it just flags dense scenes for you to split by hand in review.",
+  "auto_split": "auto",
   "_align": "Word-by-word caption timing. \"auto\" uses torchaudio's built-in forced alignment (free, local, on your GPU, NO extra install — it rides the same torchaudio the voice engine uses) so each spoken word lights up in time; \"off\" falls back to estimated timing from word length. Captions render either way.",
   "align": "auto",
   "_audio_master": "Loudness mastering. \"auto\" brings every finished video to YouTube's -14 LUFS standard so it plays back at the same volume as everything else; \"off\" leaves the raw mix.",

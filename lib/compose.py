@@ -201,8 +201,74 @@ def _finer_split_feedback(coarse: list[dict]) -> str:
             "keeping every word verbatim and in order:\n" + lines)
 
 
+def _validate_split(original: dict, parts: list[dict] | None) -> list[dict] | None:
+    """Accept the model's split ONLY if it's safe: at least two parts, the parts'
+    words reproduce the original narration exactly (snapped back to the author's
+    words), and the parts carry at least two DISTINCT search queries (else the
+    split would just repeat one picture). Returns the ready-to-use parts, or None
+    to keep the scene whole."""
+    if not parts or len(parts) < 2:
+        return None
+    snapped = G.snap_to_script(original.get("narration", ""), parts)
+    if snapped is None:                          # can't guarantee the exact words
+        return None
+    new, _ = snapped
+    queries = {(p.get("query") or "").strip().lower() for p in new}
+    queries.discard("")
+    if len(queries) < 2:                         # no point splitting into dupes
+        return None
+    # The parent's hero/note marker belongs on the first beat only, not every one.
+    new[0]["hero"] = original.get("hero", False)
+    new[0]["note"] = original.get("note", "") or ""
+    for p in new[1:]:
+        p["hero"] = False
+        p["note"] = ""
+    return new
+
+
+def _resolve_coarse(scenes: list[dict], auto_split: bool, key: str, model: str,
+                    res: Result, tick) -> list[dict]:
+    """Handle scenes that still bundle several pictures. With auto_split on, ask
+    the model to split just those (one batched call) and splice the safe results
+    back in; otherwise leave them and flag them for review. Always ticks once so
+    the progress total stays honest."""
+    coarse = [i for i, s in enumerate(scenes) if _under_split(s.get("narration", ""))]
+    if not coarse:
+        tick("scene density looks good")
+        return scenes
+    if not auto_split:
+        tick(f"{len(coarse)} scene(s) may bundle several pictures")
+        res.warnings.append(
+            f"{len(coarse)} scene(s) may still hold more than one picture — check "
+            f"them in review and split if needed (turn on \"auto_split\" to have "
+            f"the generator split them for you).")
+        return scenes
+
+    tick(f"splitting {len(coarse)} dense scene(s) into tighter shots")
+    items = [{"id": i, "narration": scenes[i].get("narration", ""),
+              "query": scenes[i].get("query", ""),
+              "media": scenes[i].get("media", "IMAGE")} for i in coarse]
+    splits = G.split_coarse_scenes(items, key, model)
+
+    out: list[dict] = []
+    done = 0
+    for i, s in enumerate(scenes):
+        parts = _validate_split(s, splits.get(i)) if i in splits else None
+        if parts:
+            out.extend(parts)
+            done += 1
+        else:
+            out.append(s)
+    left = sum(1 for s in out if _under_split(s.get("narration", "")))
+    if left:
+        res.warnings.append(
+            f"{left} scene(s) still bundle more than one picture — the generator "
+            f"couldn't safely split them, so review and split those by hand.")
+    return out
+
+
 def split_into_scenes(script: str, plan: dict, key: str, model: str,
-                      res: Result, tick, on_warn) -> list[Scene]:
+                      res: Result, tick, on_warn, auto_split: bool = True) -> list[Scene]:
     """Split ONE script into verified scenes. This is where the visuals come
     from, so it runs on the structure language's script only."""
     sections = G.split_sections(script, SECTION_WORDS)
@@ -228,10 +294,8 @@ def split_into_scenes(script: str, plan: dict, key: str, model: str,
             if coarse and attempt < 3:
                 feedback = _finer_split_feedback(coarse)
                 continue
-            if coarse:
-                res.warnings.append(
-                    f"Section {i}: {len(coarse)} scene(s) may still hold more than "
-                    f"one picture — check them in review and split if needed.")
+            # Any scene still bundling several pictures is handled once, after all
+            # sections, by _resolve_coarse (split with the model, or warn).
             break
 
         # After the retries, if the model STILL drifted from the script on a word
@@ -250,6 +314,10 @@ def split_into_scenes(script: str, plan: dict, key: str, model: str,
                     f"3 attempts.\n{G.diff_words(sec, joined)}")
                 on_warn(f"Section {i} did not match the script — see warnings")
         all_scenes.extend(got or [])
+
+    # Tighten any scene that still bundles several pictures into one shot: split
+    # it into a beat per picture (or, if that's off / not safe, just flag it).
+    all_scenes = _resolve_coarse(all_scenes, auto_split, key, model, res, tick)
 
     scenes = [Scene(n=i, narration=s.get("narration", ""),
                     media=(s.get("media") or "IMAGE").upper(),
@@ -322,7 +390,8 @@ def _language_sheet(scenes: list[Scene], pid: str, lang: str,
 
 def generate(scripts: dict[str, str], pid: str, key: str,
              model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
-             on_warn=lambda *_: None, name_people: bool = False) -> Result:
+             on_warn=lambda *_: None, name_people: bool = False,
+             auto_split: bool = True) -> Result:
     """Per-language scripts in → main script + narration files out. No translation.
 
     `scripts` maps language code -> that language's pasted script. The first
@@ -345,7 +414,9 @@ def generate(scripts: dict[str, str], pid: str, key: str,
     struct_name = LANG_NAMES.get(struct, struct.upper())
 
     n_sections = len(G.split_sections(struct_script, SECTION_WORDS))
-    total = 1 + n_sections + 1 + len(others) + 1
+    # steps: read + one per section + tighten-density + main script + each other
+    # language + package.
+    total = 1 + n_sections + 1 + 1 + len(others) + 1
     step = [0]
 
     def tick(msg: str) -> None:
@@ -357,7 +428,8 @@ def generate(scripts: dict[str, str], pid: str, key: str,
     plan["name_people"] = bool(name_people)      # rides into scenes_for_section
     res.plan = plan
 
-    scenes = split_into_scenes(struct_script, plan, key, model, res, tick, on_warn)
+    scenes = split_into_scenes(struct_script, plan, key, model, res, tick, on_warn,
+                               auto_split=auto_split)
     res.scenes = scenes
 
     # The structure language's narration IS the main script — no separate sheet

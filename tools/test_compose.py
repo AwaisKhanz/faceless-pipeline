@@ -102,6 +102,50 @@ def main() -> int:
                            [{"narration": "totally different words", "query": "a"},
                             {"narration": "alpha beta", "query": "b"}]), None)
 
+    print("\n  auto_split tightens dense scenes (guarded, reversible):")
+
+    class _Res:
+        def __init__(self):
+            self.warnings = []
+
+    dense = {"narration": "Es ist dieselbe Art von gesundem Fett, die in "
+             "Walnüssen, Leinsamen und bestimmten Fischsorten vorkommt",
+             "media": "IMAGE", "query": "healthy fats", "hero": True, "note": "k"}
+    simple = {"narration": "Portulak ist eine Ausnahme.", "media": "IMAGE", "query": "purslane"}
+
+    def _good_split(items, key, model=None):
+        return {items[0]["id"]: [
+            {"narration": "Es ist dieselbe Art von gesundem Fett, die in Walnüssen,",
+             "query": "bowl of walnuts", "media": "IMAGE"},
+            {"narration": "Leinsamen", "query": "bowl of flaxseeds", "media": "IMAGE"},
+            {"narration": "und bestimmten Fischsorten vorkommt",
+             "query": "raw salmon fillet", "media": "IMAGE"}]}
+
+    G.split_coarse_scenes = _good_split
+    r = _Res()
+    out = compose._resolve_coarse([dict(dense), dict(simple)], True, "k", "m", r, lambda *_: None)
+    check("a dense scene is split into a beat per picture", len(out), 4)
+    check("the split reproduces the author's words",
+          G.words(" ".join(s["narration"] for s in out[:3])) == G.words(dense["narration"]), True)
+    check("hero marker stays on the first beat only",
+          [s.get("hero", False) for s in out[:3]], [True, False, False])
+
+    def _dupe_split(items, key, model=None):     # both pieces would show the same
+        return {items[0]["id"]: [
+            {"narration": "Es ist dieselbe Art von gesundem Fett, die in "
+             "Walnüssen, Leinsamen", "query": "food", "media": "IMAGE"},
+            {"narration": "und bestimmten Fischsorten vorkommt",
+             "query": "food", "media": "IMAGE"}]}
+
+    G.split_coarse_scenes = _dupe_split
+    r = _Res()
+    out = compose._resolve_coarse([dict(dense)], True, "k", "m", r, lambda *_: None)
+    check("a split into duplicate pictures is rejected (kept whole)", len(out), 1)
+
+    r = _Res()
+    out = compose._resolve_coarse([dict(dense)], False, "k", "m", r, lambda *_: None)
+    check("auto_split off leaves the scene and flags it", (len(out), bool(r.warnings)), (1, True))
+
     EN = "The sea is deep. Fish swim in the dark. Light fades below."
     DE = "Das Meer ist tief. Fische schwimmen im Dunkeln. Licht schwindet unten."
     ES = "El mar es profundo. Los peces nadan. La luz se apaga."

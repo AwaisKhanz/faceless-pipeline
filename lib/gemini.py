@@ -385,6 +385,103 @@ _VIDEO_SYSTEM = (
 )
 
 
+_SPLIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "splits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "parts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "narration": {"type": "string"},
+                                "media": {"type": "string", "enum": ["IMAGE", "VIDEO"]},
+                                "query": {"type": "string"},
+                                "topic": {"type": "string"},
+                                "fallback_query": {"type": "string"},
+                            },
+                            "required": ["narration", "query"],
+                        },
+                    },
+                },
+                "required": ["id", "parts"],
+            },
+        }
+    },
+    "required": ["splits"],
+}
+
+_SPLIT_SYSTEM = (
+    "Each scene below bundles more than one thing a camera would show into a "
+    "single shot. Split EACH into 2 or more smaller scenes, one per distinct "
+    "visual beat. "
+    "HARD RULE: the parts' narration, concatenated in order, must reproduce the "
+    "input narration EXACTLY — same words, same order, verbatim. You ONLY choose "
+    "the split points; never add, drop, translate, reword or re-punctuate a word. "
+    "For each part give ONE concrete, literal search query (2-6 words, only things "
+    "a camera can see) that is clearly DIFFERENT from the other parts' queries — "
+    "the whole point is a different picture per beat. Set media to IMAGE or VIDEO "
+    "and topic to the best fit. "
+    "Example — narration 'in Walnüssen, Leinsamen und bestimmten Fischsorten' -> "
+    "part 1 'in Walnüssen,' query 'bowl of shelled walnuts'; part 2 'Leinsamen' "
+    "query 'bowl of brown flaxseeds'; part 3 'und bestimmten Fischsorten' query "
+    "'fresh raw salmon fillet'."
+)
+
+
+def split_coarse_scenes(items: list[dict], key: str,
+                        model: str = DEFAULT_MODEL) -> dict[int, list[dict]]:
+    """Split scenes that bundle several pictures into per-beat sub-scenes.
+
+    `items` is [{"id","narration","query","media"}, ...]. Returns
+    {id: [part, ...]} where each part is a scene dict with its own query. Best
+    effort — a scene the model can't split (or returns <2 parts for) is simply
+    absent from the result, and the caller keeps it whole. Batched so one dense
+    scene never costs the whole run."""
+    if not items:
+        return {}
+    out: dict[int, list[dict]] = {}
+    CH = 12
+    for i in range(0, len(items), CH):
+        chunk = items[i:i + CH]
+        lines = "\n".join(
+            f'id {it["id"]} [{(it.get("media") or "IMAGE")}]: '
+            f'"{normalise(it.get("narration", ""))}"'
+            f'   (current query: {it.get("query", "")})'
+            for it in chunk)
+        prompt = ("Split each scene below into tighter visual beats.\n\n" + lines)
+        try:
+            data = call(prompt, _SPLIT_SCHEMA, key, model,
+                        system=_SPLIT_SYSTEM, temperature=0.4)
+        except Exception:
+            continue
+        for item in data.get("splits", []):
+            try:
+                sid = int(item["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            parts = []
+            for p in item.get("parts", []):
+                narr = (p.get("narration") or "").strip()
+                if not narr:
+                    continue
+                parts.append({
+                    "narration": narr,
+                    "media": (p.get("media") or "IMAGE").upper(),
+                    "query": (p.get("query") or "").strip(),
+                    "topic": (p.get("topic") or "").strip().lower(),
+                    "fallback_query": (p.get("fallback_query") or "").strip(),
+                })
+            if len(parts) >= 2:
+                out[sid] = parts
+    return out
+
+
 def video_prompts(scenes: list[dict], key: str,
                   model: str = DEFAULT_MODEL) -> dict[int, str]:
     """One cinematic Veo prompt per scene, batched. `scenes` is
