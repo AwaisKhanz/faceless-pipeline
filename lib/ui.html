@@ -1847,9 +1847,24 @@ async function viewConfig() {
 
   function widget(f) {
     if (f.type === 'select') {
+      const curStr = String(state[f.key] ?? '');
+      const opts = (f.options || []).slice();
+      const known = opts.some(o => String(o.value) === curStr);
+      // Open sets (model names) — type any value, with the known ones as hints.
+      if (f.allow_custom) {
+        const listId = 'dl_' + f.key;
+        const inp = el('input', {
+          type: 'text', list: listId, value: curStr, style: 'min-width:320px',
+          oninput: e => set(f, coerceSel(f, e.target.value))
+        });
+        return el('span', {}, inp,
+          el('datalist', { id: listId }, opts.map(o => el('option', { value: String(o.value) }, o.label))));
+      }
+      // Closed set — but never silently drop a saved value that's off-list.
+      if (curStr && !known) opts.unshift({ value: state[f.key], label: curStr + ' (current)' });
       return el('select', { style: 'min-width:300px', onchange: e => set(f, coerceSel(f, e.target.value)) },
-        (f.options || []).map(o => el('option',
-          { value: String(o.value), selected: String(o.value) === String(state[f.key]) }, o.label)));
+        opts.map(o => el('option',
+          { value: String(o.value), selected: String(o.value) === curStr }, o.label)));
     }
     if (f.type === 'bool') {
       return el('select', { style: 'min-width:120px', onchange: e => set(f, e.target.value === 'true') },

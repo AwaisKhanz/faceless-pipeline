@@ -134,8 +134,9 @@ _FIELDS: list[dict] = [
      "min": 0, "max": 1, "step": 0.01, "show_if": {"generate": ["mixed"]}},
     {"key": "generate_max", "section": "imagegen", "type": "number",
      "int": True, "min": 1, "max": 500, "step": 1, "show_if": {"generate": ["mixed", "all"]}},
-    {"key": "generate_model", "section": "imagegen", "type": "select",
-     "options": _opt(("gemini-2.5-flash-image", "Nano Banana (2.5 flash) — ~$0.04"),
+    {"key": "generate_model", "section": "imagegen", "type": "select", "allow_custom": True,
+     "options": _opt(("gemini-3.1-flash-lite-image", "Gemini 3.1 Flash Lite image"),
+                     ("gemini-2.5-flash-image", "Nano Banana (2.5 flash) — ~$0.04"),
                      ("gemini-3-pro-image", "Gemini 3 Pro image (4K, pricier)")),
      "show_if": {"generate": ["mixed", "all"]}},
     {"key": "generate_location", "section": "imagegen", "type": "text",
@@ -150,7 +151,7 @@ _FIELDS: list[dict] = [
     {"key": "veo_max", "section": "videogen", "type": "number", "int": True, "min": 1, "max": 20, "step": 1},
     {"key": "veo_seconds", "section": "videogen", "type": "select", "int": True,
      "options": _opt(4, 6, 8)},
-    {"key": "veo_model", "section": "videogen", "type": "select",
+    {"key": "veo_model", "section": "videogen", "type": "select", "allow_custom": True,
      "options": _opt(("veo-3.1-generate-001", "veo-3.1 (GA)"),
                      ("veo-3.1-fast-generate-001", "veo-3.1 fast (cheaper)"))},
     {"key": "veo_location", "section": "videogen", "type": "text"},
@@ -168,7 +169,7 @@ _FIELDS: list[dict] = [
     {"key": "higgs_device", "section": "voice", "type": "select",
      "options": _opt(("auto", "auto"), ("cuda", "cuda"), ("mps", "mps"), ("cpu", "cpu")),
      "show_if": {"voice_engine": ["higgs"]}},
-    {"key": "higgs_asr_model", "section": "voice", "type": "select",
+    {"key": "higgs_asr_model", "section": "voice", "type": "select", "allow_custom": True,
      "options": _opt("openai/whisper-small", "openai/whisper-medium", "openai/whisper-large-v3"),
      "show_if": {"voice_engine": ["higgs"]}},
     {"key": "google_tts_rate", "section": "voice", "type": "number",
@@ -269,6 +270,12 @@ def _coerce(field: dict, raw):
             except (TypeError, ValueError):
                 raise _Bad("must be 'auto' or a whole number")
         val = int(raw) if field.get("int") else raw
+        # allow_custom fields (e.g. model names, which change over time) accept any
+        # non-empty value — the options are just suggestions, not a closed set.
+        if field.get("allow_custom"):
+            if isinstance(val, str) and not val.strip():
+                raise _Bad("cannot be empty")
+            return val
         allowed = [o["value"] for o in field.get("options", [])]
         if allowed and val not in allowed:
             raise _Bad(f"must be one of {allowed}")

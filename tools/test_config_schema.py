@@ -48,9 +48,16 @@ def main() -> int:
     check("dict from JSON string", CS._coerce(F["google_tts_locale"], '{"en":"en-GB"}'),
           {"en": "en-GB"})
 
+    print("\n  allow_custom selects accept any model id (open set):")
+    check("a brand-new model id is accepted",
+          CS._coerce(F["generate_model"], "gemini-3.1-flash-lite-image"),
+          "gemini-3.1-flash-lite-image")
+    check("empty custom value is rejected",
+          "generate_model" in CS.validate_and_merge({}, {"generate_model": "  "})[1], True)
+
     print("\n  invalid values are rejected, not silently written:")
     _, errs = CS.validate_and_merge({}, {"voice_engine": "nope"})
-    check("bad select -> error", "voice_engine" in errs, True)
+    check("bad select (closed) -> error", "voice_engine" in errs, True)
     _, errs = CS.validate_and_merge({}, {"google_tts_locale": "{not json}"})
     check("bad JSON dict -> error", "google_tts_locale" in errs, True)
 

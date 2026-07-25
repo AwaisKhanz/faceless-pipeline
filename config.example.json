@@ -66,7 +66,7 @@
   "generate_min": 0.60,
   "_generate_max": "Hard cap on how many images may be generated in one run — a cost guardrail so a bad run can't spend the whole credit. Raise it for long all-mode videos.",
   "generate_max": 40,
-  "_generate_model": "Which image model to call. Google retired the old Imagen models in 2026; image generation now runs on the Gemini image models. gemini-2.5-flash-image ('Nano Banana', ~$0.04/image) is the standard; gemini-3-pro-image is higher quality (4K) and costs more.",
+  "_generate_model": "Which image model to call — ANY current Gemini image model id works (this field is open; the Settings dropdown just offers suggestions). Google retired the old Imagen models in 2026, so image generation runs on the Gemini image models. Common ids: gemini-3.1-flash-lite-image (fast/cheap), gemini-2.5-flash-image ('Nano Banana', ~$0.04/image), gemini-3-pro-image (higher quality, 4K, costs more).",
   "generate_model": "gemini-2.5-flash-image",
   "_generate_location": "The Google Cloud location for the image model. These are Gemini models on the same endpoint as the LLM, so \"global\" (what the LLM uses) is the default; switch to a region like us-central1 if global 404s for your project.",
   "generate_location": "global",
