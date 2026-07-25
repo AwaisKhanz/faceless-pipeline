@@ -232,6 +232,44 @@ def dissolve_concat(clips: list[tuple[Path, float]], T: float, out: Path,
 
 # -------------------------------------------------------------------- audio
 
+def trim_silence(src: Path, out: Path, lead_pad: float = 0.05,
+                 tail_pad: float = 0.08, threshold_db: int = -45) -> Path:
+    """Strip the dead air a TTS clip carries at its head and tail.
+
+    Chatterbox and Higgs both bookend a line with a beat of silence/breath.
+    Left in, that silence STACKS between scenes (clip i's tail + the inserted
+    gap + clip i+1's head), which is exactly the "big gaps between scenes" you
+    hear. Trimming each clip to the speech — keeping a small pad so no phoneme
+    is clipped — means the only silence left between lines is the gap we put
+    there on purpose.
+
+    Only the ends are touched; pauses INSIDE the line are preserved. Never
+    raises and never returns a suspiciously empty clip: on any trouble it leaves
+    the original untouched, so trimming can only help, never drop audio.
+    """
+    out = Path(out)
+    try:
+        # silenceremove trims the head; areverse→trim→areverse does the tail.
+        # detection=peak with a low threshold is forgiving of soft onsets so we
+        # don't bite off the first consonant. start_silence keeps `pad` seconds.
+        head = (f"silenceremove=start_periods=1:start_silence={lead_pad:.3f}:"
+                f"start_threshold={threshold_db}dB:detection=peak")
+        tailf = (f"silenceremove=start_periods=1:start_silence={tail_pad:.3f}:"
+                 f"start_threshold={threshold_db}dB:detection=peak")
+        af = f"{head},areverse,{tailf},areverse"
+        run(["ffmpeg", "-y", "-i", str(src), "-af", af, str(out)])
+        # Guard: if detection ate almost everything (a near-silent take), keep
+        # the original rather than shipping an empty clip.
+        if not out.exists() or duration_of(out) < 0.12:
+            shutil.copy(src, out)
+    except Exception:
+        try:
+            shutil.copy(src, out)
+        except Exception:
+            return Path(src)
+    return out
+
+
 def build_audio(voices: list[Path], gaps: list[float], out: Path, work: Path,
                 tail: float = 0.0) -> list[float]:
     """Concatenate narration with a per-scene gap. Returns each line's start time.

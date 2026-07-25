@@ -251,6 +251,15 @@ def find_projects(_root: Path | None = None) -> list[dict]:
     return out
 
 
+def _dur_safe(path: Path) -> float:
+    """duration_of that never raises — a corrupt/half-written cached clip just
+    reads as 0 so the caller rebuilds it instead of crashing the render."""
+    try:
+        return render.duration_of(path)
+    except Exception:
+        return 0.0
+
+
 def _voiced_any(scenes, code: str, cache: Path) -> int:
     """How many scenes have SOME real cached narration clip, regardless of which
     engine (cb_/hg_ prefix) or which exact settings produced it. Used only as a
@@ -997,15 +1006,32 @@ def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
     return tts.synth(scenes, lang, p["voicecache"], voice=voice, log=log)
 
 
-def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n):
+def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n,
+                   lead: float = 0.0):
     """Per-scene word timings, in ABSOLUTE video time, for the karaoke captions.
 
     Each scene is aligned against its own audio and cached in the language's work
     folder keyed by the exact narration text, so a caption-only re-render (or a
     second language sharing nothing) never realigns a scene whose words haven't
     changed. Returns one word-list per scene: [{word, start, end}, ...].
+
+    `lead` pulls every word a touch earlier so the highlight lands ON the word
+    (or a hair before) rather than trailing it — the tiny anticipation that makes
+    pro karaoke captions feel locked to the voice instead of lagging.
     """
     cfg = load_config()
+
+    # Say up front how the words are being timed, so it's obvious in Activity
+    # whether real forced alignment ran or it fell back to an estimate.
+    capinfo = align.capability(cfg)
+    if capinfo.get("ok"):
+        on_progress(n + 3, n + 4,
+                    f"timing words · {capinfo['engine']} ({capinfo.get('device', '-')})")
+    else:
+        on_progress(n + 3, n + 4,
+                    f"timing words · estimated ({capinfo.get('reason', 'no aligner')}) "
+                    f"— install torchaudio for exact word sync")
+
     cache_f = p["base"] / "words.json"
     cache: dict = {}
     if cache_f.exists():
@@ -1023,11 +1049,11 @@ def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n):
                 log=lambda m: on_progress(n + 3, n + 4, m.strip()))
             cache[str(s.n)] = rec = {"text": s.narration, "words": words}
             changed = True
-        # Relative -> absolute, so every scene's words sit at the right moment in
-        # the finished audio.
+        # Relative -> absolute (and lead-shifted), so every scene's words sit at
+        # the right moment in the finished audio, a hair ahead for a locked feel.
         out.append([{"word": w["word"],
-                     "start": round((w.get("start") or 0.0) + starts[i], 3),
-                     "end": round((w.get("end") or 0.0) + starts[i], 3)}
+                     "start": round(max(0.0, (w.get("start") or 0.0) + starts[i] - lead), 3),
+                     "end": round(max(0.0, (w.get("end") or 0.0) + starts[i] - lead), 3)}
                     for w in rec["words"]])
 
     if changed:
@@ -1050,6 +1076,30 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     if missing:
         raise RuntimeError(f"No visual for scenes {missing}. Re-run the visuals step.")
 
+    # Timing knobs, all overridable in config.json:
+    #   scene_gap      silence between narration lines (breathing room)
+    #   scene_dissolve crossfade length between pictures
+    #   caption_lead   how far ahead of the spoken word the highlight sits
+    # TAIL (held picture after each line) is derived so the audio gap and the
+    # video hold stay in lockstep — the invariant the whole timing model rests on.
+    rcfg = load_config()
+    DISS = max(0.0, float(rcfg.get("scene_dissolve") or DISSOLVE))
+    GAP = float(rcfg.get("scene_gap", 0.35) or 0.0)
+    TAIL_L = GAP + DISS
+    lead = max(0.0, float(rcfg.get("caption_lead", 0.12) or 0.0))
+
+    # Strip the dead air each TTS clip carries at its head/tail, so the only
+    # silence between lines is `scene_gap`. The trimmed clips are used for
+    # EVERYTHING below — duration, audio, alignment — so captions and audio can't
+    # drift apart. Off via "trim_silence": false for anyone who wants the raw takes.
+    if _flag(rcfg.get("trim_silence", True)):
+        on_progress(0, len(scenes) + 4, "tightening narration (trimming silence)")
+        trimmed = []
+        for i, v in enumerate(voices):
+            t = p["tmp"] / f"voice_trim_{i:04d}.wav"
+            trimmed.append(render.trim_silence(Path(v), t))
+        voices = trimmed
+
     n = len(scenes)
     clips, vdurs = [], []
     for i, s in enumerate(scenes):
@@ -1057,17 +1107,23 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         vdurs.append(vd)
         src = Path(assets[s.n]["path"])
         out = p["clips"] / f"c{s.n:04d}.mp4"
+        target = vd + TAIL_L
         # Rebuild anything left over from before the 4:2:0 pin, so a cached clip
         # can't quietly drag the finished video back to an unplayable format.
         # yuvj420p is accepted: it is still 4:2:0 and plays everywhere - only the
         # colour range is flagged full rather than limited. Rejecting it would mean
         # re-encoding every cached clip for no visible gain.
-        stale = out.exists() and render.pix_fmt_of(out) not in ("yuv420p", "yuvj420p")
+        # ALSO rebuild when the clip's length no longer matches what this scene
+        # now needs (voice + tail) — otherwise trimming the narration, or changing
+        # scene_gap, would silently reuse an old, too-long clip and re-open the gap.
+        stale = out.exists() and (
+            render.pix_fmt_of(out) not in ("yuv420p", "yuvj420p")
+            or abs(_dur_safe(out) - target) > (1.5 / render.FPS))
         if not out.exists() or stale:
             if src.suffix.lower() in (".mp4", ".mov", ".webm"):
-                render.make_video_clip(src, vd + TAIL, out)
+                render.make_video_clip(src, vd + TAIL_L, out)
             else:
-                render.make_image_clip(src, vd + TAIL, out, zoom=zoom)
+                render.make_image_clip(src, vd + TAIL_L, out, zoom=zoom)
         clips.append((out, render.duration_of(out)))
         on_progress(i + 1, n + 4, f"scene {i + 1} of {n}")
 
@@ -1082,12 +1138,12 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         on_progress(n + 1, n + 4, "reusing crossfaded video")
     else:
         on_progress(n + 1, n + 4, "crossfading scenes")
-        render.dissolve_concat(clips, DISSOLVE, vid, p["tmp"], group=10)
+        render.dissolve_concat(clips, DISS, vid, p["tmp"], group=10)
 
     on_progress(n + 2, n + 4, "assembling narration")
-    gaps = [max(0.0, cd - vd - DISSOLVE) for (_, cd), vd in zip(clips, vdurs)]
+    gaps = [max(0.0, cd - vd - DISS) for (_, cd), vd in zip(clips, vdurs)]
     aud = p["base"] / "audio_track.wav"
-    starts = render.build_audio(voices, gaps, aud, p["tmp"], tail=DISSOLVE)
+    starts = render.build_audio(voices, gaps, aud, p["tmp"], tail=DISS)
 
     acfg = load_config()
     if music:
@@ -1131,7 +1187,7 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         # cached, so a caption-only re-render doesn't realign 100+ clips.
         on_progress(n + 3, n + 4, "timing the words")
         scene_words = _aligned_words(scenes, voices, vdurs, starts, lang, p,
-                                     on_progress, n)
+                                     on_progress, n, lead=lead)
         groups = cap.groups_from_scenes(scene_words, st)
         p["ass"].write_text(cap.build_ass(groups, st), encoding="utf-8")
 

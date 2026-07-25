@@ -109,5 +109,13 @@
   "_lufs_target": "Target integrated loudness in LUFS. -14 is YouTube standard; -16 is a touch quieter (closer to podcast/TV).",
   "lufs_target": -14,
   "_music_duck": "When true, background music automatically ducks (drops back) under the narration and swells in the gaps, so speech is always clear. false keeps a flat music level.",
-  "music_duck": true
+  "music_duck": true,
+  "_trim_silence": "Trim the dead air each cloned voice clip carries at its head and tail before assembly, so the only silence between narration lines is scene_gap (not stacked-up TTS breaths). true is recommended; set false to keep the raw takes.",
+  "trim_silence": true,
+  "_scene_gap": "Seconds of silence between narration lines — the breathing room from one scene to the next. 0.35 is a calm documentary pace; lower (0.20) is tighter/snappier, higher (0.5) is more spacious.",
+  "scene_gap": 0.35,
+  "_scene_dissolve": "Crossfade length between pictures, in seconds. 0.6 is a soft dissolve; the picture always holds scene_gap seconds of silence around it so no word is ever faded away.",
+  "scene_dissolve": 0.6,
+  "_caption_lead": "Seconds to advance the karaoke highlight ahead of the spoken word. A small lead (~0.12) makes captions feel locked to the voice instead of a beat behind; 0 places them exactly on the word.",
+  "caption_lead": 0.12
 }
