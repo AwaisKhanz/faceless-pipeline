@@ -341,6 +341,83 @@ def expand_queries(scenes: list[dict], key: str,
     return out
 
 
+_VIDEO_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scenes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "scene": {"type": "integer"},
+                    "prompt": {"type": "string"},
+                },
+                "required": ["scene", "prompt"],
+            },
+        }
+    },
+    "required": ["scenes"],
+}
+
+_VIDEO_SYSTEM = (
+    "You write prompts for an AI VIDEO model (Google Veo) that turns one line of "
+    "narration into a single ~8 second cinematic clip. For each scene, write ONE "
+    "vivid prompt of 30-55 words as a single flowing description a camera could "
+    "actually film. Weave in, naturally: "
+    "(1) SUBJECT — the concrete thing on screen with a couple of visual details; "
+    "(2) ACTION/MOTION — one clear, CONTINUOUS motion that MATCHES the meaning of "
+    "the narration line (what the subject is doing, or how the scene moves: "
+    "drifting clouds, blowing spindrift, a slow reveal). This is the most "
+    "important part — the motion must fit the line, never a random or theatrical "
+    "gesture; (3) CAMERA — ONE deliberate move (slow dolly in, aerial push, "
+    "tracking shot, gentle handheld); (4) LOOK — natural lighting and a grounded, "
+    "realistic documentary style. "
+    "Rules: photoreal documentary footage only; ONE continuous shot, no cuts; NO "
+    "on-screen text, captions, subtitles, watermarks, logos or split screens; "
+    "people's actions must be plausible and safe; present tense; describe only "
+    "what is visible. Do not name real, identifiable people. "
+    "Example — line 'K2 is one of the hardest and most dangerous mountains to "
+    "climb', subject 'mountaineers climbing icy steep slope k2' -> 'A lone "
+    "mountaineer in a red down suit kicks crampons into a near-vertical wall of "
+    "blue glacial ice, ice axes biting as spindrift streams past in the wind; the "
+    "camera tracks slowly upward alongside them, harsh high-altitude sun, thin "
+    "cold air, realistic expedition documentary footage.'"
+)
+
+
+def video_prompts(scenes: list[dict], key: str,
+                  model: str = DEFAULT_MODEL) -> dict[int, str]:
+    """One cinematic Veo prompt per scene, batched. `scenes` is
+    [{"n","query","narration"}, ...]; returns {n: prompt}. Best effort — any
+    failure returns {} and the caller falls back to the plain prompt."""
+    if not scenes:
+        return {}
+    out: dict[int, str] = {}
+    CH = 20
+    for i in range(0, len(scenes), CH):
+        chunk = scenes[i:i + CH]
+        lines = "\n".join(
+            f"{s['n']}. line: {normalise(s.get('narration', ''))[:200]}"
+            f"   (subject: {s.get('query', '')})"
+            for s in chunk)
+        prompt = ("Write one cinematic video prompt for each numbered scene "
+                  "below.\n\n" + lines)
+        try:
+            data = call(prompt, _VIDEO_SCHEMA, key, model,
+                        system=_VIDEO_SYSTEM, temperature=0.6)
+        except Exception:
+            continue
+        for item in data.get("scenes", []):
+            try:
+                n = int(item["scene"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            pr = (item.get("prompt") or "").strip()
+            if pr:
+                out[n] = pr
+    return out
+
+
 # ------------------------------------------------------------- text handling
 
 SMART = {"’": "'", "‘": "'", "“": '"', "”": '"',

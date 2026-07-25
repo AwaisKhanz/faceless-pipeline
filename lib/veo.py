@@ -38,7 +38,11 @@ class VeoError(RuntimeError):
     """Video generation failed. The caller keeps the scene's current asset."""
 
 
-DEFAULT_STYLE = "cinematic documentary footage, natural light, gentle camera motion"
+# The fallback style, used only when no LLM is configured to write a proper
+# action-aware prompt. It still asks for a single continuous shot with a
+# deliberate camera move so the clip has purposeful motion, not a random gesture.
+DEFAULT_STYLE = ("realistic documentary footage, one continuous shot, a slow "
+                 "deliberate camera move, subtle natural motion, natural light")
 
 
 def available(cfg: dict | None) -> bool:

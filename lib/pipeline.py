@@ -905,13 +905,32 @@ def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
     generated: list[int] = []
     failed: list[tuple] = []
 
+    # Craft a proper cinematic prompt per scene with the LLM: subject + a clear
+    # ACTION that matches the narration + one camera move + documentary look, so
+    # Veo animates the right thing instead of guessing from a noun-heavy search
+    # phrase. Best effort — falls back to the plain prompt per scene.
+    crafted: dict[int, str] = {}
+    from . import llm as LLM
+    if _flag(cfg.get("veo_smart_prompt", "auto")) and LLM.available(cfg):
+        try:
+            from . import gemini as G
+            on_progress(0, len(want), "writing video prompts")
+            crafted = G.video_prompts(
+                [{"n": n, "query": by_n[n].query,
+                  "narration": getattr(by_n[n], "narration", "")} for n in want],
+                LLM.key_for(cfg), LLM.model_for(cfg))
+        except Exception as e:
+            log(f"  (couldn't craft smart prompts: {e}) — using plain prompts")
+
     for i, n in enumerate(want):
         if should_cancel and should_cancel():
             break
         s = by_n[n]
         on_progress(i + 1, len(want), f"S{n} rendering video (1–2 min)")
         picks[n] = picks.get(n, 0) + 1               # fresh take, new filename
-        prompt = veo.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
+        prompt = crafted.get(n) or veo.prompt_for(
+            s.query or getattr(s, "narration", "") or "", cfg)
+        log(f"S{n:>3} video prompt: {prompt[:150]}")
         dest = p["stockcache"] / f"veo_{n}_{picks[n]}.mp4"
         try:
             veo.video(prompt, cfg, dest,
