@@ -2544,14 +2544,14 @@ async function askDelete(id) {
       'This removes the main script and narration files. It cannot be undone.'),
     confirmBox);
 
-  const go = el('button', { class: 'btn danger', disabled: true }, 'Delete');
+  const delBtn = el('button', { class: 'btn danger', disabled: true }, 'Delete');
   const sync = () => {
     const needsName = picked.has('sheets');
     confirmWrap.style.display = needsName ? '' : 'none';
     const total = [...picked].reduce((a, k) => a + (d.groups[k]?.mb || 0), 0);
-    go.textContent = picked.size
+    delBtn.textContent = picked.size
       ? `Delete ${picked.size} group(s) · ${total.toFixed(1)} MB` : 'Delete';
-    go.disabled = !picked.size || (needsName && confirmBox.value.trim() !== id);
+    delBtn.disabled = !picked.size || (needsName && confirmBox.value.trim() !== id);
   };
   confirmBox.addEventListener('input', sync);
 
@@ -2579,17 +2579,20 @@ async function askDelete(id) {
       confirmWrap,
       el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end' },
         el('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
-        go)));
+        delBtn)));
 
-  go.onclick = async () => {
-    go.disabled = true; go.textContent = 'Deleting…';
+  delBtn.onclick = async () => {
+    const wholeProject = picked.has('sheets');
+    delBtn.disabled = true; delBtn.textContent = 'Deleting…';
     const r = await api('/api/delete', {
       id, what: [...picked], confirm: confirmBox.value.trim()
     });
     modal.remove();
     if (r.error) return toast(r.error, true);
     toast(`Deleted ${r.count} file(s), freed ${r.freed_mb} MB.`);
-    go(picked.has('sheets') ? '/' : '/project/' + id);
+    // Deleting the project itself -> back to the dashboard (the detail page is
+    // gone); otherwise refresh the project page to show what's left.
+    go(wholeProject ? '/dashboard' : '/project/' + id);
   };
   document.body.append(modal);
   sync();

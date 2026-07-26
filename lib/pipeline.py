@@ -513,16 +513,29 @@ def delete_project(sheet: Path, langs: list[dict], what: list[str]) -> dict:
                 removed.append(f.name)
             except OSError as e:
                 refused.append(f"{f.name}: {e}")
-    # If the whole project was cleared out, drop its now-empty folder so the
-    # projects/ directory doesn't accumulate hollow shells.
+    # Tidy up the project folder afterwards.
     proj = _pid_of_dir(sheet)
     if _inside(proj, PROJECTS) and proj.exists():
-        for d in (proj / "sheets", proj / "work", proj / "out", proj):
+        if "sheets" in what:
+            # Deleting the PROJECT itself: remove the whole folder, including any
+            # stray files the groups above didn't cover (logs, .DS_Store, caches
+            # written mid-run) — otherwise a hollow shell is left behind. rmtree,
+            # not rmdir, so it never fails just because something remains.
             try:
-                if d.is_dir() and not any(d.iterdir()):
-                    d.rmdir()
-            except OSError:
-                pass
+                freed += sum(x.stat().st_size for x in proj.rglob("*") if x.is_file())
+                shutil.rmtree(proj)
+                removed.append(proj.name + "/")
+            except OSError as e:
+                refused.append(f"{proj.name}: {e}")
+        else:
+            # Partial delete: only drop any now-empty subfolders, leaving the
+            # project in place.
+            for d in (proj / "sheets", proj / "work", proj / "out", proj):
+                try:
+                    if d.is_dir() and not any(d.iterdir()):
+                        d.rmdir()
+                except OSError:
+                    pass
     return {"removed": removed, "count": len(removed),
             "freed_mb": round(freed / 1e6, 1), "refused": refused}
 
