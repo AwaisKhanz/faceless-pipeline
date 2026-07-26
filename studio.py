@@ -169,19 +169,21 @@ def end_step(items: int = 0) -> None:
     STORE.update(jid, steps=steps)
 
 
-def log(msg: str) -> None:
-    jid = _cur_id()
+def _log_to(jid, msg: str) -> None:
+    """Append a log line to a SPECIFIC job (thread-safe). Used both by the
+    thread-local log() below and by callbacks bound to a captured job id, so
+    lines emitted from the pipeline's own worker threads (parallel sourcing)
+    still reach the right job's Output."""
     if jid is not None:
         STORE.append_log(jid, str(msg))
 
 
-def progress(done: int, total: int, label: str = "") -> None:
-    """Record progress and a rate/ETA for THIS step (per-item costs differ wildly
-    between steps, so a rate is never carried across them)."""
-    jid = _cur_id()
+def _progress_to(jid, done: int, total: int, label: str = "") -> None:
     if jid is None:
         return
     job = STORE.get(jid)
+    if job is None:
+        return
     rate, eta = job.rate, job.eta
     t0 = job.step_started
     if t0 and done > 0:
@@ -192,6 +194,26 @@ def progress(done: int, total: int, label: str = "") -> None:
         eta = round(remaining / r) if r > 0 and remaining else 0
     STORE.update(jid, done=done, total=total, label=label or job.label,
                  rate=rate, eta=eta)
+
+
+def log(msg: str) -> None:
+    _log_to(_cur_id(), msg)
+
+
+def progress(done: int, total: int, label: str = "") -> None:
+    """Record progress and a rate/ETA for THIS step (per-item costs differ wildly
+    between steps, so a rate is never carried across them)."""
+    _progress_to(_cur_id(), done, total, label)
+
+
+def bound_reporters():
+    """A (log, progress) pair locked to the CURRENT job id, safe to call from any
+    thread. Pass these to steps that fan work out across worker threads (parallel
+    sourcing), where the thread-local job id isn't set and log()/progress() would
+    otherwise silently drop everything."""
+    jid = _cur_id()
+    return (lambda m: _log_to(jid, m),
+            lambda d, t, m="": _progress_to(jid, d, t, m))
 
 
 def busy() -> bool:
@@ -410,8 +432,13 @@ def run_sourcing(pid: str, redo: list[int] | None,
         # The bar shows "which scene, how far"; the detailed per-scene feedback
         # (searches, scores, the pick) comes through `log` from fetch_all. Keeping
         # them separate is what stops the Output being a wall of bare "S33 image".
+        # fetch_all fans scenes out across worker threads (source_workers > 1),
+        # where the thread-local job id isn't set — so use reporters BOUND to this
+        # job id, or every per-scene line and the progress bar go nowhere.
+        blog, bprog = bound_reporters()
+
         def onp(d, t, m):
-            progress(d, t, m)
+            bprog(d, t, m)
 
         # Warm up the visual-matching model UP FRONT, with a visible note. The
         # very first source downloads it (SigLIP 2 is ~1.7 GB) and, until now,
@@ -431,7 +458,7 @@ def run_sourcing(pid: str, redo: list[int] | None,
 
         stop = _stopper()
         assets = pl.source_stock(scenes, sheet, cfg, redo=redo,
-                                 on_progress=onp, log=log, should_cancel=stop)
+                                 on_progress=onp, log=blog, should_cancel=stop)
         end_step()
 
         # Stop was pressed mid-source: keep whatever was already found, and let
