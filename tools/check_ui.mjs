@@ -65,6 +65,7 @@ class TextNode { constructor(t) { this.textContent = String(t); this.nodeType = 
 const REG = {};
 const doc = {
   createElement: t => { const n = new Node(t); n.nodeType = 1; return n; },
+  createElementNS: (_ns, t) => { const n = new Node(t); n.nodeType = 1; return n; },
   createTextNode: t => new TextNode(t),
   documentElement: Object.assign(new Node('html'), { dataset: {} }),
   body: new Node('body'),
@@ -108,7 +109,7 @@ const js = html.match(/<script>([\s\S]*)<\/script>/)[1];
 // Expose the view functions so we can call them one at a time.
 const mod = js + `
 ;globalThis.__views = { viewDashboard, viewProject, viewRun, viewNew,
-                        viewVoices, viewSettings, viewReview, route, go,
+                        viewVoices, viewConfig, viewStatus, viewReview, route, go,
                         paintBanner, ROUTES, fractions, overall, fmtT, ago };`;
 
 let fail = 0;
@@ -178,7 +179,8 @@ const ROUTE_CASES = [
   ['/new', 'viewNew', undefined],
   ['/voices', 'viewVoices', undefined],
   ['/voices/de', 'viewVoices', 'de'],
-  ['/settings', 'viewSettings', undefined],
+  ['/settings', 'viewConfig', undefined],
+  ['/status', 'viewStatus', undefined],
 ];
 for (const [path, wantFn, wantArg] of ROUTE_CASES) {
   const hit = V.ROUTES.find(([re]) => re.test(path));
@@ -227,7 +229,8 @@ await run('run/activity', V.viewRun);
 await run('new', V.viewNew);
 await run('voices', V.viewVoices);
 await run('voices/de', V.viewVoices, 'de');
-await run('settings', V.viewSettings);
+await run('settings', V.viewConfig);
+await run('status', V.viewStatus);
 
 console.log(`\n  ${fail === 0 ? 'ALL PASS' : fail + ' FAILURE(S)'} — ${calls.length} API calls made`);
 process.exit(fail ? 1 : 0);

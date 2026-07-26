@@ -63,7 +63,7 @@ a:hover{color:var(--accent-hi)}
 button,input,select,textarea{font-family:var(--ui);color:inherit}
 h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.02em}
 h1{font-size:28px;letter-spacing:-.025em}
-.mono,code{font-family:var(--mono)}
+.mono,code{font-family:var(--mono);overflow-wrap:anywhere}
 ::-webkit-scrollbar{width:11px;height:11px}
 ::-webkit-scrollbar-thumb{background:#2a2f3a;border-radius:9px;border:3px solid var(--bg)}
 ::-webkit-scrollbar-thumb:hover{background:#39404e}
@@ -982,8 +982,8 @@ async function viewProject(id) {
           ? el('div', {}, el('div', { class: 'mono', style: 'font-size:14.2px' }, l.mp4),
             el('div', { class: 'sub' }, `${l.size_mb} MB · ${ago(l.built)}`))
           : el('span', { class: 'sub' }, '—')),
-        el('td', { style: 'text-align:right' },
-          el('div', { class: 'row', style: 'justify-content:flex-end;gap:6px' },
+        el('td', { style: 'text-align:right;white-space:nowrap;width:1px' },
+          el('div', { class: 'row', style: 'justify-content:flex-end;gap:6px;flex-wrap:nowrap' },
             l.render ? el('button', {
               class: 'btn sm',
               onclick: () => playVideo(l.mp4, p.id + ' · ' + (l.name || code))
