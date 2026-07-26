@@ -555,6 +555,44 @@ function toast(msg, bad) {
   $('#toast').append(n);
   toastT = setTimeout(() => n.remove(), 5200);
 }
+
+// In-app dialogs — the browser's native prompt()/confirm() are blocked in the
+// desktop webview, so we render our own modal. Both return a Promise.
+function askText({ title, label, value = '', placeholder = '', ok = 'OK' } = {}) {
+  return new Promise(resolve => {
+    let settled = false;
+    const done = v => { if (settled) return; settled = true; modal.remove(); resolve(v); };
+    const input = el('input', { type: 'text', value, placeholder, style: 'width:100%;margin-top:10px' });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim() || null); }
+      else if (e.key === 'Escape') done(null);
+    });
+    const modal = el('div', { class: 'modal', onclick: e => { if (e.target === modal) done(null); } },
+      el('div', { class: 'box', style: 'max-width:430px' },
+        el('h3', {}, title || 'Name'),
+        label ? el('div', { class: 'sub', style: 'margin-top:6px' }, label) : null,
+        input,
+        el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end;gap:8px' },
+          el('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'),
+          el('button', { class: 'btn primary', onclick: () => done(input.value.trim() || null) }, ok))));
+    document.body.append(modal);
+    setTimeout(() => input.focus(), 30);
+  });
+}
+function askConfirm({ title, message, ok = 'OK', danger = false } = {}) {
+  return new Promise(resolve => {
+    let settled = false;
+    const done = v => { if (settled) return; settled = true; modal.remove(); resolve(v); };
+    const modal = el('div', { class: 'modal', onclick: e => { if (e.target === modal) done(false); } },
+      el('div', { class: 'box', style: 'max-width:450px' },
+        el('h3', {}, title || 'Confirm'),
+        message ? el('div', { class: 'sub', style: 'margin-top:6px;white-space:pre-wrap' }, message) : null,
+        el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end;gap:8px' },
+          el('button', { class: 'btn', onclick: () => done(false) }, 'Cancel'),
+          el('button', { class: 'btn' + (danger ? ' danger' : ' primary'), onclick: () => done(true) }, ok))));
+    document.body.append(modal);
+  });
+}
 const fmtT = s => {
   s = Math.max(0, Math.round(s || 0));
   if (s < 60) return s + 's';
@@ -650,7 +688,10 @@ async function viewDashboard() {
   S.channels = d.channels || [];
 
   const newChannel = async () => {
-    const name = (prompt('New channel name') || '').trim();
+    const name = await askText({
+      title: 'New channel', label: 'Group projects under this channel.',
+      placeholder: 'e.g. Superfruits', ok: 'Create channel'
+    });
     if (!name) return;
     const r = await api('/api/channels', { action: 'create', name });
     if (r.error) return toast(r.error, true);
@@ -691,8 +732,11 @@ async function viewDashboard() {
         e.stopPropagation();
         const val = e.target.value;
         if (val === '__new__') {
-          const name = (prompt('Move to a new channel named') || '').trim();
           e.target.value = p.channel || '';        // reset the select
+          const name = await askText({
+            title: 'New channel', label: `Move “${p.id}” into a new channel.`,
+            placeholder: 'e.g. Superfruits', ok: 'Create & move'
+          });
           if (name) await moveProject(p.id, name);
           return;
         }
@@ -739,7 +783,7 @@ async function viewDashboard() {
   const channelHeader = (name, count) => {
     const rename = async e => {
       e.stopPropagation();
-      const nm = (prompt('Rename channel', name) || '').trim();
+      const nm = await askText({ title: 'Rename channel', value: name, ok: 'Rename' });
       if (!nm || nm === name) return;
       const r = await api('/api/channels', { action: 'rename', old: name, name: nm });
       if (r.error) return toast(r.error, true);
@@ -747,7 +791,12 @@ async function viewDashboard() {
     };
     const del = async e => {
       e.stopPropagation();
-      if (!confirm(`Delete the channel "${name}"?\nIts projects are kept — just moved to "No channel".`)) return;
+      const yes = await askConfirm({
+        title: `Delete channel “${name}”?`,
+        message: 'Its projects are kept — they just move to “No channel”.',
+        ok: 'Delete channel', danger: true
+      });
+      if (!yes) return;
       const r = await api('/api/channels', { action: 'delete', name });
       if (r.error) return toast(r.error, true);
       viewDashboard();
@@ -803,8 +852,12 @@ async function viewProject(id) {
   channelSel.onchange = async () => {
     let val = channelSel.value;
     if (val === '__new__') {
-      val = (prompt('Move to a new channel named') || '').trim();
-      if (!val) { channelSel.value = p.channel || ''; return; }
+      channelSel.value = p.channel || '';
+      val = await askText({
+        title: 'New channel', label: `Move “${p.id}” into a new channel.`,
+        placeholder: 'e.g. Superfruits', ok: 'Create & move'
+      });
+      if (!val) return;
     }
     const r = await api('/api/project_channel', { id: p.id, channel: val });
     if (r.error) { channelSel.value = p.channel || ''; return toast(r.error, true); }
@@ -927,9 +980,13 @@ async function viewProject(id) {
             l.voice_n ? el('button', {
               class: 'btn sm danger', disabled: busy,
               title: busy ? busyTitle : '',
-              onclick: () => confirm(`Delete ${l.voice_n} cached narration file(s) for `
-                + `${l.name || code} and generate them from scratch?`)
-                && run([code], ['voice'], true)
+              onclick: async () => {
+                if (await askConfirm({
+                  title: 'Redo narration?',
+                  message: `Delete ${l.voice_n} cached narration file(s) for ${l.name || code} and generate them from scratch?`,
+                  ok: 'Redo', danger: true
+                })) run([code], ['voice'], true);
+              }
             }, 'Redo') : null,
             el('button', {
               class: 'btn sm' + (l.voice && !l.render ? ' primary' : ''),
@@ -1369,10 +1426,14 @@ async function viewNew() {
     el('option', { value: '' }, 'No channel'),
     chanList.map(c => el('option', { value: c }, c)),
     el('option', { value: '__new__' }, '＋ New channel…'));
-  channelSel.onchange = () => {
+  channelSel.onchange = async () => {
     if (channelSel.value !== '__new__') return;
-    const name = (prompt('New channel name') || '').trim();
-    if (!name) { channelSel.value = ''; return; }
+    channelSel.value = '';
+    const name = await askText({
+      title: 'New channel', label: 'File this project under a new channel.',
+      placeholder: 'e.g. Superfruits', ok: 'Create'
+    });
+    if (!name) return;
     if (![...channelSel.options].some(o => o.value === name))
       channelSel.insertBefore(el('option', { value: name }, name), channelSel.lastElementChild);
     channelSel.value = name;
@@ -1956,9 +2017,9 @@ async function viewSubtitles(pid) {
     }, saveLabel),
     el('button', {
       class: 'btn', onclick: async () => {
-        const name = prompt('Name this template:');
+        const name = await askText({ title: 'Save caption template', placeholder: 'Template name', ok: 'Save' });
         if (!name) return;
-        const r = await api('/api/captions', { action: 'save', name: name.trim(), style: cur });
+        const r = await api('/api/captions', { action: 'save', name, style: cur });
         if (!r.error) { d.custom = r.custom; paintGallery(); toast('Template saved.'); }
         else toast(r.error, true);
       }
@@ -2379,9 +2440,13 @@ async function viewReview(id) {
   const vidBtn = d.generate_on ? el('button', {
     class: 'btn', disabled: true, style: 'margin-left:8px', onclick: async e => {
       if (!rejected.size) return;
-      if (!confirm(`Generate ${rejected.size} AI video clip(s) with Veo?\n\n`
-        + `Veo costs roughly $1–3 per clip and takes a minute or two each. `
-        + `It is capped per run by veo_max in config.`)) return;
+      const yes = await askConfirm({
+        title: `Generate ${rejected.size} AI video clip(s) with Veo?`,
+        message: 'Veo costs roughly $1–3 per clip and takes a minute or two each. '
+          + 'It is capped per run by veo_max in config.',
+        ok: 'Generate video', danger: true
+      });
+      if (!yes) return;
       e.target.disabled = true;
       const r = await api('/api/regenerate_video', { id, scenes: [...rejected] });
       if (r.started) go('/activity'); else e.target.disabled = false;
