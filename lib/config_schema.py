@@ -160,6 +160,15 @@ _FIELDS: list[dict] = [
      "show_if": {"generate": ["mixed", "all"]}},
     {"key": "generate_exact", "section": "imagegen", "type": "bool",
      "show_if": {"generate": ["mixed", "all"]}},
+    {"key": "generate_workers", "section": "imagegen", "type": "number",
+     "int": True, "min": 1, "max": 4, "step": 1,
+     "show_if": {"generate": ["mixed", "all"]}},
+    {"key": "generate_min_interval", "section": "imagegen", "type": "number",
+     "min": 0, "max": 30, "step": 0.5,
+     "show_if": {"generate": ["mixed", "all"]}},
+    {"key": "generate_retries", "section": "imagegen", "type": "number",
+     "int": True, "min": 0, "max": 8, "step": 1,
+     "show_if": {"generate": ["mixed", "all"]}},
 
     # ── video (Veo) ─────────────────────────────────────────────────────────
     {"key": "veo_max", "section": "videogen", "type": "number", "int": True, "min": 1, "max": 20, "step": 1},

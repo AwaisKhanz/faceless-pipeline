@@ -23,6 +23,8 @@ from __future__ import annotations
 import base64
 import json
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -128,12 +130,73 @@ def _reason(out: dict) -> str:
     return "no image in the response (the model may have replied with text only)"
 
 
-def image(prompt: str, cfg: dict, dest: Path) -> Path:
+# ─────────────────────────────────────────────────────── rate limiting
+#
+# The image model has a per-minute quota. Sourcing runs scenes in parallel, so
+# without a throttle a burst of generations all fire at once and every one comes
+# back 429 — and the scene silently falls back to a stock photo instead of the
+# picture it needed. Two guards keep us inside the quota, then a rate limit is
+# WAITED OUT (with backoff) instead of surrendered to:
+#   generate_workers      how many generations may run at once (default 1)
+#   generate_min_interval seconds between the START of one generation and the next
+#   generate_retries      how many times to back off and retry a 429/5xx
+_SEM_LOCK = threading.Lock()
+_SEM = None
+_SEM_N = 0
+_GATE = threading.Lock()
+_NEXT_OK = [0.0]                       # earliest monotonic time a call may start
+
+
+def _semaphore(cfg: dict) -> threading.Semaphore:
+    global _SEM, _SEM_N
+    n = max(1, int(cfg.get("generate_workers") or 1))
+    with _SEM_LOCK:
+        if _SEM is None or _SEM_N != n:
+            _SEM, _SEM_N = threading.Semaphore(n), n
+        return _SEM
+
+
+def _space_out(cfg: dict) -> None:
+    """Block until at least generate_min_interval has elapsed since the previous
+    generation started, so calls are spread out rather than bunched."""
+    gap = float(cfg.get("generate_min_interval", 4.0) or 0)
+    if gap <= 0:
+        return
+    with _GATE:
+        wait = _NEXT_OK[0] - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _NEXT_OK[0] = time.monotonic() + gap
+
+
+def _retry_delay(detail: str, attempt: int) -> float:
+    """How long to wait before retrying: the server's own RetryInfo when it sends
+    one (Google puts a 'retryDelay' like '17s' in the 429 body), otherwise
+    exponential backoff (2, 4, 8, … capped at 60s)."""
+    try:
+        for item in (json.loads(detail).get("error", {}).get("details") or []):
+            rd = str(item.get("retryDelay") or "")
+            if rd.endswith("s") and rd[:-1].replace(".", "", 1).isdigit():
+                return min(60.0, float(rd[:-1]) + 0.5)
+    except Exception:
+        pass
+    return min(60.0, 2.0 ** attempt)
+
+
+def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
     """Generate ONE 16:9 image for `prompt` and write it to `dest`.
 
     Cached: if `dest` already holds an image, it is returned without spending a
-    call. Raises GenError on any failure so the caller can fall back to search.
+    call. Rate limits (429) are throttled and retried with backoff rather than
+    failing; only a genuine, persistent failure raises GenError so the caller can
+    fall back to search. `log` (optional) receives one line per retry.
     """
+    def _note(msg: str) -> None:
+        if callable(log):
+            try:
+                log(msg)
+            except Exception:
+                pass
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0:
         return dest                        # already generated — reuse, no cost
@@ -163,33 +226,52 @@ def image(prompt: str, cfg: dict, dest: Path) -> Path:
     def _call(b: dict, tok: str) -> dict:
         return _generate(url, b, tok)
 
-    try:
-        out = _call(body, token)
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", "replace")[:300]
-        except Exception:
-            pass
-        if e.code in (401, 403):           # token expired mid-run: mint once more
-            llm._VERTEX_CREDS.clear()
-            try:
-                out = _call(body, llm._vertex_token(sa_path))
-            except Exception as e2:
-                raise GenError(f"image auth failed: {e2}") from None
-        elif e.code == 400 and "imageConfig" in detail:
-            # Older model that doesn't accept imageConfig — retry without it.
-            body["generationConfig"].pop("imageConfig", None)
+    retries = max(0, int(cfg.get("generate_retries", 5) or 0))
+    auth_retried = False
+    out = None
+    # One generation at a time (per generate_workers), spaced by generate_min_interval,
+    # with a rate limit waited out rather than surrendered to.
+    with _semaphore(cfg):
+        attempt = 0
+        while out is None:
+            _space_out(cfg)
             try:
                 out = _call(body, token)
-            except Exception as e2:
-                raise GenError(f"image HTTP 400: {e2}") from None
-        elif e.code == 429:
-            raise GenError("image model is rate-limiting (429) — try again shortly.") from None
-        else:
-            raise GenError(f"image HTTP {e.code}: {detail}") from None
-    except Exception as e:
-        raise GenError(f"image request failed: {e}") from None
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = e.read().decode("utf-8", "replace")[:300]
+                except Exception:
+                    pass
+                if e.code in (401, 403):       # token expired mid-run: mint once more
+                    if auth_retried:
+                        raise GenError(f"image auth failed (HTTP {e.code})") from None
+                    auth_retried = True
+                    llm._VERTEX_CREDS.clear()
+                    try:
+                        token = llm._vertex_token(sa_path)
+                    except Exception as e2:
+                        raise GenError(f"image auth failed: {e2}") from None
+                    continue
+                if e.code == 400 and "imageConfig" in detail:
+                    # Older model that doesn't accept imageConfig — retry without it.
+                    body["generationConfig"].pop("imageConfig", None)
+                    continue
+                if e.code in (429, 500, 503) and attempt < retries:
+                    attempt += 1
+                    wait = _retry_delay(detail, attempt)
+                    _note(f"· image model busy ({e.code}) — waiting {wait:.0f}s, "
+                          f"retry {attempt}/{retries}")
+                    time.sleep(wait)
+                    continue
+                if e.code == 429:
+                    raise GenError(
+                        f"image model is rate-limiting (429) after {retries} retries — "
+                        "raise generate_min_interval or lower generate_workers."
+                    ) from None
+                raise GenError(f"image HTTP {e.code}: {detail}") from None
+            except Exception as e:
+                raise GenError(f"image request failed: {e}") from None
 
     b64 = _first_image(out)
     if not b64:

@@ -983,7 +983,7 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
         prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
         dest = p["stockcache"] / f"gen_{n}_{picks[n]}.png"
         try:
-            imagen.image(prompt, cfg, dest)
+            imagen.image(prompt, cfg, dest, log=log)
         except Exception as e:                        # GenError or anything else
             failed.append((n, str(e)))
             log(f"✗ S{n:>3} · could not generate · {str(e)[:80]}")

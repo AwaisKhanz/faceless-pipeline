@@ -593,7 +593,7 @@ def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
     dest = cache / f"gen_{slug}.png"
     for attempt in (1, 2):
         try:
-            gen.image(prompt, cfg, dest)
+            gen.image(prompt, cfg, dest, log=log)
             break
         except Exception as e:
             if attempt == 2:
