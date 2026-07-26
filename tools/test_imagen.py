@@ -96,9 +96,11 @@ def main() -> int:
     from types import SimpleNamespace as _NS
 
     check("retryDelay is read from the server's 429 body",
-          im._retry_delay('{"error":{"details":[{"retryDelay":"7s"}]}}', 1), 7.5)
-    check("no retryDelay -> exponential backoff (2,4,8…)",
-          im._retry_delay("{}", 3), 8.0)
+          im._retry_delay('{"error":{"details":[{"retryDelay":"7s"}]}}', None, 1), 7.5)
+    check("Retry-After header is honoured when there's no body delay",
+          im._retry_delay("{}", {"Retry-After": "9"}, 1), 9.5)
+    check("no server hint -> exponential backoff (2,4,8…)",
+          im._retry_delay("{}", None, 3), 8.0)
     check("generate_workers sizes the concurrency gate",
           im._semaphore({"generate_workers": 2})._value, 2)
 
@@ -108,6 +110,7 @@ def main() -> int:
     # Don't actually sleep during the test; record what we'd have waited.
     saved_time, sleeps = im.time, []
     im.time = _NS(sleep=lambda s: sleeps.append(s), monotonic=saved_time.monotonic)
+    im._THROTTLE.reset()
     rl_cfg = {"vertex_project": "proj", "generate_location": "global",
               "vertex_service_account": "", "generate_min_interval": 0,
               "generate_retries": 5, "generate_workers": 1}
@@ -126,9 +129,13 @@ def main() -> int:
                        Path(tempfile.mkdtemp()) / "r.png", log=notes.append)
         check("succeeds once the model frees up (3 attempts)",
               out.exists() and tries["n"] == 3)
-        check("waited the server's retryDelay (3s + margin)", 3.5 in sleeps)
+        check("waited out the server's cooldown (~3.5s)",
+              any(abs(s - 3.5) < 0.3 for s in sleeps))
+        check("a 429 widened the gap for the next scene (adaptive)",
+              im._THROTTLE.gap >= 3.5)
         check("surfaced a retry notice to the log", any("retry" in m for m in notes))
 
+        im._THROTTLE.reset()
         im._generate = lambda u, b, t: (_ for _ in ()).throw(_http_error(429))
         try:
             im.image("always busy", {**rl_cfg, "generate_retries": 2},
@@ -138,6 +145,7 @@ def main() -> int:
             check("a persistent 429 raises GenError (mentions 429)", "429" in str(e))
     finally:
         im.time = saved_time
+        im._THROTTLE.reset()
 
     # ── manual per-scene generation (review page path) ──────────────────────
     print("\n  manual generate_scenes (the review-page 'Generate' button):")

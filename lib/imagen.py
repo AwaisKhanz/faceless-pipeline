@@ -132,19 +132,74 @@ def _reason(out: dict) -> str:
 
 # ─────────────────────────────────────────────────────── rate limiting
 #
-# The image model has a per-minute quota. Sourcing runs scenes in parallel, so
-# without a throttle a burst of generations all fire at once and every one comes
-# back 429 — and the scene silently falls back to a stock photo instead of the
-# picture it needed. Two guards keep us inside the quota, then a rate limit is
-# WAITED OUT (with backoff) instead of surrendered to:
+# The image model has a per-minute quota. Sourcing runs many scenes in parallel,
+# so without pacing a burst of generations all fire at once, every one comes back
+# 429, and the scene silently falls back to a stock photo instead of the picture
+# it needed. Three cooperating guards keep us a good citizen of the quota:
+#
 #   generate_workers      how many generations may run at once (default 1)
-#   generate_min_interval seconds between the START of one generation and the next
-#   generate_retries      how many times to back off and retry a 429/5xx
+#   generate_min_interval the FLOOR on the gap between calls (default 4s)
+#   generate_retries      how many times to wait out a 429/5xx before giving up
+#
+# The gap is ADAPTIVE. Every 429 widens it (so the next scene waits instead of
+# charging into the same limit — the mistake that makes a client hammer the API);
+# a clean run of successes eases it back toward the floor. This is ordinary
+# cooperative backoff: a 429 is a normal "slow down" signal, and heeding it for
+# ALL following calls — not just the one that got it — is exactly what the server
+# wants. The gap is shared across every worker via one process-wide throttle.
+_CAP = 90.0                            # never pace slower than this (seconds)
+_GROW = 2.0                            # multiply the gap by this on a 429
+_SHRINK = 0.8                          # multiply the gap by this after a clean run
+_EASE_AFTER = 3                        # successes needed before easing the gap down
+
+
+class _Throttle:
+    """Process-wide adaptive pacing shared by every generation."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.gap = 0.0                 # current spacing between calls (seconds)
+        self._next = 0.0               # earliest monotonic time a call may start
+        self._streak = 0               # consecutive successes since the last 429
+
+    def reset(self) -> None:           # for tests
+        with self._lock:
+            self.gap, self._next, self._streak = 0.0, 0.0, 0
+
+    def pace(self, floor: float) -> None:
+        """Sleep until this call is allowed to start, honouring the current
+        (possibly widened) gap, never going below `floor`."""
+        with self._lock:
+            if self.gap < floor:
+                self.gap = floor
+            now = time.monotonic()
+            start = self._next if self._next > now else now
+            self._next = start + self.gap
+            delay = start - now
+        if delay > 0:
+            time.sleep(delay)
+
+    def hit_limit(self, retry_after: float) -> None:
+        """A 429/5xx just happened: widen the gap and hold every worker off until
+        the cooldown the server asked for has passed."""
+        with self._lock:
+            self._streak = 0
+            self.gap = min(_CAP, max(self.gap * _GROW, retry_after, 1.0))
+            self._next = max(self._next, time.monotonic() + max(retry_after, 0.0))
+
+    def ok(self, floor: float) -> None:
+        """A success: after a clean streak, relax the gap back toward the floor."""
+        with self._lock:
+            self._streak += 1
+            if self._streak >= _EASE_AFTER and self.gap > floor:
+                self.gap = max(floor, self.gap * _SHRINK)
+                self._streak = 0
+
+
+_THROTTLE = _Throttle()
 _SEM_LOCK = threading.Lock()
 _SEM = None
 _SEM_N = 0
-_GATE = threading.Lock()
-_NEXT_OK = [0.0]                       # earliest monotonic time a call may start
 
 
 def _semaphore(cfg: dict) -> threading.Semaphore:
@@ -156,31 +211,25 @@ def _semaphore(cfg: dict) -> threading.Semaphore:
         return _SEM
 
 
-def _space_out(cfg: dict) -> None:
-    """Block until at least generate_min_interval has elapsed since the previous
-    generation started, so calls are spread out rather than bunched."""
-    gap = float(cfg.get("generate_min_interval", 4.0) or 0)
-    if gap <= 0:
-        return
-    with _GATE:
-        wait = _NEXT_OK[0] - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _NEXT_OK[0] = time.monotonic() + gap
-
-
-def _retry_delay(detail: str, attempt: int) -> float:
-    """How long to wait before retrying: the server's own RetryInfo when it sends
-    one (Google puts a 'retryDelay' like '17s' in the 429 body), otherwise
-    exponential backoff (2, 4, 8, … capped at 60s)."""
+def _retry_delay(detail: str, headers, attempt: int) -> float:
+    """How long to wait before retrying. Prefer the server's own instruction —
+    Google puts a 'retryDelay' like '17s' in the 429 body, and HTTP may carry a
+    Retry-After header — and only fall back to exponential backoff (2, 4, 8, …)
+    when neither is present. Capped so one call can't stall forever."""
     try:
         for item in (json.loads(detail).get("error", {}).get("details") or []):
             rd = str(item.get("retryDelay") or "")
             if rd.endswith("s") and rd[:-1].replace(".", "", 1).isdigit():
-                return min(60.0, float(rd[:-1]) + 0.5)
+                return min(_CAP, float(rd[:-1]) + 0.5)
     except Exception:
         pass
-    return min(60.0, 2.0 ** attempt)
+    try:
+        ra = headers.get("Retry-After") if headers else None
+        if ra is not None and str(ra).strip().isdigit():
+            return min(_CAP, float(ra) + 0.5)
+    except Exception:
+        pass
+    return min(_CAP, 2.0 ** attempt)
 
 
 def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
@@ -227,20 +276,24 @@ def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
         return _generate(url, b, tok)
 
     retries = max(0, int(cfg.get("generate_retries", 5) or 0))
+    floor = float(cfg.get("generate_min_interval", 4.0) or 0)
     auth_retried = False
     out = None
-    # One generation at a time (per generate_workers), spaced by generate_min_interval,
-    # with a rate limit waited out rather than surrendered to.
+    # One generation at a time (per generate_workers), paced by the shared adaptive
+    # throttle. A 429 is waited out AND widens the gap for the next scene, so we
+    # settle onto the real quota instead of firing rejected request after rejected
+    # request.
     with _semaphore(cfg):
         attempt = 0
         while out is None:
-            _space_out(cfg)
+            _THROTTLE.pace(floor)
             try:
                 out = _call(body, token)
+                _THROTTLE.ok(floor)
             except urllib.error.HTTPError as e:
                 detail = ""
                 try:
-                    detail = e.read().decode("utf-8", "replace")[:300]
+                    detail = e.read().decode("utf-8", "replace")[:1000]
                 except Exception:
                     pass
                 if e.code in (401, 403):       # token expired mid-run: mint once more
@@ -259,15 +312,17 @@ def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
                     continue
                 if e.code in (429, 500, 503) and attempt < retries:
                     attempt += 1
-                    wait = _retry_delay(detail, attempt)
-                    _note(f"· image model busy ({e.code}) — waiting {wait:.0f}s, "
-                          f"retry {attempt}/{retries}")
-                    time.sleep(wait)
-                    continue
+                    wait = _retry_delay(detail, getattr(e, "headers", None), attempt)
+                    _THROTTLE.hit_limit(wait)   # widen the gap for THIS + later scenes
+                    _note(f"· image model busy ({e.code}) — easing to "
+                          f"{_THROTTLE.gap:.0f}s between images; waiting {wait:.0f}s "
+                          f"(retry {attempt}/{retries})")
+                    continue                    # pace() will serve the cooldown
                 if e.code == 429:
                     raise GenError(
                         f"image model is rate-limiting (429) after {retries} retries — "
-                        "raise generate_min_interval or lower generate_workers."
+                        "the quota is very tight; raise generate_min_interval or lower "
+                        "generate_max, or try again later."
                     ) from None
                 raise GenError(f"image HTTP {e.code}: {detail}") from None
             except Exception as e:
