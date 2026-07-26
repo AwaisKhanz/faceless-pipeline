@@ -1177,6 +1177,21 @@ def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n,
     return out
 
 
+def _clip_fingerprint(src: Path, target: float, zoom: bool) -> str:
+    """Identity of the per-scene clip `c{n}.mp4` — everything that, if changed,
+    means the cached clip no longer represents this scene. Crucially it includes
+    the SOURCE picture (path + size + mtime), so swapping a scene's image in
+    review (by search OR by AI) forces its clip to be rebuilt instead of the old
+    one being silently reused. Target length and zoom are folded in too, so a
+    timing or effect change also invalidates the cache."""
+    try:
+        st = src.stat()
+        sig = f"{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        sig = "missing"
+    return f"{src}|{sig}|t={round(float(target), 3)}|z={int(bool(zoom))}"
+
+
 def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Path,
                  lang: str, captions: bool = True, music: Path | None = None,
                  music_level: float = 0.20, zoom: bool = True,
@@ -1233,20 +1248,26 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         vdurs.append(vd)
         src = Path(assets[s.n]["path"])
         out = p["clips"] / f"c{s.n:04d}.mp4"
+        fp_file = p["clips"] / f"c{s.n:04d}.src"
         # The picture holds voice + this scene's own gap + the dissolve. Because
         # the audio gap after this line is gap_after[i], the narration still lands
         # exactly on each clip start (the render's core invariant holds per scene).
         target = vd + gap_after[i] + DISS
-        # Rebuild anything left over from before the 4:2:0 pin, so a cached clip
-        # can't quietly drag the finished video back to an unplayable format.
-        # yuvj420p is accepted: it is still 4:2:0 and plays everywhere - only the
-        # colour range is flagged full rather than limited. Rejecting it would mean
-        # re-encoding every cached clip for no visible gain.
-        # ALSO rebuild when the clip's length no longer matches what this scene
-        # now needs (voice + tail) — otherwise trimming the narration, or changing
-        # a gap, would silently reuse an old, too-long clip and re-open the gap.
+        # Decide whether the cached clip can be reused, or must be rebuilt:
+        #   • wrong pixel format — left over from before the 4:2:0 pin, and would
+        #     drag the finished video back to an unplayable format. yuvj420p is
+        #     fine (still 4:2:0, plays everywhere; only the colour range differs).
+        #   • wrong length — trimming narration or changing a gap would otherwise
+        #     silently reuse an old, too-long clip and re-open the gap.
+        #   • DIFFERENT SOURCE — the fingerprint changed, i.e. the scene's picture
+        #     was swapped in review (search or AI). Without this the render happily
+        #     reuses the clip built from the OLD image, which is exactly the "I
+        #     changed it but the video still shows the old one" bug.
+        want_fp = _clip_fingerprint(src, target, zoom)
+        have_fp = fp_file.read_text(encoding="utf-8") if fp_file.exists() else ""
         stale = out.exists() and (
-            render.pix_fmt_of(out) not in ("yuv420p", "yuvj420p")
+            have_fp != want_fp
+            or render.pix_fmt_of(out) not in ("yuv420p", "yuvj420p")
             or abs(_dur_safe(out) - target) > (1.5 / render.FPS))
         was_built = (not out.exists()) or stale
         if was_built:
@@ -1254,6 +1275,7 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
                 render.make_video_clip(src, target, out)
             else:
                 render.make_image_clip(src, target, out, zoom=zoom)
+            fp_file.write_text(want_fp, encoding="utf-8")   # remember what we built
         clips.append((out, render.duration_of(out)))
         msg = f"scene {i + 1} of {n}"
         if verbose:
