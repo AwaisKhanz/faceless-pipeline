@@ -647,10 +647,21 @@ async function viewDashboard() {
   const built = S.projects.reduce((a, p) =>
     a + Object.values(p.status?.languages || {}).filter(l => l.render).length, 0);
 
+  S.channels = d.channels || [];
+
+  const newChannel = async () => {
+    const name = (prompt('New channel name') || '').trim();
+    if (!name) return;
+    const r = await api('/api/channels', { action: 'create', name });
+    if (r.error) return toast(r.error, true);
+    viewDashboard();
+  };
+
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' }, el('h1', {}, 'Dashboard'),
       el('p', {}, `${S.projects.length} project${S.projects.length === 1 ? '' : 's'} · `
         + `${scenes} scenes · ${built} video${built === 1 ? '' : 's'} rendered`)),
+    el('button', { class: 'btn', onclick: newChannel }, '+ New channel'),
     el('button', { class: 'btn', onclick: () => go('/new') }, '+ New from script')));
 
   if (!d.has_keys) v.append(el('div', { class: 'card', style: 'border-color:var(--warn);margin-bottom:14px' },
@@ -665,7 +676,36 @@ async function viewDashboard() {
     return;
   }
 
-  v.append(el('div', { class: 'cards' }, S.projects.map(p => {
+  const moveProject = async (pid, channel) => {
+    const r = await api('/api/project_channel', { id: pid, channel });
+    if (r.error) return toast(r.error, true);
+    viewDashboard();
+  };
+
+  // A small "which channel" picker on each card — move without opening the project.
+  const channelPicker = p => {
+    const sel = el('select', {
+      style: 'width:auto;min-width:130px;font-size:13px;padding:5px 8px',
+      onclick: e => e.stopPropagation(),          // don't open the project
+      onchange: async e => {
+        e.stopPropagation();
+        const val = e.target.value;
+        if (val === '__new__') {
+          const name = (prompt('Move to a new channel named') || '').trim();
+          e.target.value = p.channel || '';        // reset the select
+          if (name) await moveProject(p.id, name);
+          return;
+        }
+        await moveProject(p.id, val);
+      }
+    },
+      el('option', { value: '', selected: !p.channel }, 'No channel'),
+      (S.channels || []).map(c => el('option', { value: c, selected: c === p.channel }, c)),
+      el('option', { value: '__new__' }, '＋ New channel…'));
+    return sel;
+  };
+
+  const projectCard = p => {
     const st = p.status || { languages: {}, scenes: 0, assets: 0 };
     const o = overall(st);
     return el('div', { class: 'card click', onclick: () => go('/project/' + p.id) },
@@ -681,16 +721,65 @@ async function viewDashboard() {
             stepBar(st, l),
             el('span', { class: 'sub mono', style: 'width:56px;text-align:right;flex:none' },
               l.render ? l.size_mb + ' MB' : `${l.voice_n || 0}/${st.scenes}`)))),
-      el('div', { class: 'sub', style: 'margin-top:10px' },
-        `${st.scenes} scenes · ${st.assets} visuals sourced`));
-  })));
+      el('div', { class: 'row', style: 'margin-top:10px;justify-content:space-between;align-items:center' },
+        el('span', { class: 'sub' }, `${st.scenes} scenes · ${st.assets} visuals sourced`),
+        channelPicker(p)));
+  };
+
+  // Group projects: each channel (in saved order) then "No channel".
+  const groups = new Map();
+  (S.channels || []).forEach(c => groups.set(c, []));
+  const none = [];
+  S.projects.forEach(p => {
+    if (p.channel && groups.has(p.channel)) groups.get(p.channel).push(p);
+    else if (p.channel) groups.set(p.channel, [p]);
+    else none.push(p);
+  });
+
+  const channelHeader = (name, count) => {
+    const rename = async e => {
+      e.stopPropagation();
+      const nm = (prompt('Rename channel', name) || '').trim();
+      if (!nm || nm === name) return;
+      const r = await api('/api/channels', { action: 'rename', old: name, name: nm });
+      if (r.error) return toast(r.error, true);
+      viewDashboard();
+    };
+    const del = async e => {
+      e.stopPropagation();
+      if (!confirm(`Delete the channel "${name}"?\nIts projects are kept — just moved to "No channel".`)) return;
+      const r = await api('/api/channels', { action: 'delete', name });
+      if (r.error) return toast(r.error, true);
+      viewDashboard();
+    };
+    return el('div', { class: 'sec', style: 'margin-top:24px' },
+      el('h2', {}, name),
+      el('span', { class: 'sub', style: 'margin-left:2px' }, `${count} project${count === 1 ? '' : 's'}`),
+      el('div', { style: 'flex:1' }),
+      el('button', { class: 'btn sm', onclick: rename }, 'Rename'),
+      el('button', { class: 'btn sm', onclick: del }, 'Delete'));
+  };
+
+  (S.channels || []).forEach(c => {
+    const list = groups.get(c) || [];
+    v.append(channelHeader(c, list.length));
+    v.append(list.length
+      ? el('div', { class: 'cards' }, list.map(projectCard))
+      : el('div', { class: 'sub', style: 'padding:6px 2px' }, 'No projects yet — move one here from its card.'));
+  });
+
+  if (none.length) {
+    if (S.channels && S.channels.length)
+      v.append(el('div', { class: 'sec', style: 'margin-top:24px' }, el('h2', {}, 'No channel')));
+    v.append(el('div', { class: 'cards' }, none.map(projectCard)));
+  }
 }
 
 // ═══ project detail ═══════════════════════════════════════════════════════
 async function viewProject(id) {
   if (!S.projects.length) {
     const d = await api('/api/projects');
-    S.projects = d.projects || []; S.music = d.music || [];
+    S.projects = d.projects || []; S.music = d.music || []; S.channels = d.channels || [];
   }
   const p = S.projects.find(x => x.id === id);
   const v = $('#view'); v.innerHTML = '';
@@ -706,12 +795,31 @@ async function viewProject(id) {
   const busyTitle = 'This project has a job running — watch it in Activity.';
   const complete = o.text === 'complete';
 
+  // Channel picker — move this project to a channel (or a new one) in place.
+  const channelSel = el('select', { style: 'width:auto;min-width:150px' },
+    el('option', { value: '', selected: !p.channel }, 'No channel'),
+    (S.channels || []).map(c => el('option', { value: c, selected: c === p.channel }, c)),
+    el('option', { value: '__new__' }, '＋ New channel…'));
+  channelSel.onchange = async () => {
+    let val = channelSel.value;
+    if (val === '__new__') {
+      val = (prompt('Move to a new channel named') || '').trim();
+      if (!val) { channelSel.value = p.channel || ''; return; }
+    }
+    const r = await api('/api/project_channel', { id: p.id, channel: val });
+    if (r.error) { channelSel.value = p.channel || ''; return toast(r.error, true); }
+    p.channel = r.channel; S.channels = r.channels;
+    toast(r.channel ? `Moved to “${r.channel}”.` : 'Removed from its channel.');
+  };
+
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' },
       el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
       el('h1', { style: 'margin-top:4px' }, p.id),
       el('p', {}, p.label || '')),
-    el('div', { class: 'row' },
+    el('div', { class: 'row', style: 'align-items:center;gap:10px' },
+      el('span', { class: 'sub' }, 'Channel'),
+      channelSel,
       el('span', { class: 'pill ' + o.cls }, o.text),
       el('button', { class: 'btn sm danger', onclick: () => askDelete(p.id) },
         'Delete…'))));

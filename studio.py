@@ -1026,11 +1026,29 @@ class Handler(BaseHTTPRequestHandler):
                 except (Exception, SystemExit) as e:
                     pr["status"] = {"error": str(e), "scenes": pr.get("scenes", 0),
                                     "assets": 0, "languages": {}}
+            # Tag each project with its channel, and list the channels (pruning
+            # any assignment whose project no longer exists) so the dashboard can
+            # group by channel in one request.
+            from lib import channels as _ch
+            chan = _ch.data(valid_pids=[pr["id"] for pr in projects])
+            for pr in projects:
+                pr["channel"] = chan["assign"].get(pr["id"], "")
             return self._json({
                 "projects": projects, "music": music,
+                "channels": chan["channels"],
                 "has_keys": bool(cfg.get("pexels_key") or cfg.get("pixabay_key")),
                 "has_gemini": bool(cfg.get("gemini_key")),
             })
+
+        if path == "/api/channels":
+            from lib import channels as _ch
+            pids = [p["id"] for p in pl.find_projects()]
+            d = _ch.data(valid_pids=pids)
+            counts = {}
+            for c in d["assign"].values():
+                counts[c] = counts.get(c, 0) + 1
+            return self._json({"channels": d["channels"], "assign": d["assign"],
+                               "counts": counts})
 
         if path == "/api/deletable":
             pid = (q.get("id") or [""])[0]
@@ -1385,6 +1403,39 @@ class Handler(BaseHTTPRequestHandler):
                                           b.get("on"))
             return self._json({"favorites": favs, "favorite": on})
 
+        if path == "/api/project_channel":
+            # Move a project into a channel (or clear it with an empty string).
+            # Create-on-assign: a new channel name is added automatically.
+            from lib import channels as _ch
+            pid = (b.get("id") or "").strip()
+            if not pid or pl.find_project(pid) is None:
+                return self._json({"error": f"no project called {pid!r}"}, 404)
+            try:
+                d = _ch.assign(pid, b.get("channel") or "")
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            return self._json({"channel": d["assign"].get(pid, ""),
+                               "channels": d["channels"]})
+
+        if path == "/api/channels":
+            # Manage the channel list itself: create / rename / delete a channel.
+            # Deleting a channel only drops the label — its projects are unassigned,
+            # never removed.
+            from lib import channels as _ch
+            action = (b.get("action") or "").strip().lower()
+            try:
+                if action == "create":
+                    d = _ch.create(b.get("name") or "")
+                elif action == "rename":
+                    d = _ch.rename(b.get("old") or "", b.get("name") or "")
+                elif action == "delete":
+                    d = _ch.remove(b.get("name") or "")
+                else:
+                    return self._json({"error": "unknown action"}, 400)
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            return self._json({"channels": d["channels"]})
+
         if path == "/api/config":
             # Save settings from the editor. Every value is validated against the
             # schema; only known keys are written; the file is backed up and
@@ -1509,6 +1560,9 @@ class Handler(BaseHTTPRequestHandler):
                               "cancel it in the queue first"}, 409)
 
             res = pl.delete_project(Path(proj["sheet"]), proj["languages"], what)
+            if "sheets" in what:                 # the project itself is gone
+                from lib import channels as _ch
+                _ch.forget_project(pid)
             log(f"Deleted {res['count']} file(s) from {pid} "
                 f"({res['freed_mb']} MB freed)")
             return self._json(res)
