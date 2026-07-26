@@ -1359,8 +1359,25 @@ const LANG_NAMES = {
 const LANG_ORDER = ['en', 'de', 'es', 'fr', 'it', 'pt'];
 const MONO = 'font-family:ui-mono,Menlo,Consolas,monospace;font-size:14.5px';
 
-function viewNew() {
+async function viewNew() {
   const v = $('#view'); v.innerHTML = '';
+  // Channels this project can be filed under (fetched fresh so a channel made
+  // moments ago is included).
+  const chanList = ((await api('/api/channels')) || {}).channels || [];
+  S.channels = chanList;
+  const channelSel = el('select', {},
+    el('option', { value: '' }, 'No channel'),
+    chanList.map(c => el('option', { value: c }, c)),
+    el('option', { value: '__new__' }, '＋ New channel…'));
+  channelSel.onchange = () => {
+    if (channelSel.value !== '__new__') return;
+    const name = (prompt('New channel name') || '').trim();
+    if (!name) { channelSel.value = ''; return; }
+    if (![...channelSel.options].some(o => o.value === name))
+      channelSel.insertBefore(el('option', { value: name }, name), channelSel.lastElementChild);
+    channelSel.value = name;
+  };
+
   v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
     el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
     el('h1', { style: 'margin-top:4px' }, 'New video from a script'),
@@ -1403,6 +1420,8 @@ function viewNew() {
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Languages'),
         picker.root)),
+    el('div', { style: 'margin-top:14px;max-width:320px' },
+      el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Channel'), channelSel),
     el('div', { class: 'hr' }),
     scriptsWrap,
     el('label', { class: 'chk', style: 'margin-top:4px' }, autoBox,
@@ -1422,7 +1441,8 @@ function viewNew() {
             return toast('Pick a language and paste its script first.', true);
           e.target.disabled = true;
           const auto = autoBox.checked;
-          const r = await api('/api/generate', { id: id.value.trim(), scripts, auto });
+          const channel = channelSel.value === '__new__' ? '' : channelSel.value;
+          const r = await api('/api/generate', { id: id.value.trim(), scripts, auto, channel });
           if (r.started) go(auto ? '/queue' : '/activity'); else e.target.disabled = false;
         }
       }, 'Generate the sheets'),

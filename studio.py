@@ -248,6 +248,19 @@ def _stopper():
     return stop
 
 
+def _project_or_skip(pid: str):
+    """The project for a job runner, or None after ending the job cleanly.
+
+    A queued job whose project was deleted meanwhile is not a bug — end it with a
+    plain 'no longer exists' message instead of a scary traceback."""
+    proj = pl.find_project(pid)
+    if proj is None:
+        set_job(stage="error",
+                error=f"Project '{pid}' no longer exists (it was deleted).")
+        log(f"Project '{pid}' no longer exists — skipping this job.")
+    return proj
+
+
 class Cancelled(Exception):
     """Raised inside a job when the user asks it to stop."""
 
@@ -307,7 +320,7 @@ def _worker_wrapper(fn):
 
 # ------------------------------------------------------------------ the work
 
-def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
+def run_generate(scripts: dict, pid: str, overwrite: bool, channel: str = "") -> None:
     """Per-language scripts in → main script + narration files out. No
     translation: the structure language defines the scenes and visuals, and each
     other language's pasted script is segmented onto them. compose.py writes the
@@ -346,6 +359,12 @@ def run_generate(scripts: dict, pid: str, overwrite: bool) -> None:
         sdir = pl.sheets_dir(pid)
         written = compose.write_files(res, sdir, overwrite=overwrite)
         log(f"Wrote {len(written)} file(s): {', '.join(written)}")
+        # Assign the chosen channel now the project exists on disk (assigning
+        # earlier would be pruned as a 'ghost' before its files were written).
+        if (channel or "").strip():
+            from lib import channels as _ch
+            _ch.assign(pid, channel.strip())
+            log(f"Added to channel: {channel.strip()}")
         log(f"{len(res.scenes)} scenes · "
             f"{sum(1 for s in res.scenes if s.media == 'VIDEO')} video · "
             f"{sum(1 for s in res.scenes if s.hero)} hero")
@@ -379,7 +398,9 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
             raise RuntimeError(
                 "No language model configured — add gemini_key, or set llm=ollama "
                 "with an ollama_model in config.json.")
-        proj = pl.find_project(pid)
+        proj = _project_or_skip(pid)
+        if proj is None:
+            return
         sheet = Path(proj["sheet"])
         sdir = sheet.parent
         set_job(stage="generate", label=f"adding {pl.LANG_NAMES.get(lang, lang)}",
@@ -410,9 +431,9 @@ def run_add_language(pid: str, lang: str, script: str, overwrite: bool) -> None:
 def run_sourcing(pid: str, redo: list[int] | None,
                  skip_review: bool = False) -> None:
     try:
-        proj = pl.find_project(pid)
+        proj = _project_or_skip(pid)
         if proj is None:
-            raise RuntimeError(f"no project called {pid!r}")
+            return
         sheet = Path(proj["sheet"])
         cfg = pl.load_config()
         if not cfg.get("pexels_key") and not cfg.get("pixabay_key"):
@@ -503,7 +524,9 @@ def run_sourcing(pid: str, redo: list[int] | None,
 def run_regenerate(pid: str, which: list[int]) -> None:
     """Manually generate AI images for the scenes the user marked in review."""
     try:
-        proj = pl.find_project(pid)
+        proj = _project_or_skip(pid)
+        if proj is None:
+            return
         sheet = Path(proj["sheet"])
         cfg = pl.load_config()
         mlang = pl.main_lang(sheet)
@@ -546,7 +569,9 @@ def run_regenerate_video(pid: str, which: list[int]) -> None:
     """Manually generate Veo video clips for the scenes marked in review. Capped,
     slow (a minute or two each), and expensive — so it is never automatic."""
     try:
-        proj = pl.find_project(pid)
+        proj = _project_or_skip(pid)
+        if proj is None:
+            return
         sheet = Path(proj["sheet"])
         cfg = pl.load_config()
         mlang = pl.main_lang(sheet)
@@ -593,7 +618,9 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
               zoom: bool, voices: dict[str, str], master: bool = True) -> None:
     try:
         VIS.unload()          # free the sourcing model before the heavy voice work
-        proj = pl.find_project(pid)
+        proj = _project_or_skip(pid)
+        if proj is None:
+            return
         sheet = Path(proj["sheet"])
         sdir = sheet.parent
         # No language chosen -> build the project's own main language, never a
@@ -679,7 +706,9 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
     """
     try:
         VIS.unload()          # free the sourcing model before voice/render
-        proj = pl.find_project(pid)
+        proj = _project_or_skip(pid)
+        if proj is None:
+            return
         sheet = Path(proj["sheet"])
         sdir = sheet.parent
         # Default to the project's own main language, never a hardcoded "en".
@@ -1463,8 +1492,10 @@ class Handler(BaseHTTPRequestHandler):
             if not scripts:
                 return self._json({"error": "Paste a script for at least one language."}, 400)
             pid = b.get("id") or "video"
-            job = enqueue(pid, "generate", {"scripts": scripts, "pid": pid,
-                                            "overwrite": bool(b.get("overwrite"))},
+            job = enqueue(pid, "generate",
+                          {"scripts": scripts, "pid": pid,
+                           "overwrite": bool(b.get("overwrite")),
+                           "channel": (b.get("channel") or "").strip()},
                           auto=bool(b.get("auto")))
             return self._json({"started": True, "job": job.id})
 
