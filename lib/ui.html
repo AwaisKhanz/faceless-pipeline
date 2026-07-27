@@ -2231,7 +2231,7 @@ async function viewConfig() {
 
   // Wide controls read better stacked under the label than squeezed into the
   // right column.
-  const isWide = f => f.type === 'multiselect' || f.type === 'dict';
+  const isWide = f => f.type === 'multiselect' || f.type === 'dict' || f.type === 'textarea';
 
   function widget(f) {
     if (f.type === 'select') {
@@ -2292,6 +2292,14 @@ async function viewConfig() {
       const ta = el('textarea', { rows: 2, style: MONO, oninput: e => set(f, e.target.value) });
       ta.value = typeof state[f.key] === 'string' ? state[f.key]
         : JSON.stringify(state[f.key] || {});
+      return ta;
+    }
+    if (f.type === 'textarea') {
+      const ta = el('textarea', {
+        rows: 5, style: MONO, placeholder: f.default || '',
+        oninput: e => set(f, e.target.value)
+      });
+      ta.value = state[f.key] ?? '';
       return ta;
     }
     // text / secret (plain text, per your choice)

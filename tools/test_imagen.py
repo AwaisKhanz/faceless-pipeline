@@ -195,13 +195,13 @@ def main() -> int:
     calls = []
 
     def _bad(name):
-        def f(prompt, cfg, dest):
+        def f(prompt, cfg, dest, log=None):
             calls.append(name)
             raise im.GenError(name + " down")
         return f
 
     def _good(name):
-        def f(prompt, cfg, dest):
+        def f(prompt, cfg, dest, log=None):
             calls.append(name)
             Path(dest).write_bytes(b"IMG")
         return f
@@ -221,6 +221,57 @@ def main() -> int:
         im._ENGINE_RAW.clear()
         im._ENGINE_RAW.update(saved_raw)
         im._THROTTLE.reset()
+
+    # ── Cloudflare multi-account pooling + per-account cooldown ──────────────
+    print("\n  Cloudflare multi-account rotation:")
+    im._cf_reset()
+    check("parses the single pair",
+          im._cloudflare_accounts({"cf_account_id": "a1", "cf_api_token": "t1"}),
+          [("a1", "t1")])
+    check("parses a pool (id:token per line) and dedups by id",
+          im._cloudflare_accounts({"cf_account_id": "a1", "cf_api_token": "t1",
+                                   "cf_accounts": "a2:t2\na3 t3\na1:tX"}),
+          [("a1", "t1"), ("a2", "t2"), ("a3", "t3")])
+    check("Cloudflare is ready with only a pool",
+          im.engine_ready("cloudflare", {"cf_accounts": "a2:t2"}), True)
+    check("cap detection: 429 is a cap", im._cf_is_cap(429, ""), True)
+    check("cap detection: neuron-limit 400 is a cap",
+          im._cf_is_cap(400, "free neuron limit exceeded"), True)
+    check("cap detection: a content 400 is NOT a cap",
+          im._cf_is_cap(400, "Input prompt contains inappropriate content"), False)
+
+    seen = []
+    saved_one = im._cf_one
+
+    def cf_one(aid, tok, model, prompt, dest):
+        seen.append(aid)
+        if aid == "a1":
+            raise im._CFRateLimited()          # first account is over its cap
+        Path(dest).write_bytes(b"CF")
+    im._cf_one = cf_one
+    cf_cfg = {"cf_accounts": "a1:t1\na2:t2", "cf_rest_minutes": 15}
+    try:
+        im._cf_reset()
+        im._cloudflare_raw("x", cf_cfg, Path(tempfile.mkdtemp()) / "c1.png")
+        check("rotated a1 (capped) → a2 (made the image)", seen, ["a1", "a2"])
+        seen.clear()
+        im._cloudflare_raw("x", cf_cfg, Path(tempfile.mkdtemp()) / "c2.png")
+        check("a rested account is skipped next time", seen, ["a2"])
+
+        im._cf_reset()
+
+        def cf_all(aid, tok, model, prompt, dest):
+            raise im._CFRateLimited()
+        im._cf_one = cf_all
+        try:
+            im._cloudflare_raw("x", cf_cfg, Path(tempfile.mkdtemp()) / "c3.png")
+            check("an exhausted pool raises", False)
+        except im.GenError as e:
+            check("whole pool exhausted → GenError (fast engine failover)",
+                  "rate-limited" in str(e))
+    finally:
+        im._cf_one = saved_one
+        im._cf_reset()
 
     # ── manual per-scene generation (review page path) ──────────────────────
     print("\n  manual generate_scenes (the review-page 'Generate' button):")

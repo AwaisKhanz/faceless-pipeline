@@ -186,6 +186,11 @@ _FIELDS: list[dict] = [
      "show_if": {"generate_engine": ["cloudflare"]}},
     {"key": "cf_api_token", "section": "imagegen", "type": "secret",
      "show_if": {"generate_engine": ["cloudflare"]}},
+    {"key": "cf_accounts", "section": "imagegen", "type": "textarea",
+     "show_if": {"generate_engine": ["cloudflare"]}},
+    {"key": "cf_rest_minutes", "section": "imagegen", "type": "number",
+     "int": True, "min": 1, "max": 720, "step": 1,
+     "show_if": {"generate_engine": ["cloudflare"]}},
     {"key": "cf_model", "section": "imagegen", "type": "select", "allow_custom": True,
      "options": _opt(("@cf/black-forest-labs/flux-1-schnell", "FLUX.1 schnell (default)"),
                      ("@cf/stabilityai/stable-diffusion-xl-base-1.0", "Stable Diffusion XL")),
@@ -290,7 +295,7 @@ def _coerce(field: dict, raw):
     selects must match an option (strict)."""
     t = field["type"]
 
-    if t in ("text", "secret"):
+    if t in ("text", "secret", "textarea"):
         return "" if raw is None else str(raw)
 
     if t == "bool":

@@ -123,8 +123,7 @@ def engine_ready(engine: str, cfg: dict | None) -> bool:
     if engine == "pollinations":
         return True                                     # free, no key
     if engine == "cloudflare":
-        return bool((cfg.get("cf_account_id") or "").strip()
-                    and (cfg.get("cf_api_token") or "").strip())
+        return bool(_cloudflare_accounts(cfg))         # single pair OR a pool
     if engine == "vertex":
         return llm.vertex_ready(cfg)
     return False
@@ -351,7 +350,7 @@ def _engine_floor(engine: str, cfg: dict) -> float:
 # real failure (image() moves on to the next engine). None of them retry or
 # sleep — pacing, backoff and cancellation all live in image().
 
-def _pollinations_raw(prompt: str, cfg: dict, dest: Path) -> None:
+def _pollinations_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     w, h = _aspect_wh(cfg)
     params = {"width": w, "height": h, "seed": random.randint(1, 2_000_000_000),
               "model": (cfg.get("pollinations_model") or "flux").strip(),
@@ -377,13 +376,74 @@ def _pollinations_raw(prompt: str, cfg: dict, dest: Path) -> None:
     dest.write_bytes(data)
 
 
-def _cloudflare_raw(prompt: str, cfg: dict, dest: Path) -> None:
-    acct = (cfg.get("cf_account_id") or "").strip()
-    token = (cfg.get("cf_api_token") or "").strip()
-    if not (acct and token):
-        raise GenError("Cloudflare needs cf_account_id and cf_api_token in config")
-    model = (cfg.get("cf_model") or CF_DEFAULT_MODEL).strip()
-    url = CF_RUN_URL.format(acct=acct, model=model)
+# Cloudflare accounts each get their OWN free daily Neuron allowance, so pooling
+# several (yours + friends') multiplies the free images per day. We rotate through
+# them and, when one hits its cap, rest it for a while and move to the next — the
+# resting map is process-wide so every scene/worker shares the same knowledge.
+_CF_LOCK = threading.Lock()
+_CF_REST: dict[str, float] = {}                # account_id → monotonic time it may be used again
+
+
+class _CFRateLimited(Exception):
+    """One Cloudflare account is rate-limited / over its daily cap — rest it and
+    rotate to the next account (distinct from _RateLimited, which pauses the whole
+    engine)."""
+
+
+def _cloudflare_accounts(cfg: dict) -> list[tuple[str, str]]:
+    """Every configured (account_id, token) pair: the single cf_account_id/token
+    first, then one 'account_id:token' per line of cf_accounts (a comma or space
+    between the two also works). Deduped by account id, blanks skipped."""
+    out, seen = [], set()
+
+    def add(aid, tok):
+        aid, tok = (aid or "").strip(), (tok or "").strip()
+        if aid and tok and aid not in seen:
+            seen.add(aid)
+            out.append((aid, tok))
+
+    add(cfg.get("cf_account_id"), cfg.get("cf_api_token"))
+    for line in str(cfg.get("cf_accounts") or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = re.split(r"[\s:,]+", line, maxsplit=1)
+        if len(parts) == 2:
+            add(parts[0], parts[1])
+    return out
+
+
+def _cf_ready(accounts: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    now = time.monotonic()
+    with _CF_LOCK:
+        return [(a, t) for (a, t) in accounts if _CF_REST.get(a, 0.0) <= now]
+
+
+def _cf_put_to_rest(account_id: str, minutes: float) -> None:
+    with _CF_LOCK:
+        _CF_REST[account_id] = time.monotonic() + max(0.0, minutes) * 60.0
+
+
+def _cf_reset() -> None:                       # for tests
+    with _CF_LOCK:
+        _CF_REST.clear()
+
+
+def _cf_is_cap(code: int, detail: str) -> bool:
+    """True when a Cloudflare error means 'this account is out of allowance / too
+    many requests' (rest it) rather than a bad prompt (fail over engines). The
+    daily-cap error (code 3040/4006 'neuron limit exceeded') can arrive as 400."""
+    if code in (429, 500, 502, 503, 504):
+        return True
+    low = detail.lower()
+    return any(s in low for s in ("neuron", "exceeded", "rate limit",
+                                  "too many", "3040", "4006"))
+
+
+def _cf_one(account_id: str, token: str, model: str, prompt: str, dest: Path) -> None:
+    """One request to one Cloudflare account. Raises _CFRateLimited when THAT
+    account is capped/limited, GenError for a genuine (prompt/model) failure."""
+    url = CF_RUN_URL.format(acct=account_id, model=model)
     body = json.dumps({"prompt": prompt}).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={
         "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
@@ -392,9 +452,10 @@ def _cloudflare_raw(prompt: str, cfg: dict, dest: Path) -> None:
             ctype = r.headers.get("Content-Type", "")
             raw = r.read()
     except urllib.error.HTTPError as e:
-        if e.code in (429, 500, 502, 503, 504):
-            raise _RateLimited(_server_retry_after(_read_error(e), e.headers))
-        raise GenError(f"Cloudflare HTTP {e.code}: {_read_error(e)}") from None
+        detail = _read_error(e)
+        if _cf_is_cap(e.code, detail):
+            raise _CFRateLimited() from None
+        raise GenError(f"Cloudflare HTTP {e.code}: {detail}") from None
     except Exception as e:
         raise GenError(f"Cloudflare request failed: {e}") from None
     if ctype.lower().startswith("image"):              # SDXL returns raw PNG bytes
@@ -412,12 +473,39 @@ def _cloudflare_raw(prompt: str, cfg: dict, dest: Path) -> None:
         except Exception:
             b64 = ""
     if not b64:
-        why = j.get("errors") or j.get("messages") or "no image in response"
-        raise GenError(f"Cloudflare produced nothing: {str(why)[:120]}")
+        why = str(j.get("errors") or j.get("messages") or "no image in response")
+        if _cf_is_cap(200, why):                       # cap sometimes reported in a 200 body
+            raise _CFRateLimited()
+        raise GenError(f"Cloudflare produced nothing: {why[:120]}")
     dest.write_bytes(base64.b64decode(b64))
 
 
-def _vertex_raw(prompt: str, cfg: dict, dest: Path) -> None:
+def _cloudflare_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
+    accounts = _cloudflare_accounts(cfg)
+    if not accounts:
+        raise GenError("Cloudflare needs an account id + token "
+                       "(cf_account_id/cf_api_token, or cf_accounts)")
+    model = (cfg.get("cf_model") or CF_DEFAULT_MODEL).strip()
+    rest_min = float(cfg.get("cf_rest_minutes", 15) or 15)
+    usable = _cf_ready(accounts)
+    if not usable:                                     # whole pool resting → fail fast
+        raise GenError(f"all {len(accounts)} Cloudflare account(s) are resting "
+                       "(daily cap) — will retry after their rest / the UTC reset")
+    for account_id, token in usable:
+        try:
+            _cf_one(account_id, token, model, prompt, dest)
+            return                                     # success
+        except _CFRateLimited:
+            _cf_put_to_rest(account_id, rest_min)
+            if callable(log):
+                log(f"  · Cloudflare account …{account_id[-6:]} over its limit — "
+                    f"resting {rest_min:.0f}m, trying the next account")
+            continue                                   # rotate to the next account
+        # a real GenError (bad prompt/model) is the same for every account: re-raise
+    raise GenError(f"all {len(accounts)} Cloudflare account(s) are rate-limited")
+
+
+def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     if not llm.vertex_ready(cfg):
         raise GenError("Vertex needs \"vertex_project\" in config")
     location = cfg.get("generate_location") or DEFAULT_LOCATION
@@ -518,7 +606,7 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> P
                     raise Cancelled()
                 _THROTTLE.pace(floor, should_cancel if callable(should_cancel) else None)
                 try:
-                    _ENGINE_RAW[eng](prompt, cfg, dest)
+                    _ENGINE_RAW[eng](prompt, cfg, dest, log)
                     _THROTTLE.ok(floor)
                     if eng != order[0]:
                         _note(f"· generated with {eng} (failover)")
