@@ -207,6 +207,12 @@ input[type=range]{accent-color:var(--accent)}
 .chname{font:600 15.5px var(--ui);overflow-wrap:anywhere;line-height:1.25}
 .chev{color:var(--ink3);font-size:11px;flex:none;width:12px;text-align:center}
 .chbody{margin:12px 0 4px}
+.chavatar{width:38px;height:38px;border-radius:50%;flex:none;object-fit:cover;overflow:hidden;
+  background:var(--surface3,#2a2a30);display:flex;align-items:center;justify-content:center;
+  font:600 14px var(--ui);color:var(--ink2);text-transform:uppercase}
+.chavatar img{width:100%;height:100%;object-fit:cover}
+.chmeta{font-size:12px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:520px}
 
 /* ─── status pills ───────────────────────────────────────────────────────── */
 .pill{display:inline-flex;align-items:center;gap:6px;font:600 12px var(--ui);
@@ -603,6 +609,79 @@ function askConfirm({ title, message, ok = 'OK', danger = false } = {}) {
     document.body.append(modal);
   });
 }
+
+// Edit a channel's profile: avatar image, connected email, and description.
+// Resolves true if anything was saved (so the caller repaints), false on cancel.
+// Nothing here deletes a channel or a project — it only writes profile fields.
+function channelEditor(name, meta = {}) {
+  return new Promise(resolve => {
+    let settled = false, imageData = null;   // imageData set only if a new file is picked
+    const done = v => { if (settled) return; settled = true; modal.remove(); resolve(v); };
+    const init = (name.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/)
+      .map(w => w[0]).join('').slice(0, 2) || name.slice(0, 2)).toUpperCase();
+
+    const preview = el('div', { class: 'chavatar', style: 'width:64px;height:64px;font-size:20px' });
+    const paint = url => {
+      preview.innerHTML = '';
+      if (url) preview.append(el('img', { src: url }));
+      else preview.textContent = init;
+    };
+    paint(meta.image_url || '');
+
+    const file = el('input', {
+      type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', style: 'display:none',
+      onchange: e => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        if (f.size > 5 * 1024 * 1024) return toast('Image is too large (max 5 MB).', true);
+        const rd = new FileReader();
+        rd.onload = () => { imageData = rd.result; paint(imageData); };
+        rd.readAsDataURL(f);
+      }
+    });
+    const email = el('input', {
+      type: 'text', value: meta.email || '', placeholder: 'channel@example.com',
+      style: 'width:100%;margin-top:6px'
+    });
+    const desc = el('textarea', {
+      placeholder: 'What this channel is about…',
+      style: 'width:100%;margin-top:6px;min-height:88px;font-family:var(--ui)'
+    });
+    desc.value = meta.description || '';
+
+    const save = el('button', { class: 'btn primary' }, 'Save');
+    save.onclick = async () => {
+      save.disabled = true;
+      try {
+        if (imageData) {
+          const r = await api('/api/channel_image', { name, data: imageData });
+          if (r.error) { save.disabled = false; return toast(r.error, true); }
+        }
+        const r2 = await api('/api/channels', {
+          action: 'meta', name, email: email.value.trim(), description: desc.value.trim()
+        });
+        if (r2.error) { save.disabled = false; return toast(r2.error, true); }
+        done(true);
+      } catch (e) { save.disabled = false; toast('Could not save: ' + e, true); }
+    };
+
+    const modal = el('div', { class: 'modal', onclick: e => { if (e.target === modal) done(false); } },
+      el('div', { class: 'box', style: 'max-width:480px' },
+        el('h3', {}, `Edit “${name}”`),
+        el('div', { class: 'row', style: 'margin-top:14px;gap:14px;align-items:center' },
+          preview,
+          el('button', { class: 'btn sm', onclick: () => file.click() }, 'Choose image…'),
+          file),
+        el('label', { class: 'sub', style: 'display:block;margin-top:16px' }, 'Connected email'),
+        email,
+        el('label', { class: 'sub', style: 'display:block;margin-top:14px' }, 'Description'),
+        desc,
+        el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end;gap:8px' },
+          el('button', { class: 'btn', onclick: () => done(false) }, 'Cancel'),
+          save)));
+    document.body.append(modal);
+  });
+}
 const fmtT = s => {
   s = Math.max(0, Math.round(s || 0));
   if (s < 60) return s + 's';
@@ -696,6 +775,7 @@ async function viewDashboard() {
     a + Object.values(p.status?.languages || {}).filter(l => l.render).length, 0);
 
   S.channels = d.channels || [];
+  S.channelMeta = d.channel_meta || {};
 
   const newChannel = async () => {
     const name = await askText({
@@ -807,12 +887,23 @@ async function viewDashboard() {
     if (r.error) return toast(r.error, true);
     viewDashboard();
   };
+  const editChannel = async name => {
+    const saved = await channelEditor(name, (S.channelMeta || {})[name] || {});
+    if (saved) viewDashboard();               // repaint with the new avatar/details
+  };
 
   const secTitle = t => el('div', { class: 'sec' }, el('h2', {}, t));
+
+  const initials = name => (name.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/)
+    .map(w => w[0]).join('').slice(0, 2) || name.slice(0, 2));
+  const avatar = (name, m) => (m && m.image_url)
+    ? el('div', { class: 'chavatar' }, el('img', { src: m.image_url, alt: name }))
+    : el('div', { class: 'chavatar' }, initials(name));
 
   const channelBlock = name => {
     const projs = S.projects.filter(p => p.channel === name);
     const done = projs.filter(p => overall(p.status || {}).text === 'complete').length;
+    const m = (S.channelMeta || {})[name] || {};
     const open = S.openChannels.has(name);
     const header = el('div', {
       class: 'chhead' + (open ? ' open' : ''),
@@ -820,12 +911,16 @@ async function viewDashboard() {
     },
       el('div', { class: 'chleft' },
         el('span', { class: 'chev' }, open ? '▾' : '▸'),
+        avatar(name, m),
         el('div', { style: 'min-width:0' },
           el('div', { class: 'chname' }, name),
           el('div', { class: 'sub' },
             `${projs.length} project${projs.length === 1 ? '' : 's'}`
-            + (projs.length ? ` · ${done} complete` : '')))),
+            + (projs.length ? ` · ${done} complete` : '')),
+          m.description ? el('div', { class: 'chmeta' }, m.description) : null,
+          m.email ? el('div', { class: 'chmeta mono' }, m.email) : null)),
       el('div', { class: 'row', style: 'gap:6px;flex:none', onclick: e => e.stopPropagation() },
+        el('button', { class: 'btn sm', onclick: () => editChannel(name) }, 'Edit'),
         el('button', { class: 'btn sm', onclick: () => renameChannel(name) }, 'Rename'),
         el('button', { class: 'btn sm danger', onclick: () => deleteChannel(name) }, 'Delete')));
     const body = open

@@ -18,6 +18,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FILE = ROOT / "channels.json"
+IMG_DIR = ROOT / "cache" / "channel_images"     # uploaded channel avatars live here
+
+# The optional per-channel profile fields. Everything here is additive: an older
+# channels.json without a "meta" block loads exactly as before, so upgrading can
+# never drop a channel, an assignment, or a project.
+META_FIELDS = ("image", "email", "description")
+
+
+def _clean_meta(raw) -> dict:
+    """A {channel: {image,email,description}} map, sanitised to strings."""
+    out = {}
+    for name, m in (raw or {}).items():
+        if not isinstance(m, dict):
+            continue
+        fields = {k: str(m.get(k) or "").strip() for k in META_FIELDS}
+        if any(fields.values()):
+            out[str(name)] = fields
+    return out
 
 
 def _load() -> dict:
@@ -38,14 +56,16 @@ def _load() -> dict:
                 if name not in seen:
                     seen.add(name)
                     channels.append(name)
-            return {"channels": channels, "assign": assign}
+            return {"channels": channels, "assign": assign,
+                    "meta": _clean_meta(d.get("meta"))}
         except Exception:
             pass
-    return {"channels": [], "assign": {}}
+    return {"channels": [], "assign": {}, "meta": {}}
 
 
 def _save(d: dict) -> None:
-    FILE.write_text(json.dumps({"channels": d["channels"], "assign": d["assign"]},
+    FILE.write_text(json.dumps({"channels": d["channels"], "assign": d["assign"],
+                                "meta": d.get("meta", {})},
                                indent=2) + "\n", encoding="utf-8")
 
 
@@ -113,6 +133,8 @@ def rename(old: str, new: str) -> dict:
             out.append(c)
     d["channels"] = out
     d["assign"] = {k: (new if v == old else v) for k, v in d["assign"].items()}
+    if old in d.get("meta", {}) and old != new:      # carry the profile across
+        d["meta"][new] = d["meta"].pop(old)
     _save(d)
     return d
 
@@ -123,6 +145,12 @@ def remove(name: str) -> dict:
     d = _load()
     d["channels"] = [c for c in d["channels"] if c != name]
     d["assign"] = {k: v for k, v in d["assign"].items() if v != name}
+    m = d.get("meta", {}).pop(name, None)            # forget its profile too
+    if m and m.get("image"):
+        try:
+            (IMG_DIR / m["image"]).unlink()          # tidy the orphaned avatar
+        except OSError:
+            pass
     _save(d)
     return d
 
@@ -133,3 +161,65 @@ def forget_project(pid: str) -> None:
     if pid in d["assign"]:
         d["assign"].pop(pid, None)
         _save(d)
+
+
+# ─────────────────────────────────────────────────────── channel profile
+
+def meta_of(name: str) -> dict:
+    """The profile ({image,email,description}) for one channel, blanks if unset."""
+    m = _load().get("meta", {}).get((name or "").strip(), {})
+    return {k: m.get(k, "") for k in META_FIELDS}
+
+
+def set_meta(name: str, *, email=None, description=None) -> dict:
+    """Update a channel's email/description (only the fields passed). Ensures the
+    channel exists so editing a freshly made channel always sticks. The image is
+    set separately via set_image()."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("channel name is empty")
+    d = _load()
+    if name not in d["channels"]:
+        d["channels"].append(name)
+    cur = d["meta"].get(name, {k: "" for k in META_FIELDS})
+    cur = {k: cur.get(k, "") for k in META_FIELDS}
+    if email is not None:
+        cur["email"] = str(email).strip()
+    if description is not None:
+        cur["description"] = str(description).strip()
+    d["meta"][name] = cur
+    _save(d)
+    return d
+
+
+def set_image(name: str, raw: bytes, ext: str) -> str:
+    """Save a channel avatar and record it; returns the stored filename. The old
+    image (if any) is removed so avatars don't pile up, and a random token in the
+    name busts any browser cache after a re-upload."""
+    import hashlib
+    import uuid
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("channel name is empty")
+    ext = (ext or "png").lower().lstrip(".")
+    if ext not in ("png", "jpg", "jpeg", "webp", "gif"):
+        ext = "png"
+    IMG_DIR.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+    fname = f"ch_{key}_{uuid.uuid4().hex[:8]}.{ext}"
+    (IMG_DIR / fname).write_bytes(raw)
+
+    d = _load()
+    if name not in d["channels"]:
+        d["channels"].append(name)
+    cur = {k: d["meta"].get(name, {}).get(k, "") for k in META_FIELDS}
+    old = cur.get("image")
+    cur["image"] = fname
+    d["meta"][name] = cur
+    _save(d)
+    if old and old != fname:
+        try:
+            (IMG_DIR / old).unlink()
+        except OSError:
+            pass
+    return fname

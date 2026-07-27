@@ -1035,7 +1035,7 @@ class Handler(BaseHTTPRequestHandler):
         # Anything that is NOT an asset or an API call is a navigation route.
         # Listing the asset prefixes rather than the app routes means adding a
         # new view needs no server change at all.
-        if not path.startswith(("/api/", "/media/", "/out/", "/preview/")):
+        if not path.startswith(("/api/", "/media/", "/out/", "/preview/", "/channelimg/")):
             return self._send(200, UI.read_bytes(), "text/html; charset=utf-8")
 
         if path == "/api/projects":
@@ -1062,9 +1062,19 @@ class Handler(BaseHTTPRequestHandler):
             chan = _ch.data(valid_pids=[pr["id"] for pr in projects])
             for pr in projects:
                 pr["channel"] = chan["assign"].get(pr["id"], "")
+            # Per-channel profile (image/email/description) for the dashboard.
+            # The image is exposed as a ready-to-use URL (with a cache-buster).
+            meta = {}
+            for name in chan["channels"]:
+                m = dict(chan.get("meta", {}).get(name, {}))
+                img = m.get("image") or ""
+                m["image_url"] = f"/channelimg/{img}" if img else ""
+                meta[name] = {"email": m.get("email", ""),
+                              "description": m.get("description", ""),
+                              "image_url": m["image_url"]}
             return self._json({
                 "projects": projects, "music": music,
-                "channels": chan["channels"],
+                "channels": chan["channels"], "channel_meta": meta,
                 "has_keys": bool(cfg.get("pexels_key") or cfg.get("pixabay_key")),
                 "has_gemini": bool(cfg.get("gemini_key")),
             })
@@ -1357,6 +1367,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_file(ROOT / "cache" / "stock" / name,
                                     ROOT / "cache" / "stock")
 
+        if path.startswith("/channelimg/"):
+            # Uploaded channel avatars.
+            from lib import channels as _ch
+            name = unquote(path[len("/channelimg/"):]).split("?")[0]
+            return self._serve_file(_ch.IMG_DIR / name, _ch.IMG_DIR)
+
         if path.startswith("/out/"):
             # Finished videos and subtitles now live per-project under
             # projects/<pid>/out/. The filename still carries the pid
@@ -1447,9 +1463,9 @@ class Handler(BaseHTTPRequestHandler):
                                "channels": d["channels"]})
 
         if path == "/api/channels":
-            # Manage the channel list itself: create / rename / delete a channel.
-            # Deleting a channel only drops the label — its projects are unassigned,
-            # never removed.
+            # Manage the channel list itself: create / rename / delete a channel,
+            # or edit its profile (email / description). Deleting a channel only
+            # drops the label — its projects are unassigned, never removed.
             from lib import channels as _ch
             action = (b.get("action") or "").strip().lower()
             try:
@@ -1459,11 +1475,39 @@ class Handler(BaseHTTPRequestHandler):
                     d = _ch.rename(b.get("old") or "", b.get("name") or "")
                 elif action == "delete":
                     d = _ch.remove(b.get("name") or "")
+                elif action == "meta":
+                    d = _ch.set_meta(b.get("name") or "",
+                                     email=b.get("email"),
+                                     description=b.get("description"))
                 else:
                     return self._json({"error": "unknown action"}, 400)
             except ValueError as e:
                 return self._json({"error": str(e)}, 400)
             return self._json({"channels": d["channels"]})
+
+        if path == "/api/channel_image":
+            # Upload a channel avatar. The image arrives as a data URL
+            # ("data:image/png;base64,…"); decode and store it. Capped so a huge
+            # paste can't fill the disk.
+            from lib import channels as _ch
+            name = (b.get("name") or "").strip()
+            data_url = b.get("data") or ""
+            if not name:
+                return self._json({"error": "channel name is empty"}, 400)
+            m = re.match(r"data:image/(png|jpe?g|webp|gif);base64,(.+)$",
+                         data_url, re.I | re.S)
+            if not m:
+                return self._json({"error": "expected a PNG/JPG/WebP/GIF image"}, 400)
+            try:
+                import base64 as _b64
+                raw = _b64.b64decode(m.group(2), validate=False)
+            except Exception:
+                return self._json({"error": "could not decode the image"}, 400)
+            if len(raw) > 5 * 1024 * 1024:
+                return self._json({"error": "image is too large (max 5 MB)"}, 400)
+            ext = m.group(1).lower().replace("jpeg", "jpg")
+            fname = _ch.set_image(name, raw, ext)
+            return self._json({"image_url": f"/channelimg/{fname}"})
 
         if path == "/api/config":
             # Save settings from the editor. Every value is validated against the

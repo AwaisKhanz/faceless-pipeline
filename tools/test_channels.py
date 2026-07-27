@@ -25,7 +25,9 @@ def main() -> int:
         print(f"  {'ok ' if ok else '!! '}{label:<52}{'' if ok else repr(got)}")
         bad += not ok
 
-    CH.FILE = pathlib.Path(tempfile.mkdtemp()) / "channels.json"
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    CH.FILE = tmp / "channels.json"
+    CH.IMG_DIR = tmp / "channel_images"        # keep test avatars out of the real cache
 
     print("\n  assign / create-on-assign / list:")
     CH.create("Superfruits")
@@ -62,6 +64,36 @@ def main() -> int:
     CH.assign("v1", "Superfruits")
     CH.forget_project("v1")
     check("assignment forgotten", CH.of("v1"), "")
+
+    print("\n  channel profile (image / email / description):")
+    CH.create("Superfruits")
+    CH.set_meta("Superfruits", email="hi@fruit.tv", description="Fruit facts")
+    m = CH.meta_of("Superfruits")
+    check("email saved", m["email"], "hi@fruit.tv")
+    check("description saved", m["description"], "Fruit facts")
+    check("partial update keeps the other field",
+          (CH.set_meta("Superfruits", email="new@fruit.tv"),
+           CH.meta_of("Superfruits")["description"])[1], "Fruit facts")
+    check("editing a not-yet-created channel creates it",
+          (CH.set_meta("Fresh", description="x"), "Fresh" in CH.names())[1], True)
+
+    print("\n  image save + rename carries the profile + delete drops it:")
+    fn = CH.set_image("Superfruits", b"\x89PNGfake", "png")
+    check("image filename recorded", CH.meta_of("Superfruits")["image"], fn)
+    check("image file written to disk", (CH.IMG_DIR / fn).exists(), True)
+    CH.rename("Superfruits", "Superfoods")
+    check("rename carried the email", CH.meta_of("Superfoods")["email"], "new@fruit.tv")
+    check("rename carried the image", CH.meta_of("Superfoods")["image"], fn)
+    check("old name has no profile", CH.meta_of("Superfruits")["email"], "")
+    CH.remove("Superfoods")
+    check("delete dropped the profile", CH.meta_of("Superfoods")["email"], "")
+    check("delete tidied the image file", (CH.IMG_DIR / fn).exists(), False)
+
+    print("\n  an OLD file with no meta block still loads (backward compatible):")
+    CH.FILE.write_text('{"channels":["Legacy"],"assign":{"v9":"Legacy"}}', encoding="utf-8")
+    check("legacy channels load", "Legacy" in CH.names(), True)
+    check("legacy assignment loads", CH.of("v9"), "Legacy")
+    check("legacy meta is empty, no crash", CH.meta_of("Legacy")["email"], "")
 
     print("\n  tolerates a corrupt file:")
     CH.FILE.write_text("{ this is not json", encoding="utf-8")
