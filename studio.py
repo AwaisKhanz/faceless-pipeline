@@ -890,13 +890,19 @@ def approval_data(pid: str) -> dict:
     cfg = pl.load_config()
     try:
         from lib import imagen as _IM
-        generate_on = _IM.available(cfg)
+        generate_on = _IM.available(cfg)          # image gen: true out of the box (Pollinations)
     except Exception:
         generate_on = False
+    try:
+        from lib import veo as _VEO               # video gen: only when Vertex is set up
+        veo_on = _VEO.available(cfg)
+    except Exception:
+        veo_on = False
     return {"id": pid, "label": proj["label"], "items": items,
             "clip_min": float(cfg.get("clip_min") or 0.45),
             "clip_on": VIS.capability(cfg)["ok"],
-            "generate_on": generate_on,
+            "generate_on": generate_on, "veo_on": veo_on,
+            "engine": (cfg.get("generate_engine") or "pollinations"),
             "missing": [i["n"] for i in items if not i["url"]]}
 
 

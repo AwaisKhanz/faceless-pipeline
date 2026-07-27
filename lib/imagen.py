@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import base64
 import json
+import random
 import re
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from . import llm
 
@@ -36,6 +38,23 @@ from . import llm
 DEFAULT_LOCATION = "global"
 DEFAULT_MODEL = "gemini-2.5-flash-image"       # "Nano Banana", ~$0.039/image
 DEFAULT_ASPECT = "16:9"
+
+# Which service actually makes the picture. The engine is chosen in Settings
+# (config `generate_engine`); if the chosen one fails or isn't configured, we
+# fall through the chain below to the next available engine, so a scene is never
+# left empty by one provider being down.
+#   pollinations — free, no key, public GET endpoint (default)
+#   cloudflare   — Cloudflare Workers AI (needs an account id + API token)
+#   vertex       — Google Vertex Gemini image models (needs a Vertex project)
+DEFAULT_ENGINE = "pollinations"
+ENGINE_CHAIN = ("pollinations", "cloudflare", "vertex")
+POLLINATIONS_URL = "https://image.pollinations.ai/prompt/"
+CF_RUN_URL = "https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/{model}"
+CF_DEFAULT_MODEL = "@cf/black-forest-labs/flux-1-schnell"
+# Pollinations' anonymous tier allows ~1 request / 15s; a free token lifts that.
+# We default the gap between calls to a polite 6s (the adaptive throttle widens
+# it automatically if the server still says "slow down").
+POLLINATIONS_MIN_INTERVAL = 6.0
 # Strong photoreal styling so a generated scene reads as a REAL photograph, not
 # an AI illustration/render. Kept explicit (and with the "not a…" negatives that
 # these models respond to) because the default otherwise drifts arty.
@@ -68,6 +87,16 @@ class Cancelled(Exception):
     of finishing the whole image first."""
 
 
+class _RateLimited(Exception):
+    """An engine said 'slow down' (HTTP 429/5xx). Carries the server's requested
+    cooldown when it gave one, else None so the caller backs off exponentially.
+    Handled by the shared throttle in image(); never leaks to callers."""
+
+    def __init__(self, retry_after: float | None = None):
+        super().__init__("rate limited")
+        self.retry_after = retry_after
+
+
 def _interruptible_sleep(seconds: float, should_cancel=None) -> None:
     """Sleep, but wake every ~200ms to see if the job was cancelled. A single
     long time.sleep() is why Stop 'did nothing for ages' — the worker was parked
@@ -87,12 +116,40 @@ def _interruptible_sleep(seconds: float, should_cancel=None) -> None:
         time.sleep(min(0.2, left))
 
 
+def engine_ready(engine: str, cfg: dict | None) -> bool:
+    """Is one engine usable with the current config? Pollinations needs nothing,
+    Cloudflare needs an account id + token, Vertex needs a project (+ google-auth)."""
+    cfg = cfg or {}
+    if engine == "pollinations":
+        return True                                     # free, no key
+    if engine == "cloudflare":
+        return bool((cfg.get("cf_account_id") or "").strip()
+                    and (cfg.get("cf_api_token") or "").strip())
+    if engine == "vertex":
+        return llm.vertex_ready(cfg)
+    return False
+
+
+def selected_engine(cfg: dict | None) -> str:
+    """The engine the user picked in Settings, defaulting to Pollinations."""
+    e = str((cfg or {}).get("generate_engine") or DEFAULT_ENGINE).strip().lower()
+    return e if e in ENGINE_CHAIN else DEFAULT_ENGINE
+
+
+def engine_order(cfg: dict | None) -> list[str]:
+    """The engines to try, in order: the chosen one first, then the rest of the
+    failover chain — keeping only the ones that are actually configured."""
+    chosen = selected_engine(cfg)
+    seq = [chosen] + [e for e in ENGINE_CHAIN if e != chosen]
+    return [e for e in seq if engine_ready(e, cfg)]
+
+
 def available(cfg: dict | None) -> bool:
-    """Can we generate at all? True only when Vertex is genuinely ready — a
-    project, the service-account file if one is named, and google-auth installed.
-    So the UI never offers generation that would then fail, and sourcing degrades
-    to 'search only' when it is not set up."""
-    return llm.vertex_ready(cfg)
+    """Can we generate at all? True when ANY engine is usable. Pollinations needs
+    no key, so generation is available out of the box; the UI can always offer it
+    and sourcing can always fall back to it."""
+    cfg = cfg or {}
+    return any(engine_ready(e, cfg) for e in ENGINE_CHAIN)
 
 
 def prompt_for(query: str, cfg: dict | None = None) -> str:
@@ -236,11 +293,10 @@ def _semaphore(cfg: dict) -> threading.Semaphore:
         return _SEM
 
 
-def _retry_delay(detail: str, headers, attempt: int) -> float:
-    """How long to wait before retrying. Prefer the server's own instruction —
-    Google puts a 'retryDelay' like '17s' in the 429 body, and HTTP may carry a
-    Retry-After header — and only fall back to exponential backoff (2, 4, 8, …)
-    when neither is present. Capped so one call can't stall forever."""
+def _server_retry_after(detail: str, headers) -> float | None:
+    """The cooldown the server explicitly asked for, or None. Google puts a
+    'retryDelay' like '17s' in the 429 body; HTTP may carry a Retry-After header.
+    When neither is present the caller backs off exponentially instead."""
     try:
         for item in (json.loads(detail).get("error", {}).get("details") or []):
             rd = str(item.get("retryDelay") or "")
@@ -254,21 +310,177 @@ def _retry_delay(detail: str, headers, attempt: int) -> float:
             return min(_CAP, float(ra) + 0.5)
     except Exception:
         pass
-    return min(_CAP, 2.0 ** attempt)
+    return None
+
+
+def _read_error(e: urllib.error.HTTPError) -> str:
+    try:
+        return e.read().decode("utf-8", "replace")[:1000]
+    except Exception:
+        return ""
+
+
+def _aspect_wh(cfg: dict) -> tuple[int, int]:
+    """Pixel size for a requested aspect (default 16:9 → 1280×720). Engines that
+    take width/height (Pollinations) get a frame-shaped image instead of a square
+    one that would later be cropped."""
+    asp = str((cfg or {}).get("generate_aspect") or DEFAULT_ASPECT)
+    try:
+        a, b = (float(x) for x in asp.split(":"))
+    except Exception:
+        a, b = 16.0, 9.0
+    long = 1280.0
+    w, h = (long, long * b / a) if a >= b else (long * a / b, long)
+    return int(w) // 2 * 2, int(h) // 2 * 2       # even dimensions
+
+
+def _engine_floor(engine: str, cfg: dict) -> float:
+    """Minimum seconds between calls for an engine. Pollinations' public tier is
+    slow (≈1 req/15s), so it gets a larger polite floor than the paid engines."""
+    base = float((cfg or {}).get("generate_min_interval", 4.0) or 0)
+    if engine == "pollinations":
+        want = float((cfg or {}).get("pollinations_interval", POLLINATIONS_MIN_INTERVAL) or 0)
+        return max(base, want)
+    return base
+
+
+# ───────────────────────────────────────────── engines (one raw attempt each)
+#
+# Each `_*_raw` makes ONE request and either writes the image to `dest` or raises:
+# _RateLimited for a 429/5xx (the shared throttle waits it out), GenError for a
+# real failure (image() moves on to the next engine). None of them retry or
+# sleep — pacing, backoff and cancellation all live in image().
+
+def _pollinations_raw(prompt: str, cfg: dict, dest: Path) -> None:
+    w, h = _aspect_wh(cfg)
+    params = {"width": w, "height": h, "seed": random.randint(1, 2_000_000_000),
+              "model": (cfg.get("pollinations_model") or "flux").strip(),
+              "nologo": "true", "private": "true"}
+    url = POLLINATIONS_URL + quote(prompt, safe="") + "?" + urlencode(params)
+    headers = {"User-Agent": "faceless-pipeline"}
+    token = (cfg.get("pollinations_token") or "").strip()
+    if token:                                          # lifts rate limit + watermark
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            ctype = r.headers.get("Content-Type", "")
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        if e.code in (429, 500, 502, 503, 504):
+            raise _RateLimited(_server_retry_after(_read_error(e), e.headers))
+        raise GenError(f"Pollinations HTTP {e.code}") from None
+    except Exception as e:
+        raise GenError(f"Pollinations request failed: {e}") from None
+    if not data or (ctype and not ctype.lower().startswith("image")):
+        raise GenError("Pollinations returned no image (busy or filtered)")
+    dest.write_bytes(data)
+
+
+def _cloudflare_raw(prompt: str, cfg: dict, dest: Path) -> None:
+    acct = (cfg.get("cf_account_id") or "").strip()
+    token = (cfg.get("cf_api_token") or "").strip()
+    if not (acct and token):
+        raise GenError("Cloudflare needs cf_account_id and cf_api_token in config")
+    model = (cfg.get("cf_model") or CF_DEFAULT_MODEL).strip()
+    url = CF_RUN_URL.format(acct=acct, model=model)
+    body = json.dumps({"prompt": prompt}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            ctype = r.headers.get("Content-Type", "")
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        if e.code in (429, 500, 502, 503, 504):
+            raise _RateLimited(_server_retry_after(_read_error(e), e.headers))
+        raise GenError(f"Cloudflare HTTP {e.code}: {_read_error(e)}") from None
+    except Exception as e:
+        raise GenError(f"Cloudflare request failed: {e}") from None
+    if ctype.lower().startswith("image"):              # SDXL returns raw PNG bytes
+        dest.write_bytes(raw)
+        return
+    try:                                               # flux returns JSON base64
+        j = json.loads(raw)
+    except Exception:
+        raise GenError("Cloudflare returned an unreadable response") from None
+    result = j.get("result") or {}
+    b64 = result.get("image") or ""
+    if not b64:
+        try:
+            b64 = result["data"][0]["b64_json"]        # OpenAI-compatible shape
+        except Exception:
+            b64 = ""
+    if not b64:
+        why = j.get("errors") or j.get("messages") or "no image in response"
+        raise GenError(f"Cloudflare produced nothing: {str(why)[:120]}")
+    dest.write_bytes(base64.b64decode(b64))
+
+
+def _vertex_raw(prompt: str, cfg: dict, dest: Path) -> None:
+    if not llm.vertex_ready(cfg):
+        raise GenError("Vertex needs \"vertex_project\" in config")
+    location = cfg.get("generate_location") or DEFAULT_LOCATION
+    model = cfg.get("generate_model") or DEFAULT_MODEL
+    sa_path = cfg.get("vertex_service_account") or ""
+    aspect = cfg.get("generate_aspect") or DEFAULT_ASPECT
+    try:
+        token = llm._vertex_token(sa_path)
+    except llm.LLMError as e:
+        raise GenError(str(e)) from None
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"],
+                             "imageConfig": {"aspectRatio": aspect}},
+    }
+    url = _endpoint(cfg["vertex_project"], location, model)
+    auth_retried = False
+    out = None
+    while out is None:                                 # only auth / imageConfig retries here
+        try:
+            out = _generate(url, body, token)
+        except urllib.error.HTTPError as e:
+            detail = _read_error(e)
+            if e.code in (401, 403) and not auth_retried:
+                auth_retried = True
+                llm._VERTEX_CREDS.clear()
+                try:
+                    token = llm._vertex_token(sa_path)
+                except Exception as e2:
+                    raise GenError(f"Vertex auth failed: {e2}") from None
+                continue
+            if e.code == 400 and "imageConfig" in detail:
+                body["generationConfig"].pop("imageConfig", None)
+                continue
+            if e.code in (429, 500, 503):
+                raise _RateLimited(_server_retry_after(detail, e.headers)) from None
+            raise GenError(f"Vertex HTTP {e.code}: {detail}") from None
+        except Exception as e:
+            raise GenError(f"Vertex request failed: {e}") from None
+    b64 = _first_image(out)
+    if not b64:
+        raise GenError(f"Vertex produced nothing: {_reason(out)}")
+    dest.write_bytes(base64.b64decode(b64))
+
+
+_ENGINE_RAW = {"pollinations": _pollinations_raw,
+               "cloudflare": _cloudflare_raw,
+               "vertex": _vertex_raw}
 
 
 def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> Path:
-    """Generate ONE 16:9 image for `prompt` and write it to `dest`.
+    """Generate ONE image for `prompt` and write it to `dest`, using the engine
+    chosen in Settings and falling through the failover chain if it can't.
 
-    Cached: if `dest` already holds an image, it is returned without spending a
-    call. Rate limits (429) are throttled and retried with backoff rather than
-    failing; only a genuine, persistent failure raises GenError so the caller can
-    fall back to search. `log` (optional) receives one line per retry.
+    Cached: if `dest` already holds an image it is returned without a call. Each
+    engine is paced by the shared adaptive throttle and its 429s are waited out
+    with backoff; a hard failure moves on to the next available engine, and only
+    when EVERY engine has failed does GenError bubble up (so the caller can fall
+    back to search). `log` receives one line per retry / engine switch.
 
-    `should_cancel` (optional) is polled while WAITING — for a free concurrency
-    slot and during every throttle/backoff sleep — and raises Cancelled the
-    moment Stop is pressed, so a queued generation never keeps a job alive for
-    minutes after the user asked it to stop.
+    `should_cancel` is polled while WAITING — for a free concurrency slot and
+    during every throttle/backoff sleep — and raises Cancelled the moment Stop is
+    pressed, so a queued generation never keeps a job alive after the user stops.
     """
     def _note(msg: str) -> None:
         if callable(log):
@@ -279,101 +491,56 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> P
 
     def _stop() -> bool:
         return bool(callable(should_cancel) and should_cancel())
+
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0:
         return dest                        # already generated — reuse, no cost
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
-    project = cfg.get("vertex_project")
-    if not project:
-        raise GenError("image generation needs \"vertex_project\" in config.json")
-    location = cfg.get("generate_location") or DEFAULT_LOCATION
-    model = cfg.get("generate_model") or DEFAULT_MODEL
-    sa_path = cfg.get("vertex_service_account") or ""
-    aspect = cfg.get("generate_aspect") or DEFAULT_ASPECT
-
-    try:
-        token = llm._vertex_token(sa_path)
-    except llm.LLMError as e:
-        raise GenError(str(e)) from None
-
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-            "imageConfig": {"aspectRatio": aspect},
-        },
-    }
-    url = _endpoint(project, location, model)
-
-    def _call(b: dict, tok: str) -> dict:
-        return _generate(url, b, tok)
-
+    order = engine_order(cfg)
+    if not order:
+        raise GenError("no image engine is configured")
     retries = max(0, int(cfg.get("generate_retries", 5) or 0))
-    floor = float(cfg.get("generate_min_interval", 4.0) or 0)
-    auth_retried = False
-    out = None
-    # One generation at a time (per generate_workers), paced by the shared adaptive
-    # throttle. A 429 is waited out AND widens the gap for the next scene, so we
-    # settle onto the real quota instead of firing rejected request after rejected
-    # request. Acquire the slot cancellably so Stop is honoured even while another
-    # job is holding it.
+
+    # One generation at a time (per generate_workers). Acquire the slot cancellably
+    # so Stop is honoured even while another job holds it.
     sem = _semaphore(cfg)
     while not sem.acquire(timeout=0.25):
         if _stop():
             raise Cancelled()
     try:
-        attempt = 0
-        while out is None:
-            if _stop():
-                raise Cancelled()
-            _THROTTLE.pace(floor, should_cancel if callable(should_cancel) else None)
-            try:
-                out = _call(body, token)
-                _THROTTLE.ok(floor)
-            except urllib.error.HTTPError as e:
-                detail = ""
+        errors = []
+        for eng in order:
+            floor = _engine_floor(eng, cfg)
+            attempt = 0
+            while True:
+                if _stop():
+                    raise Cancelled()
+                _THROTTLE.pace(floor, should_cancel if callable(should_cancel) else None)
                 try:
-                    detail = e.read().decode("utf-8", "replace")[:1000]
-                except Exception:
-                    pass
-                if e.code in (401, 403):       # token expired mid-run: mint once more
-                    if auth_retried:
-                        raise GenError(f"image auth failed (HTTP {e.code})") from None
-                    auth_retried = True
-                    llm._VERTEX_CREDS.clear()
-                    try:
-                        token = llm._vertex_token(sa_path)
-                    except Exception as e2:
-                        raise GenError(f"image auth failed: {e2}") from None
-                    continue
-                if e.code == 400 and "imageConfig" in detail:
-                    # Older model that doesn't accept imageConfig — retry without it.
-                    body["generationConfig"].pop("imageConfig", None)
-                    continue
-                if e.code in (429, 500, 503) and attempt < retries:
-                    attempt += 1
-                    wait = _retry_delay(detail, getattr(e, "headers", None), attempt)
-                    _THROTTLE.hit_limit(wait)   # widen the gap for THIS + later scenes
-                    _note(f"· image model busy ({e.code}) — easing to "
-                          f"{_THROTTLE.gap:.0f}s between images; waiting {wait:.0f}s "
-                          f"(retry {attempt}/{retries})")
-                    continue                    # pace() will serve the cooldown
-                if e.code == 429:
-                    raise GenError(
-                        f"image model is rate-limiting (429) after {retries} retries — "
-                        "the quota is very tight; raise generate_min_interval or lower "
-                        "generate_max, or try again later."
-                    ) from None
-                raise GenError(f"image HTTP {e.code}: {detail}") from None
-            except Exception as e:
-                raise GenError(f"image request failed: {e}") from None
+                    _ENGINE_RAW[eng](prompt, cfg, dest)
+                    _THROTTLE.ok(floor)
+                    if eng != order[0]:
+                        _note(f"· generated with {eng} (failover)")
+                    return dest
+                except Cancelled:
+                    raise
+                except _RateLimited as rl:
+                    if attempt < retries:
+                        attempt += 1
+                        wait = rl.retry_after or min(_CAP, 2.0 ** attempt)
+                        _THROTTLE.hit_limit(wait)   # widen the gap for later scenes too
+                        _note(f"· {eng} busy — easing to {_THROTTLE.gap:.0f}s "
+                              f"between images; waiting {wait:.0f}s "
+                              f"(retry {attempt}/{retries})")
+                        continue                    # pace() serves the cooldown
+                    errors.append(f"{eng}: still rate-limited after {retries} tries")
+                    _note(f"· {eng} still busy — switching engine")
+                    break
+                except GenError as e:
+                    errors.append(f"{eng}: {e}")
+                    _note(f"· {eng} failed ({str(e)[:80]}) — switching engine")
+                    break
+        raise GenError("all image engines failed — " + " | ".join(errors))
     finally:
         sem.release()
-
-    b64 = _first_image(out)
-    if not b64:
-        raise GenError(f"image model produced nothing: {_reason(out)}")
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(base64.b64decode(b64))
-    return dest

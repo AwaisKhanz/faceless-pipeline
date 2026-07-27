@@ -23,11 +23,17 @@ def main() -> int:
             bad += 1
 
     print("Imagen generation\n")
-    # available() delegates to llm.vertex_ready (a real config check, incl.
-    # google-auth); stub it here so this suite tests the delegation, not the env.
+    # Vertex readiness is a real config check (incl. google-auth); stub it here so
+    # this suite tests the delegation, not the env.
     llm.vertex_ready = lambda cfg: bool((cfg or {}).get("vertex_project"))
-    check("no project -> unavailable", im.available({}), False)
-    check("a project -> available", im.available({"vertex_project": "p"}), True)
+    # Generation is available out of the box now (Pollinations needs no key), so
+    # available() is True even with no Vertex project. Vertex readiness is tested
+    # separately via engine_ready().
+    check("generation available with no keys (Pollinations)", im.available({}), True)
+    check("Vertex engine needs a project",
+          im.engine_ready("vertex", {}), False)
+    check("Vertex engine ready with a project",
+          im.engine_ready("vertex", {"vertex_project": "p"}), True)
 
     p = im.prompt_for("data center servers", {})
     check("prompt keeps the subject", "data center servers" in p)
@@ -49,8 +55,15 @@ def main() -> int:
             {"inlineData": {"mimeType": "image/png", "data": tiny}}]}}]}
     im._generate = fake_generate
 
+    # Isolate the Vertex engine for these checks: make the other engines fail
+    # instantly so failover can't reach the real network.
+    def _no_net(*a, **k):
+        raise im.GenError("no network in test")
+    im._ENGINE_RAW["pollinations"] = _no_net
+    im._ENGINE_RAW["cloudflare"] = _no_net
+
     cfg = {"vertex_project": "proj", "generate_location": "global",
-           "vertex_service_account": ""}
+           "vertex_service_account": "", "generate_engine": "vertex"}
     dest = Path(tempfile.mkdtemp()) / "g.png"
     out = im.image("a rocket launch", cfg, dest)
     check("writes the image file", out.exists() and out.stat().st_size > 0)
@@ -82,13 +95,13 @@ def main() -> int:
     except im.GenError:
         check("a reply with no image raises GenError", True)
 
-    # missing project -> GenError before any network call
+    # no working engine (Vertex chosen but unconfigured, others stubbed off) -> GenError
     try:
-        im.image("x", {"generate_location": "global"},
+        im.image("x", {"generate_engine": "vertex"},
                  Path(tempfile.mkdtemp()) / "g3.png")
-        check("missing project raises", False)
+        check("no working engine raises", False)
     except im.GenError:
-        check("missing project raises GenError", True)
+        check("no working engine raises GenError", True)
 
     # ── rate limiting: back off on 429 instead of surrendering ──────────────
     print("\n  429 backoff + throttle:")
@@ -97,11 +110,11 @@ def main() -> int:
     from types import SimpleNamespace as _NS
 
     check("retryDelay is read from the server's 429 body",
-          im._retry_delay('{"error":{"details":[{"retryDelay":"7s"}]}}', None, 1), 7.5)
+          im._server_retry_after('{"error":{"details":[{"retryDelay":"7s"}]}}', None), 7.5)
     check("Retry-After header is honoured when there's no body delay",
-          im._retry_delay("{}", {"Retry-After": "9"}, 1), 9.5)
-    check("no server hint -> exponential backoff (2,4,8…)",
-          im._retry_delay("{}", None, 3), 8.0)
+          im._server_retry_after("{}", {"Retry-After": "9"}), 9.5)
+    check("no server hint -> None (caller backs off exponentially)",
+          im._server_retry_after("{}", None), None)
     check("generate_workers sizes the concurrency gate",
           im._semaphore({"generate_workers": 2})._value, 2)
 
@@ -114,7 +127,8 @@ def main() -> int:
     im._THROTTLE.reset()
     rl_cfg = {"vertex_project": "proj", "generate_location": "global",
               "vertex_service_account": "", "generate_min_interval": 0,
-              "generate_retries": 5, "generate_workers": 1}
+              "generate_retries": 5, "generate_workers": 1,
+              "generate_engine": "vertex"}
     try:
         tries = {"n": 0}
 
@@ -143,7 +157,8 @@ def main() -> int:
                      Path(tempfile.mkdtemp()) / "r2.png")
             check("a persistent 429 eventually raises", False)
         except im.GenError as e:
-            check("a persistent 429 raises GenError (mentions 429)", "429" in str(e))
+            check("a persistent 429 gives up (all engines failed)",
+                  "rate-limited" in str(e) and "engines failed" in str(e))
     finally:
         im.time = saved_time
         im._THROTTLE.reset()
@@ -161,6 +176,51 @@ def main() -> int:
         check("a cancelled generation raises Cancelled", True)
     except Exception as e:
         check("a cancelled generation raises Cancelled", False, repr(e))
+
+    # ── engine selection + failover chain ───────────────────────────────────
+    print("\n  engine selection + failover chain:")
+    im._THROTTLE.reset()
+    check("default engine is Pollinations", im.selected_engine({}), "pollinations")
+    check("Pollinations needs no key", im.engine_ready("pollinations", {}), True)
+    check("Cloudflare needs id AND token",
+          im.engine_ready("cloudflare", {"cf_account_id": "a"}), False)
+    check("Cloudflare ready with id + token",
+          im.engine_ready("cloudflare", {"cf_account_id": "a", "cf_api_token": "t"}), True)
+    check("order = chosen first, then chain, ready only",
+          im.engine_order({"generate_engine": "cloudflare",
+                           "cf_account_id": "a", "cf_api_token": "t"}),
+          ["cloudflare", "pollinations"])
+    check("generation is available out of the box (Pollinations)", im.available({}), True)
+
+    calls = []
+
+    def _bad(name):
+        def f(prompt, cfg, dest):
+            calls.append(name)
+            raise im.GenError(name + " down")
+        return f
+
+    def _good(name):
+        def f(prompt, cfg, dest):
+            calls.append(name)
+            Path(dest).write_bytes(b"IMG")
+        return f
+
+    saved_raw = dict(im._ENGINE_RAW)
+    im._ENGINE_RAW["pollinations"] = _bad("pollinations")
+    im._ENGINE_RAW["cloudflare"] = _good("cloudflare")
+    im._ENGINE_RAW["vertex"] = _bad("vertex")
+    try:
+        d = im.image("x", {"cf_account_id": "a", "cf_api_token": "t",
+                           "generate_min_interval": 0, "pollinations_interval": 0},
+                     Path(tempfile.mkdtemp()) / "fo.png")
+        check("failover: Pollinations failed → Cloudflare made it",
+              calls, ["pollinations", "cloudflare"])
+        check("failover wrote the image", d.exists() and d.stat().st_size > 0)
+    finally:
+        im._ENGINE_RAW.clear()
+        im._ENGINE_RAW.update(saved_raw)
+        im._THROTTLE.reset()
 
     # ── manual per-scene generation (review page path) ──────────────────────
     print("\n  manual generate_scenes (the review-page 'Generate' button):")

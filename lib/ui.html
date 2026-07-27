@@ -2600,7 +2600,7 @@ async function viewReview(id) {
 
   // Video generation (Veo) — the expensive one, so it always asks first and is
   // capped server-side by veo_max. Only offered when Vertex is configured.
-  const vidBtn = d.generate_on ? el('button', {
+  const vidBtn = d.veo_on ? el('button', {
     class: 'btn', disabled: true, style: 'margin-left:8px', onclick: async e => {
       if (!rejected.size) return;
       const yes = await askConfirm({
