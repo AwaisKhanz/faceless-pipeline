@@ -226,6 +226,12 @@ input[type=range]{accent-color:var(--accent)}
 .pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 34%,transparent);
   background:color-mix(in srgb,var(--bad) 12%,transparent)}
 .pill.none{color:var(--ink3);border-color:var(--line);background:var(--surface2)}
+.pill.yt{color:#ff5a5f;border-color:color-mix(in srgb,#ff5a5f 42%,transparent);
+  background:color-mix(in srgb,#ff5a5f 14%,transparent)}
+.pill.yt::before{display:none}
+.card.uploaded{border-color:color-mix(in srgb,#ff5a5f 55%,var(--line));
+  box-shadow:0 0 0 1px color-mix(in srgb,#ff5a5f 45%,transparent) inset}
+.card.uploaded:hover{border-color:#ff5a5f}
 
 /* ─── per-language rows & step bars ──────────────────────────────────────── */
 .langrow{display:flex;align-items:center;gap:12px;padding:0}
@@ -813,6 +819,23 @@ async function viewDashboard() {
     viewDashboard();
   };
 
+  // Mark a project as uploaded to YouTube (or clear it) straight from its card.
+  const setUploaded = async (pid, uploaded) => {
+    const r = await api('/api/project_upload', { id: pid, uploaded });
+    if (r.error) return toast(r.error, true);
+    viewDashboard();
+  };
+  const uploadToggle = p => el('label', {
+    class: 'chk', style: 'font-size:12.5px;gap:6px', title: 'Mark once published on YouTube',
+    onclick: e => e.stopPropagation()
+  },
+    el('input', {
+      type: 'checkbox', checked: !!p.uploaded,
+      onclick: e => e.stopPropagation(),
+      onchange: e => setUploaded(p.id, e.target.checked)
+    }),
+    'On YouTube');
+
   // A small "which channel" picker on each card — move without opening the project.
   const channelPicker = p => {
     const sel = el('select', {
@@ -842,7 +865,7 @@ async function viewDashboard() {
   const projectCard = p => {
     const st = p.status || { languages: {}, scenes: 0, assets: 0 };
     const o = overall(st);
-    return el('div', { class: 'card click', onclick: () => go('/project/' + p.id) },
+    return el('div', { class: 'card click' + (p.uploaded ? ' uploaded' : ''), onclick: () => go('/project/' + p.id) },
       el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start;gap:10px' },
         el('div', { style: 'min-width:0;flex:1' },
           // A long, space-less title (German compounds) must wrap inside the card,
@@ -850,7 +873,9 @@ async function viewDashboard() {
           el('h3', { style: 'overflow-wrap:anywhere;word-break:break-word' }, p.id),
           el('div', { class: 'sub', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
             (p.label || '').replace(p.id + ' — ', ''))),
-        el('span', { class: 'pill ' + o.cls, style: 'flex:none' }, o.text)),
+        el('div', { class: 'row', style: 'flex:none;gap:6px' },
+          p.uploaded ? el('span', { class: 'pill yt', title: 'Marked as uploaded to YouTube' }, '▶ Uploaded') : null,
+          el('span', { class: 'pill ' + o.cls }, o.text))),
       el('div', { style: 'margin:12px 0 4px' },
         Object.entries(st.languages || {}).map(([code, l]) =>
           el('div', { class: 'langrow' },
@@ -861,7 +886,7 @@ async function viewDashboard() {
       el('div', { class: 'row', style: 'margin-top:10px;justify-content:space-between;align-items:center;gap:8px' },
         el('span', { class: 'sub', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
           `${st.scenes} scenes · ${st.assets} visuals sourced`),
-        channelPicker(p)));
+        el('div', { class: 'row', style: 'flex:none;gap:8px' }, uploadToggle(p), channelPicker(p))));
   };
 
   // ── Channels as folders: each channel is a collapsible card (name +
@@ -1000,6 +1025,17 @@ async function viewProject(id) {
     el('div', { class: 'row', style: 'align-items:center;gap:10px' },
       el('span', { class: 'sub' }, 'Channel'),
       channelSel,
+      el('label', { class: 'chk', style: 'gap:6px', title: 'Mark once this video is published on YouTube' },
+        el('input', {
+          type: 'checkbox', checked: !!p.uploaded,
+          onchange: async e => {
+            const r = await api('/api/project_upload', { id: p.id, uploaded: e.target.checked });
+            if (r.error) { e.target.checked = !e.target.checked; return toast(r.error, true); }
+            p.uploaded = r.uploaded;
+            toast(r.uploaded ? 'Marked as uploaded to YouTube.' : 'Unmarked.');
+          }
+        }),
+        'On YouTube'),
       el('span', { class: 'pill ' + o.cls }, o.text),
       el('button', { class: 'btn sm danger', onclick: () => askDelete(p.id) },
         'Delete…'))));

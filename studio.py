@@ -1059,9 +1059,12 @@ class Handler(BaseHTTPRequestHandler):
             # any assignment whose project no longer exists) so the dashboard can
             # group by channel in one request.
             from lib import channels as _ch
+            from lib import pflags as _pf
             chan = _ch.data(valid_pids=[pr["id"] for pr in projects])
+            flags = _pf.data(valid_pids=[pr["id"] for pr in projects])
             for pr in projects:
                 pr["channel"] = chan["assign"].get(pr["id"], "")
+                pr["uploaded"] = bool(flags.get(pr["id"], {}).get("uploaded"))
             # Per-channel profile (image/email/description) for the dashboard.
             # The image is exposed as a ready-to-use URL (with a cache-buster).
             meta = {}
@@ -1462,6 +1465,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"channel": d["assign"].get(pid, ""),
                                "channels": d["channels"]})
 
+        if path == "/api/project_upload":
+            # Mark (or unmark) a project as uploaded to YouTube.
+            from lib import pflags as _pf
+            pid = (b.get("id") or "").strip()
+            if not pid or pl.find_project(pid) is None:
+                return self._json({"error": f"no project called {pid!r}"}, 404)
+            f = _pf.set_uploaded(pid, bool(b.get("uploaded")))
+            return self._json({"uploaded": f["uploaded"], "uploaded_at": f["uploaded_at"]})
+
         if path == "/api/channels":
             # Manage the channel list itself: create / rename / delete a channel,
             # or edit its profile (email / description). Deleting a channel only
@@ -1637,7 +1649,9 @@ class Handler(BaseHTTPRequestHandler):
             res = pl.delete_project(Path(proj["sheet"]), proj["languages"], what)
             if "sheets" in what:                 # the project itself is gone
                 from lib import channels as _ch
+                from lib import pflags as _pf
                 _ch.forget_project(pid)
+                _pf.forget(pid)
             log(f"Deleted {res['count']} file(s) from {pid} "
                 f"({res['freed_mb']} MB freed)")
             return self._json(res)
