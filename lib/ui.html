@@ -197,6 +197,16 @@ input[type=range]{accent-color:var(--accent)}
 .sub{color:var(--ink3);font-size:12.5px}
 .card.click{cursor:pointer;transition:.14s ease}
 .card.click:hover{border-color:var(--line2);transform:translateY(-2px);box-shadow:var(--shadow)}
+.chwrap{margin-bottom:12px}
+.chhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:13px 16px;cursor:pointer;transition:.14s ease}
+.chhead:hover{border-color:var(--line2)}
+.chhead.open{background:var(--surface2);border-color:var(--line2)}
+.chleft{display:flex;align-items:center;gap:12px;min-width:0}
+.chname{font:600 15.5px var(--ui);overflow-wrap:anywhere;line-height:1.25}
+.chev{color:var(--ink3);font-size:11px;flex:none;width:12px;text-align:center}
+.chbody{margin:12px 0 4px}
 
 /* ─── status pills ───────────────────────────────────────────────────────── */
 .pill{display:inline-flex;align-items:center;gap:6px;font:600 12px var(--ui);
@@ -774,16 +784,10 @@ async function viewDashboard() {
         channelPicker(p)));
   };
 
-  // ── channels are a FILTER, not the page layout: a chip row up top, one clean
-  //    grid of projects below (all by default). ──────────────────────────────
-  let active = '__all__';
-  const counts = {};
-  S.projects.forEach(p => { const c = p.channel || ''; counts[c] = (counts[c] || 0) + 1; });
-
-  const bar = el('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;margin-bottom:6px' });
-  const actions = el('div', { class: 'row', style: 'gap:8px;margin:2px 0 8px' });
-  const head = el('h2', {}, 'All projects');
-  const grid = el('div', {});
+  // ── Channels as folders: each channel is a collapsible card (name +
+  //    project count) that opens to reveal its projects; ungrouped projects sit
+  //    in their own section below. Open/closed state survives a refresh. ──
+  if (!(S.openChannels instanceof Set)) S.openChannels = new Set();
 
   const renameChannel = async name => {
     const nm = await askText({ title: 'Rename channel', value: name, ok: 'Rename' });
@@ -804,40 +808,52 @@ async function viewDashboard() {
     viewDashboard();
   };
 
-  const paint = () => {
-    const chip = (key, label, n) => el('button', {
-      class: 'btn sm' + (active === key ? ' primary' : ''),
-      onclick: () => { active = key; paint(); }
-    }, `${label} · ${n}`);
-    bar.innerHTML = '';
-    bar.append(chip('__all__', 'All', S.projects.length));
-    (S.channels || []).forEach(c => bar.append(chip(c, c, counts[c] || 0)));
-    if (counts['']) bar.append(chip('__none__', 'No channel', counts['']));
+  const secTitle = t => el('div', { class: 'sec' }, el('h2', {}, t));
 
-    actions.innerHTML = '';
-    const isChannel = active !== '__all__' && active !== '__none__';
-    if (isChannel) actions.append(
-      el('button', { class: 'btn sm', onclick: () => renameChannel(active) }, 'Rename channel'),
-      el('button', { class: 'btn sm danger', onclick: () => deleteChannel(active) }, 'Delete channel'));
-    actions.style.display = actions.children.length ? '' : 'none';
-
-    head.textContent = active === '__all__' ? 'All projects'
-      : active === '__none__' ? 'No channel' : active;
-
-    const list = S.projects.filter(p =>
-      active === '__all__' ? true
-        : active === '__none__' ? !p.channel : p.channel === active);
-    grid.innerHTML = '';
-    grid.append(list.length
-      ? el('div', { class: 'cards' }, list.map(projectCard))
-      : el('div', { class: 'empty card' },
-        el('b', {}, active === '__all__' ? 'No projects yet' : 'No projects in this channel'),
-        active === '__all__' ? '' : el('div', { style: 'margin-top:6px' },
-          'Move a project here from its card’s channel menu.')));
+  const channelBlock = name => {
+    const projs = S.projects.filter(p => p.channel === name);
+    const done = projs.filter(p => overall(p.status || {}).text === 'complete').length;
+    const open = S.openChannels.has(name);
+    const header = el('div', {
+      class: 'chhead' + (open ? ' open' : ''),
+      onclick: () => { open ? S.openChannels.delete(name) : S.openChannels.add(name); render(); }
+    },
+      el('div', { class: 'chleft' },
+        el('span', { class: 'chev' }, open ? '▾' : '▸'),
+        el('div', { style: 'min-width:0' },
+          el('div', { class: 'chname' }, name),
+          el('div', { class: 'sub' },
+            `${projs.length} project${projs.length === 1 ? '' : 's'}`
+            + (projs.length ? ` · ${done} complete` : '')))),
+      el('div', { class: 'row', style: 'gap:6px;flex:none', onclick: e => e.stopPropagation() },
+        el('button', { class: 'btn sm', onclick: () => renameChannel(name) }, 'Rename'),
+        el('button', { class: 'btn sm danger', onclick: () => deleteChannel(name) }, 'Delete')));
+    const body = open
+      ? (projs.length
+        ? el('div', { class: 'cards chbody' }, projs.map(projectCard))
+        : el('div', { class: 'sub', style: 'padding:12px 2px 2px' },
+          'No projects yet — move one here from a card’s channel menu.'))
+      : null;
+    return el('div', { class: 'chwrap' }, header, body);
   };
 
-  paint();
-  v.append(bar, actions, el('div', { class: 'sec' }, head), grid);
+  const wrap = el('div', {});
+  const render = () => {
+    wrap.innerHTML = '';
+    const chNames = [...new Set([...(S.channels || []),
+      ...S.projects.map(p => p.channel).filter(Boolean)])];
+    const loose = S.projects.filter(p => !p.channel);
+    if (chNames.length) {
+      wrap.append(secTitle('Channels'));
+      chNames.forEach(name => wrap.append(channelBlock(name)));
+    }
+    if (loose.length) {
+      wrap.append(secTitle(chNames.length ? 'Not in a channel' : 'All projects'));
+      wrap.append(el('div', { class: 'cards' }, loose.map(projectCard)));
+    }
+  };
+  render();
+  v.append(wrap);
 }
 
 // ═══ project detail ═══════════════════════════════════════════════════════
