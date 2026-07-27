@@ -1002,6 +1002,47 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
 
+    MAX_UPLOAD = 200 * 1024 * 1024                    # 200 MB — comfortably fits a clip
+
+    def _scene_upload(self) -> None:
+        """Replace one scene's visual with an uploaded image/video. The file is the
+        raw request body; the project id, scene number and filename come from the
+        query string (POST /api/scene_upload?id=..&n=..&name=..)."""
+        q = parse_qs(urlparse(self.path).query)
+        pid = (q.get("id", [""])[0]).strip()
+        n_raw = (q.get("n", [""])[0]).strip()
+        fname = (q.get("name", [""])[0]).strip()
+
+        proj = pl.find_project(pid) if pid else None
+        if proj is None:
+            return self._json({"error": f"no project called {pid!r}"}, 404)
+        if not n_raw.isdigit():
+            return self._json({"error": "missing scene number"}, 400)
+        n = int(n_raw)
+        sheet = Path(proj["sheet"])
+        # Only accept a real scene, so an upload can never create an orphan asset.
+        try:
+            scene_ns = {s.n for s in pl.load_scenes(sheet, pl.main_lang(sheet), None)}
+        except Exception:
+            scene_ns = set()
+        if scene_ns and n not in scene_ns:
+            return self._json({"error": f"no scene {n} in this project"}, 400)
+
+        size = int(self.headers.get("Content-Length") or 0)
+        if size <= 0:
+            return self._json({"error": "no file received"}, 400)
+        if size > self.MAX_UPLOAD:
+            return self._json({"error": "file is too large (max 200 MB)"}, 413)
+        raw = self.rfile.read(size)
+
+        ext = os.path.splitext(fname)[1].lstrip(".").lower()
+        try:
+            info = pl.set_scene_upload(sheet, n, raw, ext)
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
+        return self._json({"n": info["n"], "media": info["media"],
+                           "url": f"/media/{info['file']}"})
+
     def _guard(self, fn):
         """Run a handler so a crash becomes a 500 with a readable message, never
         a dead connection. Without this, one bad endpoint (a corrupt config.json,
@@ -1397,6 +1438,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self):
         path = urlparse(self.path).path
+        # A file upload sends raw bytes, not JSON — handle it before the JSON body
+        # is read, so a 100 MB video is streamed to disk rather than parsed.
+        if path == "/api/scene_upload":
+            return self._scene_upload()
         try:
             b = self._body()
         except json.JSONDecodeError:

@@ -959,6 +959,51 @@ def _gen_asset_name(pid: str, n: int, prefix: str, ext: str) -> str:
     return f"{prefix}_{key}_{n}_{uuid.uuid4().hex[:8]}.{ext}"
 
 
+UPLOAD_IMAGE_EXT = ("png", "jpg", "jpeg", "webp", "gif", "bmp")
+UPLOAD_VIDEO_EXT = ("mp4", "mov", "webm", "m4v")
+
+
+def set_scene_upload(sheet: Path, n: int, raw: bytes, ext: str) -> dict:
+    """Replace scene `n`'s visual with a file the user uploaded (image OR video).
+
+    The bytes are written to the shared cache under a project-namespaced, unique
+    name (same scheme as generated assets, so it can never collide with another
+    project or an earlier take), and ONLY that scene is repointed in assets.json —
+    every other scene is left exactly as it was. Returns the new asset's basename
+    and media kind. Raises ValueError for an unsupported type or an empty file, so
+    the caller can report it without leaving the scene half-changed."""
+    ext = (ext or "").lower().lstrip(".")
+    if ext == "jpeg":
+        ext = "jpg"
+    media = ("VIDEO" if ext in UPLOAD_VIDEO_EXT
+             else "IMAGE" if ext in UPLOAD_IMAGE_EXT else "")
+    if not media:
+        raise ValueError("unsupported file type — use an image (JPG/PNG/WebP/GIF) "
+                         "or a video (MP4/MOV/WebM)")
+    if not raw:
+        raise ValueError("the uploaded file is empty")
+
+    p = paths_for(sheet, "en")                       # assets.json is shared
+    p["stockcache"].mkdir(parents=True, exist_ok=True)
+    fname = _gen_asset_name(p["id"], n, "up", ext)
+    dest = p["stockcache"] / fname
+    dest.write_bytes(raw)
+
+    assets: dict[int, dict] = {}
+    if p["assets"].exists():
+        assets = {int(k): v for k, v in
+                  json.loads(p["assets"].read_text(encoding="utf-8")).items()}
+    prev = assets.get(n) or {}
+    assets[n] = {"path": str(dest), "src": "upload", "query": prev.get("query", ""),
+                 "media": media, "credit": "Uploaded by you", "page": "",
+                 "license": "user-provided", "score": None, "generated": False,
+                 "uploaded": True}
+    p["assets"].write_text(
+        json.dumps({str(k): v for k, v in assets.items()}, indent=2),
+        encoding="utf-8")
+    return {"n": n, "file": fname, "media": media, "path": str(dest)}
+
+
 def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
                     on_progress=noop, log=noop, should_cancel=None) -> dict:
     """Generate a fresh AI image for each scene number in `which`, replacing its

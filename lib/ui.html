@@ -2616,6 +2616,38 @@ async function viewReview(id) {
     }
   }, 'Generate video') : null;
 
+  // Upload your OWN image or video for a scene — an alternative to searching or
+  // generating. A file maps to exactly one scene, so this is enabled only when a
+  // single scene is marked, and it replaces that scene's picture in place.
+  const uploadOne = n => {
+    const inp = el('input', {
+      type: 'file', accept: 'image/*,video/*', style: 'display:none',
+      onchange: async () => {
+        const f = inp.files && inp.files[0];
+        inp.remove();
+        if (!f) return;
+        if (!/\.(png|jpe?g|webp|gif|bmp|mp4|mov|webm|m4v)$/i.test(f.name))
+          return toast('Use an image (JPG/PNG/WebP/GIF) or a video (MP4/MOV/WebM).', true);
+        if (f.size > 200 * 1024 * 1024) return toast('File is too large (max 200 MB).', true);
+        toast(`Uploading to S${n}…`);
+        try {
+          const r = await fetch(`/api/scene_upload?id=${encodeURIComponent(id)}`
+            + `&n=${n}&name=${encodeURIComponent(f.name)}`, { method: 'POST', body: f });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.error) return toast(j.error || 'Upload failed.', true);
+          toast(`S${n} replaced with your ${j.media === 'VIDEO' ? 'video' : 'image'}.`);
+          viewReview(id);                 // refresh so the new visual shows
+        } catch (e) { toast('Upload failed: ' + e, true); }
+      }
+    });
+    document.body.append(inp);
+    inp.click();
+  };
+  const upBtn = el('button', {
+    class: 'btn', disabled: true, style: 'margin-left:8px',
+    onclick: () => { if (rejected.size === 1) uploadOne([...rejected][0]); }
+  }, 'Upload your own');
+
   // The buttons only mean something once at least one picture is marked, so they
   // stay disabled until then — no more "swap" with an empty selection.
   const syncSwap = () => {
@@ -2632,8 +2664,12 @@ async function viewReview(id) {
       vidBtn.textContent = rejected.size
         ? `Generate video (${rejected.size})` : 'Generate video';
     }
+    // Upload is one file → one scene, so it needs exactly one marked.
+    upBtn.disabled = rejected.size !== 1;
+    upBtn.textContent = rejected.size === 1
+      ? `Upload your own (S${[...rejected][0]})` : 'Upload your own';
     count.textContent = rejected.size
-      ? `${rejected.size} marked — search again, or generate image / video`
+      ? `${rejected.size} marked — search, generate, or (one scene) upload your own`
       : 'Click any weak or wrong picture to mark it';
   };
 
@@ -2643,7 +2679,7 @@ async function viewReview(id) {
       `${placeholders.length} placeholder`) : null,
     weak.length ? el('span', { class: 'pill part' }, `${weak.length} weak`) : null,
     d.missing?.length ? el('span', { class: 'pill bad' }, `${d.missing.length} with no picture`) : null,
-    swapBtn, genBtn, vidBtn)));
+    swapBtn, genBtn, vidBtn, upBtn)));
 
   // Only pictures you can actually open are navigable in the lightbox; empty
   // "NO PICTURE" scenes are skipped so Next/Prev never lands on a blank.

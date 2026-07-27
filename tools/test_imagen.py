@@ -1,5 +1,6 @@
 """Imagen generation: availability, prompt building, request shape, caching."""
 import base64
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -200,6 +201,30 @@ def main() -> int:
                                   log=lambda *_: None)
         check("re-generating makes a NEW take (fresh file)",
               res2["assets"][1]["path"] != prev, True)
+
+        # ── user upload (review 'Upload your own') ──────────────────────────
+        print("\n  upload your own image / video (only the target scene changes):")
+        keep1 = res2["assets"][1]["path"]
+        up = pl.set_scene_upload(sheet, 2, b"MYPHOTO", "png")
+        assets = json.loads(pl.paths_for(sheet, "en")["assets"].read_text())
+        check("scene 2 now points at the uploaded file", assets["2"]["src"], "upload")
+        check("uploaded image media is IMAGE", up["media"], "IMAGE")
+        check("the uploaded bytes were written",
+              (pl.paths_for(sheet, "en")["stockcache"] / up["file"]).read_bytes(), b"MYPHOTO")
+        check("scene 1 was left untouched", assets["1"]["path"], keep1)
+        vid = pl.set_scene_upload(sheet, 1, b"MYCLIP", "MP4")
+        check("uploaded .mp4 is tagged VIDEO", vid["media"], "VIDEO")
+        check("upload filename is project-namespaced", vid["file"].startswith("up_"), True)
+        try:
+            pl.set_scene_upload(sheet, 1, b"x", "txt")
+            check("a bad type is rejected", False)
+        except ValueError:
+            check("a bad file type raises ValueError", True)
+        try:
+            pl.set_scene_upload(sheet, 1, b"", "png")
+            check("an empty file is rejected", False)
+        except ValueError:
+            check("an empty file raises ValueError", True)
     finally:
         shutil.rmtree(root / "projects" / tpid, ignore_errors=True)
 
