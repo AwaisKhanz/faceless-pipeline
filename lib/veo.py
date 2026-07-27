@@ -38,6 +38,11 @@ class VeoError(RuntimeError):
     """Video generation failed. The caller keeps the scene's current asset."""
 
 
+class Cancelled(Exception):
+    """Stop was pressed while waiting for a clip to render. Raised so the poll
+    loop breaks promptly instead of blocking the job for up to six minutes."""
+
+
 # The fallback style, used only when no LLM is configured to write a proper
 # action-aware prompt. It still asks for a single continuous shot with a
 # deliberate camera move so the clip has purposeful motion, not a random gesture.
@@ -88,12 +93,14 @@ def _reason(op: dict) -> str:
         or "no video returned (possibly a safety filter)"
 
 
-def video(prompt: str, cfg: dict, dest: Path, on_wait=None) -> Path:
+def video(prompt: str, cfg: dict, dest: Path, on_wait=None, should_cancel=None) -> Path:
     """Generate ONE 16:9 clip for `prompt` and write the MP4 to `dest`.
 
     Cached: an existing `dest` is returned without spending a call. `on_wait` is
-    pinged on every poll so the UI can show progress. Raises VeoError on any
-    failure so the caller can keep the scene's current picture.
+    pinged on every poll so the UI can show progress. `should_cancel` (optional)
+    is polled while waiting so Stop is honoured within a couple of seconds rather
+    than after the full render. Raises VeoError on any failure so the caller can
+    keep the scene's current picture, or Cancelled if Stop was pressed.
     """
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0:
@@ -151,9 +158,21 @@ def video(prompt: str, cfg: dict, dest: Path, on_wait=None) -> Path:
     if not name:
         raise VeoError("Veo did not start an operation")
 
+    def _stop() -> bool:
+        return bool(callable(should_cancel) and should_cancel())
+
     deadline = time.time() + POLL_TIMEOUT
     while time.time() < deadline:
-        time.sleep(POLL_EVERY)
+        # Sleep in short slices so Stop is noticed within ~1s, not after a full
+        # 12-second poll interval.
+        slept = 0.0
+        while slept < POLL_EVERY:
+            if _stop():
+                raise Cancelled()
+            time.sleep(min(1.0, POLL_EVERY - slept))
+            slept += 1.0
+        if _stop():
+            raise Cancelled()
         if on_wait:
             on_wait()
         try:

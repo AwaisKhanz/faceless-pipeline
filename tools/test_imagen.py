@@ -147,6 +147,20 @@ def main() -> int:
         im.time = saved_time
         im._THROTTLE.reset()
 
+    print("\n  Stop is honoured promptly (no waiting out the backoff):")
+    im._THROTTLE.reset()
+    im._generate = lambda u, b, t: {"candidates": [{"content": {"parts": [
+        {"inlineData": {"data": tiny}}]}}]}          # would succeed if not cancelled
+    try:
+        im.image("stop me", {"vertex_project": "proj", "generate_location": "global",
+                             "vertex_service_account": "", "generate_min_interval": 30},
+                 Path(tempfile.mkdtemp()) / "c.png", should_cancel=lambda: True)
+        check("a cancelled generation raises Cancelled", False)
+    except im.Cancelled:
+        check("a cancelled generation raises Cancelled", True)
+    except Exception as e:
+        check("a cancelled generation raises Cancelled", False, repr(e))
+
     # ── manual per-scene generation (review page path) ──────────────────────
     print("\n  manual generate_scenes (the review-page 'Generate' button):")
     from types import SimpleNamespace
@@ -156,7 +170,7 @@ def main() -> int:
     im.available = lambda cfg: True
     made: list = []
 
-    def fake_image(prompt, cfg, dest, log=None):
+    def fake_image(prompt, cfg, dest, log=None, should_cancel=None):
         if "boom" in prompt:
             raise im.GenError("safety filter")     # e.g. a real person
         Path(dest).parent.mkdir(parents=True, exist_ok=True)

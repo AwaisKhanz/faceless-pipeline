@@ -1003,7 +1003,10 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
         prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
         dest = p["stockcache"] / _gen_asset_name(p["id"], n, "gen", "png")
         try:
-            imagen.image(prompt, cfg, dest, log=log)
+            imagen.image(prompt, cfg, dest, log=log, should_cancel=should_cancel)
+        except imagen.Cancelled:                      # Stop pressed mid-wait
+            log(f"Stopped before S{n}.")
+            break
         except Exception as e:                        # GenError or anything else
             failed.append((n, str(e)))
             log(f"✗ S{n:>3} · could not generate · {str(e)[:80]}")
@@ -1087,9 +1090,12 @@ def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
         log(f"S{n:>3} video prompt: {prompt[:150]}")
         dest = p["stockcache"] / _gen_asset_name(p["id"], n, "veo", "mp4")
         try:
-            veo.video(prompt, cfg, dest,
+            veo.video(prompt, cfg, dest, should_cancel=should_cancel,
                       on_wait=lambda i=i: on_progress(i + 1, len(want),
                                                       f"S{want[i]} rendering video…"))
+        except veo.Cancelled:                         # Stop pressed while rendering
+            log(f"Stopped before S{n}.")
+            break
         except Exception as e:
             failed.append((n, str(e)))
             log(f"✗ S{n:>3} · could not generate video · {str(e)[:80]}")

@@ -62,6 +62,31 @@ class GenError(RuntimeError):
     """Generation could not produce an image. The caller falls back to search."""
 
 
+class Cancelled(Exception):
+    """The user pressed Stop while this generation was waiting. Raised so a long
+    throttle/backoff wait (or a blocked concurrency slot) aborts promptly instead
+    of finishing the whole image first."""
+
+
+def _interruptible_sleep(seconds: float, should_cancel=None) -> None:
+    """Sleep, but wake every ~200ms to see if the job was cancelled. A single
+    long time.sleep() is why Stop 'did nothing for ages' — the worker was parked
+    inside a 30-90s backoff and couldn't notice the flag until it returned."""
+    if seconds <= 0:
+        return
+    if not callable(should_cancel):
+        time.sleep(seconds)
+        return
+    end = time.monotonic() + seconds
+    while True:
+        if should_cancel():
+            raise Cancelled()
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(0.2, left))
+
+
 def available(cfg: dict | None) -> bool:
     """Can we generate at all? True only when Vertex is genuinely ready — a
     project, the service-account file if one is named, and google-auth installed.
@@ -166,9 +191,10 @@ class _Throttle:
         with self._lock:
             self.gap, self._next, self._streak = 0.0, 0.0, 0
 
-    def pace(self, floor: float) -> None:
+    def pace(self, floor: float, should_cancel=None) -> None:
         """Sleep until this call is allowed to start, honouring the current
-        (possibly widened) gap, never going below `floor`."""
+        (possibly widened) gap, never going below `floor`. The wait is
+        interruptible so Stop is honoured even mid-cooldown."""
         with self._lock:
             if self.gap < floor:
                 self.gap = floor
@@ -176,8 +202,7 @@ class _Throttle:
             start = self._next if self._next > now else now
             self._next = start + self.gap
             delay = start - now
-        if delay > 0:
-            time.sleep(delay)
+        _interruptible_sleep(delay, should_cancel)
 
     def hit_limit(self, retry_after: float) -> None:
         """A 429/5xx just happened: widen the gap and hold every worker off until
@@ -232,13 +257,18 @@ def _retry_delay(detail: str, headers, attempt: int) -> float:
     return min(_CAP, 2.0 ** attempt)
 
 
-def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
+def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> Path:
     """Generate ONE 16:9 image for `prompt` and write it to `dest`.
 
     Cached: if `dest` already holds an image, it is returned without spending a
     call. Rate limits (429) are throttled and retried with backoff rather than
     failing; only a genuine, persistent failure raises GenError so the caller can
     fall back to search. `log` (optional) receives one line per retry.
+
+    `should_cancel` (optional) is polled while WAITING — for a free concurrency
+    slot and during every throttle/backoff sleep — and raises Cancelled the
+    moment Stop is pressed, so a queued generation never keeps a job alive for
+    minutes after the user asked it to stop.
     """
     def _note(msg: str) -> None:
         if callable(log):
@@ -246,6 +276,9 @@ def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
                 log(msg)
             except Exception:
                 pass
+
+    def _stop() -> bool:
+        return bool(callable(should_cancel) and should_cancel())
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0:
         return dest                        # already generated — reuse, no cost
@@ -282,11 +315,18 @@ def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
     # One generation at a time (per generate_workers), paced by the shared adaptive
     # throttle. A 429 is waited out AND widens the gap for the next scene, so we
     # settle onto the real quota instead of firing rejected request after rejected
-    # request.
-    with _semaphore(cfg):
+    # request. Acquire the slot cancellably so Stop is honoured even while another
+    # job is holding it.
+    sem = _semaphore(cfg)
+    while not sem.acquire(timeout=0.25):
+        if _stop():
+            raise Cancelled()
+    try:
         attempt = 0
         while out is None:
-            _THROTTLE.pace(floor)
+            if _stop():
+                raise Cancelled()
+            _THROTTLE.pace(floor, should_cancel if callable(should_cancel) else None)
             try:
                 out = _call(body, token)
                 _THROTTLE.ok(floor)
@@ -327,6 +367,8 @@ def image(prompt: str, cfg: dict, dest: Path, log=None) -> Path:
                 raise GenError(f"image HTTP {e.code}: {detail}") from None
             except Exception as e:
                 raise GenError(f"image request failed: {e}") from None
+    finally:
+        sem.release()
 
     b64 = _first_image(out)
     if not b64:

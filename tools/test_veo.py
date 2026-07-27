@@ -94,7 +94,7 @@ def main() -> int:
     from lib import pipeline as pl
     veo.available = lambda cfg: True
 
-    def fake_video(prompt, cfg, dest, on_wait=None):
+    def fake_video(prompt, cfg, dest, on_wait=None, should_cancel=None):
         Path(dest).parent.mkdir(parents=True, exist_ok=True)
         Path(dest).write_bytes(b"MP4")
         return Path(dest)
