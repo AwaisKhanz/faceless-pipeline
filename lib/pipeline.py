@@ -2,11 +2,13 @@
 (make_video.py) and the control panel (studio.py) so there is one implementation."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import time
+import uuid
 from pathlib import Path
 
 from . import align, captions as cap, render, sheet as sheetlib, stock, tts
@@ -939,6 +941,24 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
     return assets
 
 
+def _gen_asset_name(pid: str, n: int, prefix: str, ext: str) -> str:
+    """A collision-proof cache filename for a MANUALLY (re)generated scene asset.
+
+    The stock cache directory is shared by every project. A name keyed only by
+    scene number and take — gen_5_1.png — therefore collides ACROSS projects:
+    regenerating scene 5 in one project overwrites the very file another
+    project's scene 5 points to, so that project's review and render silently
+    show the wrong (or a seemingly random) picture. This was the real cause of
+    "regenerate changed other scenes / put a random image".
+
+    Keying by a hash of the project id plus a fresh random token gives every
+    generation its own file: no cross-project collision, and a new take never
+    reuses (or serves a browser-cached) older filename. Scene number stays in
+    the name for readability."""
+    key = hashlib.sha1(str(pid).encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}_{key}_{n}_{uuid.uuid4().hex[:8]}.{ext}"
+
+
 def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
                     on_progress=noop, log=noop, should_cancel=None) -> dict:
     """Generate a fresh AI image for each scene number in `which`, replacing its
@@ -979,9 +999,9 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
             break
         s = by_n[n]
         on_progress(i + 1, len(want), f"S{n} generating")
-        picks[n] = picks.get(n, 0) + 1                # fresh take, new filename
+        picks[n] = picks.get(n, 0) + 1                # bump take (history/telemetry)
         prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
-        dest = p["stockcache"] / f"gen_{n}_{picks[n]}.png"
+        dest = p["stockcache"] / _gen_asset_name(p["id"], n, "gen", "png")
         try:
             imagen.image(prompt, cfg, dest, log=log)
         except Exception as e:                        # GenError or anything else
@@ -1061,11 +1081,11 @@ def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
             break
         s = by_n[n]
         on_progress(i + 1, len(want), f"S{n} rendering video (1–2 min)")
-        picks[n] = picks.get(n, 0) + 1               # fresh take, new filename
+        picks[n] = picks.get(n, 0) + 1               # bump take (history/telemetry)
         prompt = crafted.get(n) or veo.prompt_for(
             s.query or getattr(s, "narration", "") or "", cfg)
         log(f"S{n:>3} video prompt: {prompt[:150]}")
-        dest = p["stockcache"] / f"veo_{n}_{picks[n]}.mp4"
+        dest = p["stockcache"] / _gen_asset_name(p["id"], n, "veo", "mp4")
         try:
             veo.video(prompt, cfg, dest,
                       on_wait=lambda i=i: on_progress(i + 1, len(want),

@@ -66,6 +66,20 @@ def main() -> int:
     gone = d / "not_there.png"
     check("missing file -> 'missing' marker, no exception", "missing" in fp(gone, 3.2, True))
 
+    print("\n  generated-asset names never collide across projects:")
+    name = pl._gen_asset_name
+    a1 = name("ProjectAlpha", 13, "gen", "png")
+    b1 = name("ProjectBeta", 13, "gen", "png")     # same scene+take, other project
+    check("same scene, different project -> different file", a1 != b1)
+    check("two takes in one project -> different files",
+          name("ProjectAlpha", 13, "gen", "png") != a1)
+    check("scene number kept in the name", "_13_" in a1)
+    check("project key is stable for a given id",
+          name("ProjectAlpha", 1, "gen", "png").split("_")[1]
+          == a1.split("_")[1])
+    check("veo prefix + extension honoured",
+          name("P", 4, "veo", "mp4").startswith("veo_") and name("P", 4, "veo", "mp4").endswith(".mp4"))
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
