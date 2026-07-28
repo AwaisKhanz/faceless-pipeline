@@ -146,6 +146,52 @@ def toggle_favorite(engine: str, name: str, on: bool | None = None) -> tuple[lis
     return set_favorites(engine, cur), want
 
 
+# ------------------------------------------------------- voice nicknames
+#
+# Catalogue voice NAMES are cryptic (de-DE-Chirp3-HD-Charon). A nickname is a
+# friendly display label the user can set — "Deep narrator" — stored under a
+# reserved key keyed by the voice name. The NAME stays the identity (that's what
+# TTS is called with); the nickname is purely what shows in the panel.
+
+_NICK_KEY = "__voice_names__"
+
+
+def voice_nicknames() -> dict:
+    """Map of voice name -> the user's custom display name, e.g.
+    {'de-DE-Chirp3-HD-Charon': 'Deep narrator'}. Blank/invalid entries dropped."""
+    store = _read().get(_NICK_KEY, {})
+    if not isinstance(store, dict):
+        return {}
+    return {k: v.strip() for k, v in store.items()
+            if isinstance(k, str) and isinstance(v, str) and v.strip()}
+
+
+def voice_display(name: str) -> str:
+    """What to SHOW for a catalogue voice: the user's nickname if set, else the
+    voice's own name."""
+    return voice_nicknames().get(name) or name
+
+
+def set_voice_nickname(name: str, nick: str) -> str:
+    """Set a custom display name for a voice, or CLEAR it with an empty string
+    (reverting to the raw voice name). Returns the effective display name."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("no voice given")
+    prefs = _read()
+    store = prefs.get(_NICK_KEY)
+    if not isinstance(store, dict):
+        store = {}
+    nick = " ".join(str(nick or "").split())[:80]      # collapse whitespace, cap length
+    if nick:
+        store[name] = nick
+    else:
+        store.pop(name, None)
+    prefs[_NICK_KEY] = store
+    PREFS.write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
+    return nick or name
+
+
 def supported(lang: str) -> bool:
     return lang.lower().split("-")[0] in LANGS
 

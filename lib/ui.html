@@ -1757,6 +1757,7 @@ async function viewVoices(lang) {
       const cur = d.google_voice || '';
       const favs = d.google_favorites || [];
       const favNames = new Set(favs.map(f => f.name));
+      const nickOf = new Map(favs.filter(f => f.nickname).map(f => [f.name, f.nickname]));
 
       // Shared actions, reused by the favourites row and the full picker.
       const chirpPreview = async (name, btn) => {
@@ -1779,15 +1780,37 @@ async function viewVoices(lang) {
         toast(on ? ('★ ' + name + ' added to favourites.') : (name + ' removed from favourites.'));
         viewVoices(lang);
       };
+      // Give a favourite a friendly display name (the real voice id stays the
+      // identity — this is only what you read in the panel).
+      const chirpRename = async (name, curNick) => {
+        const nick = await askText({
+          title: 'Rename voice', label: name, value: curNick || '',
+          placeholder: 'e.g. Deep narrator', ok: 'Save'
+        });
+        if (nick === null) return;                       // cancelled
+        await api('/api/voice_nickname', { name, nickname: nick });
+        toast('Renamed to “' + nick + '”.');
+        viewVoices(lang);
+      };
+      const chirpResetName = async name => {
+        await api('/api/voice_nickname', { name, nickname: '' });
+        toast('Name reset to ' + name + '.');
+        viewVoices(lang);
+      };
 
       // ── favourites: your starred voices, pinned to the top ────────────────
       if (favs.length) {
         const favRow = f => el('div', { class: 'row', style: 'justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)' },
           el('div', { style: 'min-width:0' },
-            el('b', {}, '★ ' + f.name),
+            el('b', {}, '★ ' + (f.nickname || f.name)),
             f.gender ? el('span', { class: 'sub', style: 'margin-left:8px' }, f.gender) : null,
-            (f.name === cur) ? el('span', { class: 'pill ok', style: 'margin-left:8px' }, 'in use') : null),
+            (f.name === cur) ? el('span', { class: 'pill ok', style: 'margin-left:8px' }, 'in use') : null,
+            // When renamed, show the real voice id underneath so it's still clear
+            // which Google voice this is.
+            f.nickname ? el('div', { class: 'sub', style: 'margin-top:2px' }, f.name) : null),
           el('div', { class: 'row', style: 'gap:6px' },
+            el('button', { class: 'btn sm', title: 'Rename', onclick: () => chirpRename(f.name, f.nickname) }, '✎'),
+            f.nickname ? el('button', { class: 'btn sm', title: 'Reset to the original name', onclick: () => chirpResetName(f.name) }, '↺') : null,
             el('button', { class: 'btn sm', onclick: e => chirpPreview(f.name, e.target) }, 'Preview'),
             el('button', { class: 'btn sm primary', onclick: () => chirpUse(f.name) }, 'Use'),
             el('button', { class: 'btn sm', title: 'Remove from favourites', onclick: () => chirpFav(f.name, false) }, '✕')));
@@ -1800,7 +1823,7 @@ async function viewVoices(lang) {
       const sel = el('select', { style: 'min-width:280px' },
         el('option', { value: '' }, list.length ? 'Choose a voice…' : 'No voices returned for this language'),
         list.map(gv => el('option', { value: gv.name, selected: gv.name === cur },
-          (favNames.has(gv.name) ? '★ ' : '') + gv.name + (gv.gender ? ' · ' + gv.gender : ''))));
+          (favNames.has(gv.name) ? '★ ' : '') + (nickOf.get(gv.name) || gv.name) + (gv.gender ? ' · ' + gv.gender : ''))));
       const starBtn = el('button', {
         class: 'btn sm', title: 'Add the selected voice to favourites',
         onclick: () => sel.value

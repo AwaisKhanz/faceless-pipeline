@@ -1341,8 +1341,9 @@ class Handler(BaseHTTPRequestHandler):
                 # pulled from the catalogue when we have it.
                 base = lang.split("-")[0]
                 gender = {v["name"]: v.get("gender", "") for v in google_voices}
+                nicks = vx.voice_nicknames()
                 google_favorites = [{"name": n, "gender": gender.get(n, ""),
-                                     "favorite": True}
+                                     "nickname": nicks.get(n, ""), "favorite": True}
                                     for n in vx.favorites("google")
                                     if n.split("-")[0] == base]
             except Exception as e:
@@ -1524,6 +1525,15 @@ class Handler(BaseHTTPRequestHandler):
             favs, on = vx.toggle_favorite(b.get("engine") or "google", name,
                                           b.get("on"))
             return self._json({"favorites": favs, "favorite": on})
+
+        if path == "/api/voice_nickname":
+            # Give a voice a friendly display name (or clear it with "").
+            name = (b.get("name") or "").strip()
+            try:
+                disp = vx.set_voice_nickname(name, b.get("nickname") or "")
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            return self._json({"name": name, "display": disp})
 
         if path == "/api/project_channel":
             # Move a project into a channel (or clear it with an empty string).
