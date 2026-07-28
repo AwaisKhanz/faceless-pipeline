@@ -337,6 +337,19 @@ def _read_error(e: urllib.error.HTTPError) -> str:
         return ""
 
 
+def _short(detail: str, limit: int = 140) -> str:
+    """One-line gist of an API error body for a log line: prefer the JSON
+    error.message / error.status if present, else a trimmed raw string."""
+    try:
+        d = json.loads(detail).get("error", {})
+        msg = (d.get("message") or d.get("status") or "").strip()
+        if msg:
+            return msg[:limit]
+    except Exception:
+        pass
+    return " ".join(str(detail).split())[:limit]
+
+
 def _aspect_wh(cfg: dict) -> tuple[int, int]:
     """Pixel size for a requested aspect (default 16:9 → 1280×720). Engines that
     take width/height get a frame-shaped image instead of a square one that would
@@ -570,11 +583,13 @@ _VERTEX_REST: dict[tuple, float] = {}          # (model, region) → monotonic t
 class _VertexBusy(Exception):
     """A Vertex (model, region) combo is busy / rate-limited / unavailable. Rest it
     and rotate to the next combo. rest_minutes overrides the default (e.g. a long
-    rest for a 404, meaning the model isn't served in that region)."""
+    rest for a 404, meaning the model isn't served in that region). reason carries
+    the real HTTP status/message so it can be surfaced in the log."""
 
-    def __init__(self, rest_minutes: float | None = None):
-        super().__init__("vertex busy")
+    def __init__(self, rest_minutes: float | None = None, reason: str = ""):
+        super().__init__(reason or "vertex busy")
         self.rest_minutes = rest_minutes
+        self.reason = reason
 
 
 def _split_list(v) -> list[str]:
@@ -645,9 +660,10 @@ def _vertex_generate_one(project, region, model, sa_path, prompt, cfg, dest) -> 
                 body["generationConfig"].pop("imageConfig", None)
                 continue
             if e.code == 404:
-                raise _VertexBusy(rest_minutes=720) from None   # not served in this region
+                raise _VertexBusy(rest_minutes=720,
+                                  reason=f"HTTP 404 {_short(detail)}") from None
             if e.code in (429, 500, 503):
-                raise _VertexBusy() from None
+                raise _VertexBusy(reason=f"HTTP {e.code} {_short(detail)}") from None
             raise GenError(f"Vertex HTTP {e.code}: {detail}") from None
         except Exception as e:
             raise GenError(f"Vertex request failed: {e}") from None
@@ -684,9 +700,10 @@ def _vertex_predict_one(project, region, model, sa_path, prompt, cfg, dest) -> N
                     raise GenError(f"Imagen auth failed: {e2}") from None
                 continue
             if e.code == 404:
-                raise _VertexBusy(rest_minutes=720) from None   # not served in this region
+                raise _VertexBusy(rest_minutes=720,
+                                  reason=f"HTTP 404 {_short(detail)}") from None
             if e.code in (429, 500, 503):
-                raise _VertexBusy() from None
+                raise _VertexBusy(reason=f"HTTP {e.code} {_short(detail)}") from None
             raise GenError(f"Imagen HTTP {e.code}: {detail}") from None
         except Exception as e:
             raise GenError(f"Imagen request failed: {e}") from None
@@ -724,8 +741,9 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
             _vertex_put_to_rest((model, region), vb.rest_minutes or rest_min)
             if callable(log):
                 mins = vb.rest_minutes or rest_min
-                log(f"  · Vertex {model}@{region} busy — resting {mins:.0f}m, "
-                    f"trying the next model/region")
+                why = f" [{vb.reason}]" if vb.reason else ""
+                log(f"  · Vertex {model}@{region} unavailable{why} — resting "
+                    f"{mins:.0f}m, trying the next model/region")
             continue
         # a real GenError (bad prompt / safety) is combo-independent: re-raise
     raise GenError(f"all {len(combos)} Vertex model/region combos are busy")
