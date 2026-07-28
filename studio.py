@@ -723,8 +723,14 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
         # languages actually being built.
         skipped: list[str] = []
         if "voice" in steps or "render" in steps:
-            missing = [l for l in langs
-                       if not (voices.get(l) or vx.pref_for(l).get("reference"))]
+            # A language is "voiced" if it has a voice from ANY source: an explicit
+            # per-run override, this project's channel voice, or the saved default
+            # (a reference clip, or a Google Chirp voice name).
+            def _has_voice(l: str) -> bool:
+                pref = vx.pref_for(l)
+                return bool(voices.get(l) or pl.channel_voice(sheet, l)
+                            or pref.get("reference") or pref.get("google_voice"))
+            missing = [l for l in langs if not _has_voice(l)]
             if missing and skip_unvoiced:
                 langs = [l for l in langs if l not in missing]
                 skipped = missing
@@ -1135,16 +1141,31 @@ class Handler(BaseHTTPRequestHandler):
             for pr in projects:
                 pr["channel"] = chan["assign"].get(pr["id"], "")
                 pr["uploaded"] = bool(flags.get(pr["id"], {}).get("uploaded"))
-            # Per-channel profile (image/email/description) for the dashboard.
+            # Which languages each channel actually uses (union of its projects'
+            # languages), so the editor can offer one voice picker per language.
+            ch_langs: dict = {}
+            for pr in projects:
+                cname = pr.get("channel", "")
+                if not cname:
+                    continue
+                seen = {l["code"] for l in ch_langs.get(cname, [])}
+                for l in pr.get("languages", []):
+                    if l["code"] not in seen:
+                        seen.add(l["code"])
+                        ch_langs.setdefault(cname, []).append(
+                            {"code": l["code"], "name": l.get("name", l["code"])})
+            # Per-channel profile (image/email/description/voices) for the dashboard.
             # The image is exposed as a ready-to-use URL (with a cache-buster).
             meta = {}
             for name in chan["channels"]:
                 m = dict(chan.get("meta", {}).get(name, {}))
                 img = m.get("image") or ""
-                m["image_url"] = f"/channelimg/{img}" if img else ""
+                voices = _ch.meta_of(name).get("voices", {})
                 meta[name] = {"email": m.get("email", ""),
                               "description": m.get("description", ""),
-                              "image_url": m["image_url"]}
+                              "image_url": f"/channelimg/{img}" if img else "",
+                              "voices": voices,
+                              "langs": ch_langs.get(name, [])}
             return self._json({
                 "projects": projects, "music": music,
                 "channels": chan["channels"], "channel_meta": meta,
@@ -1575,6 +1596,12 @@ class Handler(BaseHTTPRequestHandler):
                     d = _ch.set_meta(b.get("name") or "",
                                      email=b.get("email"),
                                      description=b.get("description"))
+                elif action == "voice":
+                    # Set (or clear with "") the voice a channel uses for a
+                    # language. Every project in the channel then narrates with it.
+                    d = _ch.set_channel_voice(b.get("name") or "",
+                                              b.get("lang") or "",
+                                              b.get("voice") or "")
                 else:
                     return self._json({"error": "unknown action"}, 400)
             except ValueError as e:

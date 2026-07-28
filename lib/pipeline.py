@@ -221,6 +221,19 @@ def project_id(sheet: Path) -> str:
     return sheet.stem.replace("_main_script", "")
 
 
+def channel_voice(sheet: Path, lang: str) -> str:
+    """The voice this project's CHANNEL narrates `lang` with, or '' if the project
+    has no channel or the channel set no voice. This is the per-channel override:
+    every project in a channel narrates with the channel's chosen voice unless a
+    run passes an explicit voice of its own. '' means fall back to the global
+    per-language default. Tolerates a missing channels file (returns '')."""
+    try:
+        from . import channels as _ch
+        return _ch.voice_for_project(project_id(sheet), lang)
+    except Exception:
+        return ""
+
+
 def find_project(pid: str) -> dict | None:
     """The one project with this id, or None. `proj["sheet"]` is a full path."""
     return next((p for p in find_projects() if p["id"] == pid), None)
@@ -356,10 +369,14 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
         # language + scene number alone, which borrowed other projects' "de scene
         # 1" clips and falsely showed a never-voiced project as done — removed.)
         voiced = 0
+        chv = channel_voice(sheet, code)          # the channel's voice, if any
         try:
             scenes = load_scenes(sheet, code,
                                  narration_file(sheet.parent, pid, code))
-            vp = tts.voice_paths(scenes, code, p_shared['voicecache'])
+            # Count against the voice this project would actually use — the
+            # channel voice when set, else the per-language default — so the
+            # dashboard reflects the clips a run would produce.
+            vp = tts.voice_paths(scenes, code, p_shared['voicecache'], voice=chv or None)
             voiced = sum(1 for v in vp
                          if v.exists() and v.stat().st_size > 1024)
         # SystemExit (not an Exception) is what sheet.load raises for a language
@@ -440,7 +457,8 @@ def deletable(sheet: Path, langs: list[dict]) -> dict:
             out["work"].append(base)
         try:
             scenes = load_scenes(sheet, code, narration_file(sheet.parent, pid, code))
-            for f in tts.voice_paths(scenes, code, shared["voicecache"]):
+            chv = channel_voice(sheet, code) or None      # the voice actually in use
+            for f in tts.voice_paths(scenes, code, shared["voicecache"], voice=chv):
                 if f.exists():
                     out["voice"].append(f)
         except Exception:
@@ -1192,7 +1210,12 @@ _VOICE_SCENE_LINE = re.compile(r"S\s*\d+\s+(?:voiced|cached)", re.I)
 
 def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
                    on_progress=noop) -> list[Path]:
-    """`voice` names a reference clip, overriding the one saved for this language."""
+    """`voice` overrides the voice for this language (a Google voice name under
+    Chirp, else a reference clip). When the caller passes none, the project's
+    CHANNEL voice is used if its channel set one — so every project in a channel
+    narrates with the channel's voice — else the global per-language default."""
+    if not voice:
+        voice = channel_voice(sheet, lang) or None
     p = paths_for(sheet, lang)
     done = [0]
     total = len(scenes)

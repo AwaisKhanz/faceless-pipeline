@@ -26,14 +26,30 @@ IMG_DIR = ROOT / "cache" / "channel_images"     # uploaded channel avatars live 
 META_FIELDS = ("image", "email", "description")
 
 
+def _clean_voices(raw) -> dict:
+    """A {lang: voice} map for a channel — the voice every project in the channel
+    narrates with, keyed by language code. Blank entries dropped."""
+    out = {}
+    for lang, voice in (raw or {}).items():
+        code = str(lang or "").strip().lower()
+        val = str(voice or "").strip()
+        if code and val:
+            out[code] = val
+    return out
+
+
 def _clean_meta(raw) -> dict:
-    """A {channel: {image,email,description}} map, sanitised to strings."""
+    """A {channel: {image,email,description,voices}} map, sanitised. `voices` is a
+    per-language voice override; the profile strings are the older fields."""
     out = {}
     for name, m in (raw or {}).items():
         if not isinstance(m, dict):
             continue
         fields = {k: str(m.get(k) or "").strip() for k in META_FIELDS}
-        if any(fields.values()):
+        voices = _clean_voices(m.get("voices"))
+        if any(fields.values()) or voices:
+            if voices:
+                fields["voices"] = voices
             out[str(name)] = fields
     return out
 
@@ -166,9 +182,54 @@ def forget_project(pid: str) -> None:
 # ─────────────────────────────────────────────────────── channel profile
 
 def meta_of(name: str) -> dict:
-    """The profile ({image,email,description}) for one channel, blanks if unset."""
+    """The profile ({image,email,description,voices}) for one channel, blanks if
+    unset. `voices` is a {lang: voice} map (may be empty)."""
     m = _load().get("meta", {}).get((name or "").strip(), {})
-    return {k: m.get(k, "") for k in META_FIELDS}
+    out = {k: m.get(k, "") for k in META_FIELDS}
+    out["voices"] = _clean_voices(m.get("voices"))
+    return out
+
+
+def voice_for(name: str, lang: str) -> str:
+    """The voice a channel narrates `lang` with, or '' if none is set. Voices are
+    keyed by language, so one channel can (in principle) run several languages."""
+    voices = _clean_voices(_load().get("meta", {}).get((name or "").strip(), {}).get("voices"))
+    return voices.get((lang or "").strip().lower(), "")
+
+
+def voice_for_project(pid: str, lang: str) -> str:
+    """The channel voice that applies to a project for a language, or '' — the
+    project's channel's voice. Empty means 'fall back to the per-language default'."""
+    ch = of(pid)
+    return voice_for(ch, lang) if ch else ""
+
+
+def set_channel_voice(name: str, lang: str, voice: str) -> dict:
+    """Set (or clear, with an empty voice) the voice a channel uses for a language.
+    Ensures the channel exists so setting it on a fresh channel sticks."""
+    name = (name or "").strip()
+    code = (lang or "").strip().lower()
+    if not name:
+        raise ValueError("channel name is empty")
+    if not code:
+        raise ValueError("no language given")
+    d = _load()
+    if name not in d["channels"]:
+        d["channels"].append(name)
+    cur = dict(d["meta"].get(name, {}))
+    voices = _clean_voices(cur.get("voices"))
+    voice = str(voice or "").strip()
+    if voice:
+        voices[code] = voice
+    else:
+        voices.pop(code, None)
+    if voices:
+        cur["voices"] = voices
+    else:
+        cur.pop("voices", None)
+    d["meta"][name] = cur
+    _save(d)
+    return d
 
 
 def set_meta(name: str, *, email=None, description=None) -> dict:
@@ -181,8 +242,11 @@ def set_meta(name: str, *, email=None, description=None) -> dict:
     d = _load()
     if name not in d["channels"]:
         d["channels"].append(name)
-    cur = d["meta"].get(name, {k: "" for k in META_FIELDS})
-    cur = {k: cur.get(k, "") for k in META_FIELDS}
+    prev = d["meta"].get(name, {})
+    cur = {k: prev.get(k, "") for k in META_FIELDS}
+    voices = _clean_voices(prev.get("voices"))         # never drop the voice map
+    if voices:
+        cur["voices"] = voices
     if email is not None:
         cur["email"] = str(email).strip()
     if description is not None:
@@ -212,7 +276,11 @@ def set_image(name: str, raw: bytes, ext: str) -> str:
     d = _load()
     if name not in d["channels"]:
         d["channels"].append(name)
-    cur = {k: d["meta"].get(name, {}).get(k, "") for k in META_FIELDS}
+    prev = d["meta"].get(name, {})
+    cur = {k: prev.get(k, "") for k in META_FIELDS}
+    voices = _clean_voices(prev.get("voices"))         # never drop the voice map
+    if voices:
+        cur["voices"] = voices
     old = cur.get("image")
     cur["image"] = fname
     d["meta"][name] = cur

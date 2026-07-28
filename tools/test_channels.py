@@ -89,6 +89,38 @@ def main() -> int:
     check("delete dropped the profile", CH.meta_of("Superfoods")["email"], "")
     check("delete tidied the image file", (CH.IMG_DIR / fn).exists(), False)
 
+    print("\n  per-channel voice (every project in the channel narrates with it):")
+    CH.create("Garden")
+    CH.assign("g1", "Garden")
+    CH.set_channel_voice("Garden", "de", "de-DE-Chirp3-HD-Charon")
+    check("voice_for the channel/lang", CH.voice_for("Garden", "de"), "de-DE-Chirp3-HD-Charon")
+    check("voice_for_project via its channel",
+          CH.voice_for_project("g1", "de"), "de-DE-Chirp3-HD-Charon")
+    check("a project in no channel has no channel voice", CH.voice_for_project("nope", "de"), "")
+    check("a language with no voice set -> ''", CH.voice_for("Garden", "en"), "")
+    check("meta_of exposes the voices map",
+          CH.meta_of("Garden")["voices"], {"de": "de-DE-Chirp3-HD-Charon"})
+    check("editing email does NOT drop the voice",
+          (CH.set_meta("Garden", email="g@x.tv"), CH.voice_for("Garden", "de"))[1],
+          "de-DE-Chirp3-HD-Charon")
+    check("uploading an avatar does NOT drop the voice",
+          (CH.set_image("Garden", b"\x89PNGx", "png"), CH.voice_for("Garden", "de"))[1],
+          "de-DE-Chirp3-HD-Charon")
+    CH.rename("Garden", "Garden2")
+    check("rename carries the channel voice",
+          CH.voice_for_project("g1", "de"), "de-DE-Chirp3-HD-Charon")
+    check("clearing a voice reverts to default ('')",
+          (CH.set_channel_voice("Garden2", "de", ""), CH.voice_for("Garden2", "de"))[1], "")
+    CH.set_channel_voice("Garden2", "de", "x")
+    CH.remove("Garden2")
+    check("delete drops the channel voice too", CH.voice_for("Garden2", "de"), "")
+    for badargs in [("", "de", "x"), ("Garden2", "", "x")]:
+        try:
+            CH.set_channel_voice(*badargs)
+            check("bad set_channel_voice rejected", False)
+        except ValueError:
+            check("bad set_channel_voice rejected", True)
+
     print("\n  an OLD file with no meta block still loads (backward compatible):")
     CH.FILE.write_text('{"channels":["Legacy"],"assign":{"v9":"Legacy"}}', encoding="utf-8")
     check("legacy channels load", "Legacy" in CH.names(), True)

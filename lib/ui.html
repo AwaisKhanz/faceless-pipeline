@@ -655,6 +655,53 @@ function channelEditor(name, meta = {}) {
     });
     desc.value = meta.description || '';
 
+    // ── per-language channel voice ──────────────────────────────────────────
+    // Every project in this channel narrates with the voice picked here (it
+    // overrides the global per-language default). One picker per language the
+    // channel's projects use, populated from the active voice engine.
+    const chLangs = (meta.langs && meta.langs.length) ? meta.langs : [];
+    const chVoices = meta.voices || {};
+    const voiceSel = {};                      // lang code -> <select>
+    const fillVoiceOptions = async (l, sel, current) => {
+      try {
+        const dv = await api('/api/voices?lang=' + encodeURIComponent(l.code));
+        const eng = dv.engine || {};
+        const opts = [];                      // [value, label]
+        if (eng.selected === 'chirp') {
+          const favs = dv.google_favorites || [];
+          const favNames = new Set(favs.map(f => f.name));
+          const nickOf = new Map(favs.filter(f => f.nickname).map(f => [f.name, f.nickname]));
+          for (const f of favs)
+            opts.push([f.name, '★ ' + (f.nickname || f.name) + (f.gender ? ' · ' + f.gender : '')]);
+          for (const gv of (dv.google_voices || []))
+            if (!favNames.has(gv.name))
+              opts.push([gv.name, (nickOf.get(gv.name) || gv.name) + (gv.gender ? ' · ' + gv.gender : '')]);
+        } else {
+          for (const r of (dv.references || []))
+            opts.push([r.rel, r.label + (r.lang_name ? ' · ' + r.lang_name : '')]);
+        }
+        // Keep a saved voice that isn't in the current list (e.g. set under a
+        // different engine) so opening the editor never silently drops it.
+        if (current && !opts.some(o => o[0] === current)) opts.unshift([current, current + ' (saved)']);
+        for (const [val, label] of opts)
+          sel.append(el('option', { value: val, selected: val === current }, label));
+      } catch (e) { /* leave just the Default option */ }
+    };
+    const voiceBox = el('div', {});
+    if (chLangs.length) {
+      for (const l of chLangs) {
+        const sel = el('select', { style: 'min-width:260px' },
+          el('option', { value: '' }, 'Default (from the Voices page)'));
+        voiceSel[l.code] = sel;
+        voiceBox.append(el('div', { class: 'row', style: 'align-items:center;gap:10px;margin-top:6px' },
+          el('span', { class: 'sub', style: 'min-width:74px' }, l.name || l.code), sel));
+        fillVoiceOptions(l, sel, chVoices[l.code] || '');
+      }
+    } else {
+      voiceBox.append(el('div', { class: 'sub' },
+        'Add a project to this channel first — then its language’s voice can be set here.'));
+    }
+
     const save = el('button', { class: 'btn primary' }, 'Save');
     save.onclick = async () => {
       save.disabled = true;
@@ -667,6 +714,12 @@ function channelEditor(name, meta = {}) {
           action: 'meta', name, email: email.value.trim(), description: desc.value.trim()
         });
         if (r2.error) { save.disabled = false; return toast(r2.error, true); }
+        // Persist the per-language channel voice ("" clears it → default).
+        for (const code of Object.keys(voiceSel)) {
+          const rv = await api('/api/channels',
+            { action: 'voice', name, lang: code, voice: voiceSel[code].value });
+          if (rv && rv.error) { save.disabled = false; return toast(rv.error, true); }
+        }
         done(true);
       } catch (e) { save.disabled = false; toast('Could not save: ' + e, true); }
     };
@@ -682,6 +735,8 @@ function channelEditor(name, meta = {}) {
         email,
         el('label', { class: 'sub', style: 'display:block;margin-top:14px' }, 'Description'),
         desc,
+        el('label', { class: 'sub', style: 'display:block;margin-top:16px' }, 'Channel voice'),
+        voiceBox,
         el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end;gap:8px' },
           el('button', { class: 'btn', onclick: () => done(false) }, 'Cancel'),
           save)));
