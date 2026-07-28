@@ -191,6 +191,10 @@ def main() -> int:
           im.engine_order({"generate_engine": "cloudflare",
                            "cf_account_id": "a", "cf_api_token": "t"}),
           ["cloudflare", "pollinations"])
+    check("failover OFF → ONLY the chosen engine (no switching)",
+          im.engine_order({"generate_engine": "vertex", "generate_failover": False,
+                           "vertex_project": "p"}),
+          ["vertex"])
     check("generation is available out of the box (Pollinations)", im.available({}), True)
 
     calls = []

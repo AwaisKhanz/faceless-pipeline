@@ -146,6 +146,7 @@ _FIELDS: list[dict] = [
      "options": _opt(("pollinations", "Pollinations.ai — free, no key (default)"),
                      ("cloudflare", "Cloudflare Workers AI — needs account + token"),
                      ("vertex", "Vertex AI — Google Gemini image (needs project)"))},
+    {"key": "generate_failover", "section": "imagegen", "type": "bool"},
     {"key": "generate_min", "section": "imagegen", "type": "number",
      "min": 0, "max": 1, "step": 0.01, "show_if": {"generate": ["mixed"]}},
     {"key": "generate_max", "section": "imagegen", "type": "number",

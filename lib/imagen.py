@@ -144,10 +144,21 @@ def engine_label(engine: str | None) -> str:
     return _ENGINE_LABELS.get(engine or "", "AI")
 
 
+def _truthy(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() not in ("", "off", "false", "no", "0", "none")
+
+
 def engine_order(cfg: dict | None) -> list[str]:
-    """The engines to try, in order: the chosen one first, then the rest of the
-    failover chain — keeping only the ones that are actually configured."""
+    """The engines to try, in order. Normally the chosen one first, then the rest
+    of the failover chain (ready ones only). With generate_failover off, ONLY the
+    chosen engine is used — so 'vertex' means vertex or nothing (the scene then
+    falls back to a stock search, never to another generator)."""
+    cfg = cfg or {}
     chosen = selected_engine(cfg)
+    if not _truthy(cfg.get("generate_failover", True)):
+        return [chosen] if engine_ready(chosen, cfg) else []
     seq = [chosen] + [e for e in ENGINE_CHAIN if e != chosen]
     return [e for e in seq if engine_ready(e, cfg)]
 
