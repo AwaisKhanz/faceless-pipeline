@@ -449,32 +449,74 @@ def _cf_is_cap(code: int, detail: str) -> bool:
                                   "too many", "3040", "4006"))
 
 
-def _cf_body(model: str, prompt: str, cfg: dict) -> dict:
-    """Build the best-quality request body for the chosen Cloudflare model.
+def _cf_is_flux2(model: str) -> bool:
+    m = model.lower()
+    return "flux-2" in m or "flux2" in m
 
-    The old code sent only {"prompt": …}, so flux-1-schnell ran at its default 4
-    steps and a SQUARE 1024 (then cropped to 16:9) — which is why it looked poor.
-    Now we pass real quality controls per model family:
-      • SDXL / Stable-Diffusion — native width/height (16:9), a negative prompt to
-        push realism, num_steps (default 20) and guidance. This is the big win.
-      • flux — prompt + steps (schnell caps at 8); it has a fixed square canvas
-        and no negative-prompt input, so those are omitted.
-    """
+
+def _cf_steps(model: str, cfg: dict) -> int:
+    """Diffusion steps for a Cloudflare model, clamped to what it accepts.
+    More steps = more detail (and, for flux-2, more cost)."""
+    m = model.lower()
+    want = cfg.get("cf_steps")
+    if _cf_is_flux2(model):
+        return max(1, int(want or 28))                 # flagship: default 28, no hard cap
+    if "schnell" in m:
+        return max(1, min(int(want or 8), 8))          # distilled flux: max 8
+    return max(1, min(int(want or 20), 20))            # SDXL: max 20
+
+
+def _cf_multipart(fields: dict) -> tuple[bytes, str]:
+    """Encode form fields as multipart/form-data — the format FLUX.2 requires."""
+    boundary = "----faceless" + "".join(random.choices("0123456789abcdef", k=20))
+    buf = []
+    for k, v in fields.items():
+        buf.append(f"--{boundary}\r\n"
+                   f'Content-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n')
+    buf.append(f"--{boundary}--\r\n")
+    return "".join(buf).encode("utf-8"), f"multipart/form-data; boundary={boundary}"
+
+
+def _cf_request(model: str, prompt: str, cfg: dict) -> tuple[bytes, str]:
+    """The request body + Content-Type for a model. FLUX.2 takes multipart form
+    fields (prompt/steps/width/height); everything else takes JSON, with SDXL
+    getting a negative prompt + guidance for the best photoreal look."""
+    w, h = _aspect_wh(cfg)
+    steps = _cf_steps(model, cfg)
+    if _cf_is_flux2(model):                            # FLUX.2 [dev] — flagship quality
+        return _cf_multipart({"prompt": prompt, "steps": steps,
+                              "width": w, "height": h})
     m = model.lower()
     seed = random.randint(1, 2_000_000_000)
-    if "flux" in m:
-        steps = int(cfg.get("cf_steps") or 8)
-        steps = min(steps, 8) if "schnell" in m else steps
-        return {"prompt": prompt, "steps": max(1, steps), "seed": seed}
-    # SDXL / Stable-Diffusion family — full control gives the best photoreal look.
-    w, h = _aspect_wh(cfg)
-    steps = max(1, min(int(cfg.get("cf_steps") or 20), 20))
-    out = {"prompt": prompt, "width": w, "height": h, "num_steps": steps,
-           "guidance": float(cfg.get("cf_guidance") or 7.5), "seed": seed}
-    neg = str(cfg.get("cf_negative") or PHOTO_NEG).strip()
-    if neg:
-        out["negative_prompt"] = neg
-    return out
+    if "flux" in m:                                    # flux-1-schnell — fixed square
+        body = {"prompt": prompt, "steps": steps, "seed": seed}
+    else:                                              # SDXL / Stable-Diffusion
+        body = {"prompt": prompt, "width": w, "height": h, "num_steps": steps,
+                "guidance": float(cfg.get("cf_guidance") or 7.5), "seed": seed}
+        neg = str(cfg.get("cf_negative") or PHOTO_NEG).strip()
+        if neg:
+            body["negative_prompt"] = neg
+    return json.dumps(body).encode("utf-8"), "application/json"
+
+
+def _cf_extract_b64(raw: bytes) -> str:
+    """Base64 image data out of a JSON Cloudflare response, across its shapes:
+    {"image": …} (FLUX.2), {"result":{"image": …}} (flux-1), or …data[0].b64_json."""
+    try:
+        j = json.loads(raw)
+    except Exception:
+        return ""
+    if not isinstance(j, dict):
+        return ""
+    if j.get("image"):
+        return j["image"]
+    res = j.get("result") if isinstance(j.get("result"), dict) else {}
+    if res.get("image"):
+        return res["image"]
+    try:
+        return res["data"][0]["b64_json"]
+    except Exception:
+        return ""
 
 
 def _cf_one(account_id: str, token: str, model: str, prompt: str,
@@ -482,12 +524,12 @@ def _cf_one(account_id: str, token: str, model: str, prompt: str,
     """One request to one Cloudflare account. Raises _CFRateLimited when THAT
     account is capped/limited, GenError for a genuine (prompt/model) failure."""
     url = CF_RUN_URL.format(acct=account_id, model=model)
-    body = json.dumps(_cf_body(model, prompt, cfg)).encode("utf-8")
-    req = urllib.request.Request(url, data=body, headers={
-        "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    data, ctype = _cf_request(model, prompt, cfg)
+    req = urllib.request.Request(url, data=data, headers={
+        "Authorization": f"Bearer {token}", "Content-Type": ctype})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            ctype = r.headers.get("Content-Type", "")
+            resp_ctype = r.headers.get("Content-Type", "")
             raw = r.read()
     except urllib.error.HTTPError as e:
         detail = _read_error(e)
@@ -496,22 +538,12 @@ def _cf_one(account_id: str, token: str, model: str, prompt: str,
         raise GenError(f"Cloudflare HTTP {e.code}: {detail}") from None
     except Exception as e:
         raise GenError(f"Cloudflare request failed: {e}") from None
-    if ctype.lower().startswith("image"):              # SDXL returns raw PNG bytes
+    if resp_ctype.lower().startswith("image"):         # SDXL returns raw image bytes
         dest.write_bytes(raw)
         return
-    try:                                               # flux returns JSON base64
-        j = json.loads(raw)
-    except Exception:
-        raise GenError("Cloudflare returned an unreadable response") from None
-    result = j.get("result") or {}
-    b64 = result.get("image") or ""
+    b64 = _cf_extract_b64(raw)
     if not b64:
-        try:
-            b64 = result["data"][0]["b64_json"]        # OpenAI-compatible shape
-        except Exception:
-            b64 = ""
-    if not b64:
-        why = str(j.get("errors") or j.get("messages") or "no image in response")
+        why = raw[:200].decode("utf-8", "replace")
         if _cf_is_cap(200, why):                       # cap sometimes reported in a 200 body
             raise _CFRateLimited()
         raise GenError(f"Cloudflare produced nothing: {why[:120]}")

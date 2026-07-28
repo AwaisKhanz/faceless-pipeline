@@ -242,17 +242,29 @@ def main() -> int:
     check("cap detection: a content 400 is NOT a cap",
           im._cf_is_cap(400, "Input prompt contains inappropriate content"), False)
 
-    print("\n  Cloudflare model-aware request body (quality params):")
-    sdxl = im._cf_body("@cf/bytedance/stable-diffusion-xl-lightning", "a cat",
-                       {"cf_steps": 20, "generate_aspect": "16:9"})
-    check("SDXL body has 16:9 width/height", (sdxl["width"], sdxl["height"]), (1280, 720))
-    check("SDXL body sends num_steps", sdxl["num_steps"], 20)
-    check("SDXL body sends a negative prompt (pushes realism)",
-          bool(sdxl.get("negative_prompt")))
-    flux = im._cf_body("@cf/black-forest-labs/flux-1-schnell", "a cat", {"cf_steps": 20})
-    check("flux body caps steps at 8", flux["steps"], 8)
-    check("flux body has no width/height (fixed square)", "width" not in flux)
-    check("flux body has no negative prompt", "negative_prompt" not in flux)
+    print("\n  Cloudflare model-aware request (quality params + FLUX.2 multipart):")
+    sdxl_data, sdxl_ct = im._cf_request("@cf/bytedance/stable-diffusion-xl-lightning",
+                                        "a cat", {"cf_steps": 20, "generate_aspect": "16:9"})
+    sdxl = json.loads(sdxl_data)
+    check("SDXL uses JSON", sdxl_ct, "application/json")
+    check("SDXL has 16:9 width/height", (sdxl["width"], sdxl["height"]), (1280, 720))
+    check("SDXL sends num_steps", sdxl["num_steps"], 20)
+    check("SDXL sends a negative prompt (pushes realism)", bool(sdxl.get("negative_prompt")))
+    flux = json.loads(im._cf_request("@cf/black-forest-labs/flux-1-schnell",
+                                     "a cat", {"cf_steps": 20})[0])
+    check("flux-1 caps steps at 8", flux["steps"], 8)
+    check("flux-1 has no width/height (fixed square)", "width" not in flux)
+    f2_data, f2_ct = im._cf_request("@cf/black-forest-labs/flux-2-dev", "a cat",
+                                    {"cf_steps": 28, "generate_aspect": "16:9"})
+    check("FLUX.2 uses multipart form-data (not JSON)",
+          f2_ct.startswith("multipart/form-data"))
+    check("FLUX.2 form carries prompt + 16:9 + 28 steps",
+          b'name="prompt"' in f2_data and b'name="width"' in f2_data
+          and b"1280" in f2_data and b"28" in f2_data)
+    check("extract top-level image (FLUX.2 shape)",
+          im._cf_extract_b64(b'{"image":"AAA"}'), "AAA")
+    check("extract result.image (flux-1 shape)",
+          im._cf_extract_b64(b'{"result":{"image":"BBB"}}'), "BBB")
 
     seen = []
     saved_one = im._cf_one
