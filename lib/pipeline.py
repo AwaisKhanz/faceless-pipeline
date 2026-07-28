@@ -357,6 +357,9 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
 
     out = {"scenes": n_scenes, "assets": assets_n,
            "match": match_avg, "weak": weak_n, "languages": {}}
+    cfg_ps = load_config()
+    chirp_engine = str(cfg_ps.get("voice_engine", "")).strip().lower() in (
+        "chirp", "gtts", "google")
     for lg in langs:
         code = lg["code"]
         pl_ = paths_for(sheet, code)
@@ -385,24 +388,38 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
         except (Exception, SystemExit):
             scenes = []
 
-        # Which clip reads this language. The project page needs it to show and
-        # change the voice in place, rather than sending you to another screen
-        # to answer a question it just asked you.
+        # Which voice reads this language, for the project page. Show the voice
+        # that will ACTUALLY narrate — the channel voice if the project's channel
+        # set one, else the language's own default: a Google Chirp voice name when
+        # Chirp is the engine, otherwise a reference clip. (Previously this always
+        # showed the reference clip label, so a Chirp/channel voice was hidden
+        # behind a stale clip name.)
         pref = V.pref_for(code)
         ref = pref.get("reference", "")
-        ref_ok = False
-        if ref:
+        gv = pref.get("google_voice", "")
+        eff_voice = chv or (gv if chirp_engine else ref)   # chv computed above
+        is_clip = bool(eff_voice) and (
+            "/" in eff_voice
+            or eff_voice.rsplit(".", 1)[-1].lower() in
+            ("mp3", "wav", "m4a", "flac", "ogg", "aac"))
+        if is_clip:
+            voice_label = V.label_for(eff_voice)
             try:
-                V.resolve(ref)
-                ref_ok = True
+                V.resolve(eff_voice)
+                voice_ok = True
             except FileNotFoundError:
-                ref_ok = False
+                voice_ok = False
+        elif eff_voice:                          # a catalogue voice name
+            voice_label = V.voice_display(eff_voice)   # nickname if set, else the name
+            voice_ok = True
+        else:
+            voice_label, voice_ok = "", False
 
         out["languages"][code] = {
             "name": lg.get("name", code),
-            "voice_ref": ref,
-            "voice_label": V.label_for(ref) if ref else "",
-            "voice_ok": ref_ok,
+            "voice_ref": eff_voice,
+            "voice_label": voice_label,
+            "voice_ok": voice_ok,
             "sheets": bool(lg.get("file")) or code == mlang,
             "visuals": assets_n > 0 and assets_n >= n_scenes,
             "visuals_n": assets_n,
