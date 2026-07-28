@@ -663,9 +663,10 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> s
     if not order:
         raise GenError("no image engine is configured")
     retries = max(0, int(cfg.get("generate_retries", 5) or 0))
+    workers = max(1, int(cfg.get("generate_workers") or 1))
 
-    # One generation at a time (per generate_workers). Acquire the slot cancellably
-    # so Stop is honoured even while another job holds it.
+    # generate_workers many at once. Acquire the slot cancellably so Stop is
+    # honoured even while another job holds it.
     sem = _semaphore(cfg)
     while not sem.acquire(timeout=0.25):
         if _stop():
@@ -673,7 +674,12 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> s
     try:
         errors = []
         for eng in order:
-            floor = _engine_floor(eng, cfg)
+            # The pace floor spaces the START of each call. Splitting it across the
+            # workers means N workers actually fire ~N× as often (floor/N apart)
+            # rather than all queuing behind one global gap — so raising
+            # generate_workers genuinely speeds generation up. A rate limit still
+            # widens the shared gap adaptively, so this can't run away.
+            floor = _engine_floor(eng, cfg) / workers
             attempt = 0
             while True:
                 if _stop():

@@ -224,6 +224,27 @@ def main() -> int:
         im._ENGINE_RAW.update(saved_raw)
         im._THROTTLE.reset()
 
+    print("\n  generate_workers actually speeds up (pace = floor / workers):")
+    im._THROTTLE.reset()
+    paces = []
+    saved_pace = im._THROTTLE.pace
+    im._THROTTLE.pace = lambda floor, sc=None: paces.append(floor)
+    saved_raw2 = dict(im._ENGINE_RAW)
+    im._ENGINE_RAW["pollinations"] = lambda p, c, d, l=None: Path(d).write_bytes(b"IMG")
+    try:
+        im.image("x", {"generate_min_interval": 8, "pollinations_interval": 8,
+                       "generate_workers": 4}, Path(tempfile.mkdtemp()) / "w4.png")
+        check("4 workers → pace floor is base/4 (8→2s)", abs(paces[-1] - 2.0) < 0.01)
+        paces.clear()
+        im.image("y", {"generate_min_interval": 8, "pollinations_interval": 8,
+                       "generate_workers": 1}, Path(tempfile.mkdtemp()) / "w1.png")
+        check("1 worker → full pace floor (8s)", abs(paces[-1] - 8.0) < 0.01)
+    finally:
+        im._THROTTLE.pace = saved_pace
+        im._ENGINE_RAW.clear()
+        im._ENGINE_RAW.update(saved_raw2)
+        im._THROTTLE.reset()
+
     # ── Cloudflare multi-account pooling + per-account cooldown ──────────────
     print("\n  Cloudflare multi-account rotation:")
     im._cf_reset()
