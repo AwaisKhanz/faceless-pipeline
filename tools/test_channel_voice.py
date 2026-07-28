@@ -92,6 +92,21 @@ def main() -> int:
     finally:
         tts.active_engine = saved_engine
 
+    print("\n  the Activity voice header reports engine + voice + device:")
+    tts.active_engine = lambda cfg: "chatterbox"
+    tts.selected_engine = lambda cfg: "chatterbox"
+    rpt = "\n".join(tts.run_report("de", "de/awais-male-1.mp3",
+                                   {"voice_flow": "on"}, 145))
+    check("names the engine", "Chatterbox" in rpt)
+    check("names the voice", "Awais male 1" in rpt or "awais-male-1" in rpt)
+    check("shows the device (local engines)", "local" in rpt)
+    check("shows the line count", "145" in rpt)
+    check("shows sentence-flow state", "sentence-flow" in rpt)
+    tts.active_engine = lambda cfg: "chirp"
+    rpt_c = "\n".join(tts.run_report("de", "de-DE-Chirp3-HD-Enceladus", {}, 10))
+    check("Chirp report names the cloud model + voice",
+          "Chirp3-HD" in rpt_c and "Enceladus" in rpt_c)
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

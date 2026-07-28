@@ -322,7 +322,7 @@ def synth(scenes, lang: str, ref_wav=None, cache: Path = CACHE,
             f"couldn't be read. Pick one in the Voices panel, and check the "
             f"Text-to-Speech API is enabled on your project.")
     rate = float(o.get("speaking_rate", 1.0))
-    log(f"  Google Chirp 3 HD · {voice} · {locale}")
+    # (engine/voice/locale header is shown once by tts.run_report())
 
     out, made = [], 0
     for s in scenes:

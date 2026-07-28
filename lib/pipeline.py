@@ -1262,6 +1262,7 @@ def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
     Chirp, else a reference clip). When the caller passes none, the project's
     CHANNEL voice is used if its channel set one — so every project in a channel
     narrates with the channel's voice — else the global per-language default."""
+    explicit = bool(voice)                       # a voice the caller passed in
     if not voice:
         voice = channel_voice(sheet, lang) or None
     p = paths_for(sheet, lang)
@@ -1279,6 +1280,21 @@ def generate_voice(scenes, lang: str, sheet: Path, voice: str | None = None,
         if _VOICE_SCENE_LINE.match(line.lstrip()):
             done[0] = min(total, done[0] + 1)
         on_progress(done[0], total, line.rstrip())
+
+    # Where the voice came from, so Activity says WHY this voice is being used.
+    if explicit:
+        source = "this run's own choice"
+    elif voice:                                  # came from the channel (compatible)
+        cname = ""
+        try:
+            from . import channels as _ch
+            cname = _ch.of(project_id(sheet))
+        except Exception:
+            cname = ""
+        source = f'channel “{cname}”' if cname else "the project's channel"
+    else:
+        source = "Settings default (per-language)"
+    log(f"Voice source · {source}")
 
     return tts.synth(scenes, lang, p["voicecache"], voice=voice, log=log)
 

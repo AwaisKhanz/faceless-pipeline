@@ -186,6 +186,68 @@ def describe(lang: str) -> str:
             f"expression {p['exaggeration']:.2f} · guidance {p['cfg_weight']:.2f}")
 
 
+_ENGINE_PRETTY = {"chirp": "Google Chirp", "higgs": "Higgs Audio",
+                  "chatterbox": "Chatterbox"}
+
+
+def run_report(lang: str, voice: str | None, cfg: dict, n: int = 0) -> list[str]:
+    """A full, human-readable header for a voice run — the engine (and any
+    fallback), the model, the device for local engines, the exact voice, the
+    locale/tuning, sentence-flow, and the line count. Logged once at the start so
+    the Activity Output says precisely WHAT is generating and HOW, for every
+    engine and in flow mode too (where the old header was skipped)."""
+    eng = active_engine(cfg)
+    sel = selected_engine(cfg)
+    name = V.LANGS.get(lang, lang)
+    head = f"Voice · {name} ({lang})" + (f" · {n} line(s)" if n else "")
+    out = [head]
+    fb = ""
+    if sel != eng and sel in ("chirp", "higgs"):
+        fb = (f"   ({_ENGINE_PRETTY.get(sel, sel)} was selected but isn't ready "
+              f"here → using {_ENGINE_PRETTY.get(eng, eng)})")
+
+    if eng == "chirp":
+        from . import gtts_engine as GT
+        gv = _google_voice(lang, voice, cfg) or "(pick a voice in Voices)"
+        loc = GT.locale_for(lang, cfg)
+        rate = float(_gtts_opts(cfg).get("speaking_rate", 1.0) or 1.0)
+        out.append(f"  engine   Google {GT.DEFAULT_MODEL} · cloud{fb}")
+        out.append(f"  voice    {V.voice_display(gv)}  ·  locale {loc}  ·  rate {rate:.2f}x")
+        if V.voice_display(gv) != gv:
+            out.append(f"           (catalogue id {gv})")
+    elif eng == "higgs":
+        from . import higgs_engine as HG
+        ref = _raw_ref(lang, voice)
+        try:
+            dev = HG.best_device(cfg).upper()
+        except Exception:
+            dev = "?"
+        p = V.pref_for(lang)
+        out.append(f"  engine   Higgs Audio · local · {dev} · {HG.DEFAULT_MODEL}{fb}")
+        out.append(f"  voice    {V.label_for(ref)}  ({ref})" if ref
+                   else "  voice    (no reference clip chosen — pick one in Voices)")
+        out.append(f"  tuning   temperature {p['temperature']:.2f} · "
+                   f"best-of {p['best_of']} · retries {p['retries']}")
+    else:                                            # chatterbox
+        from . import chatterbox_engine as CB
+        ref = _raw_ref(lang, voice)
+        try:
+            dev = CB.best_device().upper()
+        except Exception:
+            dev = "?"
+        out.append(f"  engine   Chatterbox · local · {dev}{fb}")
+        if ref:
+            p = V.pref_for(lang)
+            out.append(f"  voice    {V.label_for(ref)}  ({ref})")
+            out.append(f"  tuning   expression {p['exaggeration']:.2f} · "
+                       f"guidance {p['cfg_weight']:.2f}")
+        else:
+            out.append("  voice    (no reference clip chosen — pick one in Voices)")
+    out.append(f"  mode     sentence-flow {'ON' if _flow_mode(cfg) else 'off'}"
+               f"  ·  cache cache/voice")
+    return out
+
+
 def reference_for(lang: str, override: str | None = None) -> Path:
     """The prepared reference clip for a language, or a clear error saying why not."""
     name = override or V.pref_for(lang)["reference"]
@@ -228,6 +290,13 @@ def synth(scenes, lang: str, cache: Path, voice: str | None = None,
     otherwise it's the per-scene path below. Flow degrades to per-scene internally
     when alignment can't run, so this never dead-ends."""
     cfg = _config()
+    # Full "what's generating and how" header — engine, model, device, voice,
+    # locale/tuning, flow, count — once, for BOTH the flow and per-scene paths.
+    for _line in run_report(lang, voice, cfg, len(scenes)):
+        try:
+            log(_line)
+        except Exception:
+            pass
     if _flow_mode(cfg):
         try:
             return _synth_flow(scenes, lang, Path(cache), voice, cfg, log)
@@ -289,12 +358,7 @@ def _synth_raw(scenes, lang: str, cache: Path, voice: str | None = None,
     if _use_gtts(cfg):
         from . import gtts_engine as GT
         gv = _google_voice(lang, voice, cfg)
-        try:
-            log(f"  Voice engine: {describe(lang)}")
-            log(f"  Google voice: {gv or '(none — pick one in Voices)'}")
-        except Exception:
-            pass
-        try:
+        try:                                    # engine/voice header shown by run_report()
             return GT.synth(scenes, lang, None, cache, _gtts_opts(cfg),
                             log=log, cfg=cfg, reference=gv)
         except SystemExit:
@@ -310,14 +374,8 @@ def _synth_raw(scenes, lang: str, cache: Path, voice: str | None = None,
             f"Chatterbox cannot speak '{lang}'. It supports: "
             f"{', '.join(sorted(V.LANGS))}")
 
-    # Say exactly what's about to narrate, so the Activity log is self-explanatory:
-    # engine · model · device · reference voice.
+    # The engine/model/device/voice header is shown once by run_report() above.
     ref = _raw_ref(lang, voice)
-    try:
-        log(f"  Voice engine: {describe(lang)}")
-        log(f"  Reference clip: {ref or '(none — pick one in Voices)'}")
-    except Exception:
-        pass
     if _use_higgs(cfg):
         from . import higgs_engine as HG
         try:
