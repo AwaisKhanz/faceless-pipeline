@@ -302,26 +302,6 @@ def _flow_flags(scenes) -> list[bool]:
     return out
 
 
-def _voiced_any(scenes, code: str, cache: Path) -> int:
-    """How many scenes have SOME real cached narration clip, regardless of which
-    engine (cb_/hg_ prefix) or which exact settings produced it. Used only as a
-    safety net for the dashboard so voice that exists is never reported as
-    missing after an engine fallback or a settings tweak."""
-    if not cache.exists():
-        return 0
-    n = 0
-    for s in scenes:
-        stem = f"_{code}_{s.n:03d}_"
-        hit = any(
-            (f.name.startswith("cb" + stem) or f.name.startswith("hg" + stem)
-             or f.name.startswith("gc" + stem) or f.name.startswith("fl" + stem))
-            and f.stat().st_size > 1024
-            for f in cache.glob(f"*{stem}*.wav"))
-        if hit:
-            n += 1
-    return n
-
-
 def project_status(sheet: Path, langs: list[dict]) -> dict:
     """Which steps are finished, per language, judged from what's on disk.
 
@@ -369,14 +349,12 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
         pl_ = paths_for(sheet, code)
         mp4 = pl_["out"]
 
-        # Count cached narration for this language. First the exact files the
-        # CURRENT voice choice would produce (cache key includes reference +
-        # settings). But if that comes up short while audio clearly exists —
-        # e.g. it was written by the other engine during a fallback, or under
-        # slightly different settings — fall back to counting any real cached
-        # clip for that scene, so the dashboard never says "none" when the
-        # voice is plainly there. (The render regenerates anything missing for
-        # the active engine anyway, so this only affects what's shown.)
+        # Count cached narration for this language by the EXACT files the current
+        # voice choice would produce — the cache key folds in the reference/voice,
+        # engine, settings AND the scene's own text, so a clip only counts if it
+        # was made for THIS project's words. (An earlier loose fallback matched by
+        # language + scene number alone, which borrowed other projects' "de scene
+        # 1" clips and falsely showed a never-voiced project as done — removed.)
         voiced = 0
         try:
             scenes = load_scenes(sheet, code,
@@ -384,8 +362,6 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
             vp = tts.voice_paths(scenes, code, p_shared['voicecache'])
             voiced = sum(1 for v in vp
                          if v.exists() and v.stat().st_size > 1024)
-            if voiced < len(scenes):
-                voiced = max(voiced, _voiced_any(scenes, code, p_shared['voicecache']))
         # SystemExit (not an Exception) is what sheet.load raises for a language
         # whose narration can't be found. Catch it here so one missing
         # narration file degrades to "not voiced" instead of failing the dashboard.
@@ -414,7 +390,10 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
             "visuals": assets_n > 0 and assets_n >= n_scenes,
             "visuals_n": assets_n,
             "voice_n": voiced,
-            "voice": n_scenes > 0 and voiced >= n_scenes,
+            # Voiced when this project's own clips exist, OR when it's already
+            # rendered (the narration is baked into the finished video, so the
+            # cached WAVs may have rotated / been made under an older voice).
+            "voice": n_scenes > 0 and (voiced >= n_scenes or mp4.exists()),
             "render": mp4.exists(),
             "mp4": mp4.name if mp4.exists() else None,
             "size_mb": round(mp4.stat().st_size / 1e6, 1) if mp4.exists() else None,
