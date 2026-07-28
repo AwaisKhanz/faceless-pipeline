@@ -122,6 +122,24 @@ def main() -> int:
     check("re-run is fully cached (no new synth/slice)",
           calls == before, True)
 
+    print("\n  progress: one countable 'S N voiced/cached' line per scene:")
+    # The Activity bar counts lines matching this exact pattern; flow works in
+    # sentence GROUPS, so without a per-scene line the bar sat at 0/N. Guard it.
+    from lib.pipeline import _VOICE_SCENE_LINE      # the very regex the bar uses
+    cacheP = pathlib.Path(tempfile.mkdtemp())
+    lines: list[str] = []
+    VF.synth(scenes, "en", cacheP, "voiceA", "chatterbox",
+             raw_synth=raw_synth, align_words=align_words,
+             duration_of=duration_of, slice_audio=slice_audio, log=lines.append)
+    counted = sum(1 for m in lines if _VOICE_SCENE_LINE.match(m.lstrip()))
+    check("fresh run emits one progress line per scene (bar reaches N)", counted, len(scenes))
+    lines2: list[str] = []
+    VF.synth(scenes, "en", cacheP, "voiceA", "chatterbox",   # everything cached now
+             raw_synth=raw_synth, align_words=align_words,
+             duration_of=duration_of, slice_audio=slice_audio, log=lines2.append)
+    counted2 = sum(1 for m in lines2 if _VOICE_SCENE_LINE.match(m.lstrip()))
+    check("a fully-cached re-run still reports N (bar isn't stuck)", counted2, len(scenes))
+
     print("\n  fallback: bad alignment -> each member voiced separately, same paths:")
     cache2 = pathlib.Path(tempfile.mkdtemp())
     calls2 = {"raw": 0, "slice": 0}

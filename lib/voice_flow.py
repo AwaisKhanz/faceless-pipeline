@@ -151,10 +151,19 @@ def synth(scenes, lang: str, cache: Path, voice: str, engine: str,
     out: list[Path] = []
     made = joined_groups = 0
 
+    # One "S N voiced/cached" line per SCENE (every path), so the progress bar —
+    # which counts those lines — advances even though flow works in sentence
+    # GROUPS. Without this the Activity counter sat at 0/N through the whole run
+    # while the log clearly showed it progressing.
+    def _done(idx: int, made_now: bool) -> None:
+        log(f"S{scenes[idx].n:>3} {'voiced' if made_now else 'cached'}")
+
     for g in groups(scenes):
         joined, dests = _paths_for_group(g, scenes, lang, cache, voice, engine)
         if all(d.exists() and d.stat().st_size > 1024 for d in dests):
             out.extend(dests)
+            for j in g:
+                _done(j, False)
             continue
 
         if len(g) == 1:                                   # nothing to join
@@ -162,6 +171,7 @@ def synth(scenes, lang: str, cache: Path, voice: str, engine: str,
             _place(src, dests[0])
             out.append(dests[0])
             made += 1
+            _done(g[0], True)
             continue
 
         # Speak the whole sentence once, then try to cut it at the word joins.
@@ -183,10 +193,13 @@ def synth(scenes, lang: str, cache: Path, voice: str, engine: str,
             made += len(g)
             log(f"  flow: joined S{scenes[g[0]].n}-S{scenes[g[-1]].n} as one "
                 f"sentence, split into {len(g)} clips")
+            for j in g:
+                _done(j, True)
         else:
             # Fallback: voice each member on its own, into the same fl_ paths.
             for k, j in enumerate(g):
                 _place(raw_synth(_clean(scenes[j].narration)), dests[k])
+                _done(j, True)
             made += len(g)
         out.extend(dests)
 
