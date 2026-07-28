@@ -135,6 +135,15 @@ def selected_engine(cfg: dict | None) -> str:
     return e if e in ENGINE_CHAIN else DEFAULT_ENGINE
 
 
+_ENGINE_LABELS = {"pollinations": "Pollinations", "cloudflare": "Cloudflare",
+                  "vertex": "Vertex"}
+
+
+def engine_label(engine: str | None) -> str:
+    """A human-friendly name for an engine, for the 'credit' field."""
+    return _ENGINE_LABELS.get(engine or "", "AI")
+
+
 def engine_order(cfg: dict | None) -> list[str]:
     """The engines to try, in order: the chosen one first, then the rest of the
     failover chain — keeping only the ones that are actually configured."""
@@ -585,9 +594,11 @@ _ENGINE_RAW = {"pollinations": _pollinations_raw,
                "vertex": _vertex_raw}
 
 
-def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> Path:
-    """Generate ONE image for `prompt` and write it to `dest`, using the engine
-    chosen in Settings and falling through the failover chain if it can't.
+def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> str:
+    """Generate ONE image for `prompt`, write it to `dest`, and RETURN the name of
+    the engine that produced it ("pollinations" / "cloudflare" / "vertex"), so the
+    caller can label the asset's source accurately (not always "imagen"). Uses the
+    engine chosen in Settings and falls through the failover chain if it can't.
 
     Cached: if `dest` already holds an image it is returned without a call. Each
     engine is paced by the shared adaptive throttle and its 429s are waited out
@@ -611,7 +622,7 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> P
 
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0:
-        return dest                        # already generated — reuse, no cost
+        return selected_engine(cfg)        # cached — reuse, best-effort engine name
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     order = engine_order(cfg)
@@ -639,7 +650,7 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> P
                     _THROTTLE.ok(floor)
                     if eng != order[0]:
                         _note(f"· generated with {eng} (failover)")
-                    return dest
+                    return eng
                 except Cancelled:
                     raise
                 except _RateLimited as rl:

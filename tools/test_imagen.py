@@ -65,8 +65,9 @@ def main() -> int:
     cfg = {"vertex_project": "proj", "generate_location": "global",
            "vertex_service_account": "", "generate_engine": "vertex"}
     dest = Path(tempfile.mkdtemp()) / "g.png"
-    out = im.image("a rocket launch", cfg, dest)
-    check("writes the image file", out.exists() and out.stat().st_size > 0)
+    eng = im.image("a rocket launch", cfg, dest)
+    check("writes the image file", dest.exists() and dest.stat().st_size > 0)
+    check("reports the engine that produced it", eng, "vertex")
     check("endpoint targets the project", "projects/proj/locations/global" in cap["url"])
     check("endpoint uses generateContent (Gemini image API)",
           cap["url"].endswith(":generateContent"))
@@ -82,8 +83,8 @@ def main() -> int:
     def boom(*a, **k):
         raise AssertionError("should have used the cached file")
     im._generate = boom
-    out2 = im.image("a rocket launch", cfg, dest)
-    check("a re-run reuses the cached file, no second call", out2 == dest)
+    im.image("a rocket launch", cfg, dest)     # must NOT call _generate (boom)
+    check("a re-run reuses the cached file, no second call", dest.exists())
 
     # a text-only reply (no image part / safety) -> GenError, not a broken file
     im._generate = lambda url, body, token: {
@@ -140,10 +141,10 @@ def main() -> int:
                 {"inlineData": {"data": tiny}}]}}]}
         im._generate = flaky
         notes = []
-        out = im.image("retry me", rl_cfg,
-                       Path(tempfile.mkdtemp()) / "r.png", log=notes.append)
+        rp = Path(tempfile.mkdtemp()) / "r.png"
+        im.image("retry me", rl_cfg, rp, log=notes.append)
         check("succeeds once the model frees up (3 attempts)",
-              out.exists() and tries["n"] == 3)
+              rp.exists() and tries["n"] == 3)
         check("waited out the server's cooldown (~3.5s)",
               any(abs(s - 3.5) < 0.3 for s in sleeps))
         check("a 429 widened the gap for the next scene (adaptive)",
@@ -211,12 +212,13 @@ def main() -> int:
     im._ENGINE_RAW["cloudflare"] = _good("cloudflare")
     im._ENGINE_RAW["vertex"] = _bad("vertex")
     try:
-        d = im.image("x", {"cf_account_id": "a", "cf_api_token": "t",
-                           "generate_min_interval": 0, "pollinations_interval": 0},
-                     Path(tempfile.mkdtemp()) / "fo.png")
+        fo = Path(tempfile.mkdtemp()) / "fo.png"
+        eng = im.image("x", {"cf_account_id": "a", "cf_api_token": "t",
+                             "generate_min_interval": 0, "pollinations_interval": 0}, fo)
         check("failover: Pollinations failed → Cloudflare made it",
               calls, ["pollinations", "cloudflare"])
-        check("failover wrote the image", d.exists() and d.stat().st_size > 0)
+        check("failover wrote the image", fo.exists() and fo.stat().st_size > 0)
+        check("reports the engine that actually succeeded", eng, "cloudflare")
     finally:
         im._ENGINE_RAW.clear()
         im._ENGINE_RAW.update(saved_raw)
@@ -300,7 +302,7 @@ def main() -> int:
         Path(dest).parent.mkdir(parents=True, exist_ok=True)
         Path(dest).write_bytes(b"IMG")
         made.append(str(dest))
-        return Path(dest)
+        return "cloudflare"                        # image() reports the engine used
     im.image = fake_image
 
     root = Path(__file__).resolve().parent.parent
@@ -318,7 +320,9 @@ def main() -> int:
         check("reported the refused scene, did not crash",
               [n for n, _ in res["failed"]], [2])
         check("the generated asset is tagged generated", res["assets"][1]["generated"], True)
-        check("the generated asset's source is imagen", res["assets"][1]["src"], "imagen")
+        check("the asset's source is the engine that made it (not always 'imagen')",
+              res["assets"][1]["src"], "cloudflare")
+        check("the credit names the engine", res["assets"][1]["credit"], "AI-generated (Cloudflare)")
         prev = res["assets"][1]["path"]
         res2 = pl.generate_scenes(scenes, sheet, {"vertex_project": "p"}, [1],
                                   log=lambda *_: None)

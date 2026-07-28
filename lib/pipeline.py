@@ -1048,7 +1048,7 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
         prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
         dest = p["stockcache"] / _gen_asset_name(p["id"], n, "gen", "png")
         try:
-            imagen.image(prompt, cfg, dest, log=log, should_cancel=should_cancel)
+            eng = imagen.image(prompt, cfg, dest, log=log, should_cancel=should_cancel)
         except imagen.Cancelled:                      # Stop pressed mid-wait
             log(f"Stopped before S{n}.")
             break
@@ -1056,8 +1056,9 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
             failed.append((n, str(e)))
             log(f"✗ S{n:>3} · could not generate · {str(e)[:80]}")
             continue
-        assets[n] = {"path": str(dest), "src": "imagen", "query": s.query,
-                     "media": "IMAGE", "credit": "AI-generated (Imagen)",
+        assets[n] = {"path": str(dest), "src": eng or "imagen", "query": s.query,
+                     "media": "IMAGE",
+                     "credit": f"AI-generated ({imagen.engine_label(eng)})",
                      "page": "", "license": "AI-generated", "score": None,
                      "generated": True}
         generated.append(n)
