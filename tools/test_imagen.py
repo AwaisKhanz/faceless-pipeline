@@ -226,6 +226,30 @@ def main() -> int:
         im._ENGINE_RAW.update(saved_raw)
         im._THROTTLE.reset()
 
+    print("\n  activity detail: image() surfaces the exact model/region used:")
+    im._THROTTLE.reset()
+
+    def _vraw(p, c, d, l=None):
+        Path(d).write_bytes(b"IMG")
+        return "gemini-2.5-flash-image@us-east4"     # what the pool reports back
+    saved_raw3 = dict(im._ENGINE_RAW)
+    im._ENGINE_RAW["vertex"] = _vraw
+    try:
+        det: dict = {}
+        im.image("x", {"generate_engine": "vertex", "generate_failover": False,
+                       "vertex_project": "p", "generate_min_interval": 0},
+                 Path(tempfile.mkdtemp()) / "d.png", detail=det)
+        check("detail carries the exact model@region", det.get("model"),
+              "gemini-2.5-flash-image@us-east4")
+        check("detail label reads 'Vertex · <model>@<region>'", det.get("label"),
+              "Vertex · gemini-2.5-flash-image@us-east4")
+    finally:
+        im._ENGINE_RAW.clear()
+        im._ENGINE_RAW.update(saved_raw3)
+        im._THROTTLE.reset()
+    check("_cf_short trims the @cf/ path",
+          im._cf_short("@cf/black-forest-labs/flux-2-klein-4b"), "flux-2-klein-4b")
+
     print("\n  generate_workers actually speeds up (pace = floor / workers):")
     im._THROTTLE.reset()
     paces = []
@@ -336,12 +360,15 @@ def main() -> int:
     im.available = lambda cfg: True
     made: list = []
 
-    def fake_image(prompt, cfg, dest, log=None, should_cancel=None):
+    def fake_image(prompt, cfg, dest, log=None, should_cancel=None, detail=None):
         if "boom" in prompt:
             raise im.GenError("safety filter")     # e.g. a real person
         Path(dest).parent.mkdir(parents=True, exist_ok=True)
         Path(dest).write_bytes(b"IMG")
         made.append(str(dest))
+        if isinstance(detail, dict):               # report exactly what made it
+            detail.update(engine="cloudflare", model="flux-2-klein-4b · …ab12cd",
+                          label="Cloudflare · flux-2-klein-4b · …ab12cd")
         return "cloudflare"                        # image() reports the engine used
     im.image = fake_image
 
@@ -362,7 +389,11 @@ def main() -> int:
         check("the generated asset is tagged generated", res["assets"][1]["generated"], True)
         check("the asset's source is the engine that made it (not always 'imagen')",
               res["assets"][1]["src"], "cloudflare")
-        check("the credit names the engine", res["assets"][1]["credit"], "AI-generated (Cloudflare)")
+        check("the asset records the exact model that made it",
+              res["assets"][1]["model"], "flux-2-klein-4b · …ab12cd")
+        check("the credit names the engine AND the model",
+              res["assets"][1]["credit"],
+              "AI-generated (Cloudflare · flux-2-klein-4b · …ab12cd)")
         prev = res["assets"][1]["path"]
         res2 = pl.generate_scenes(scenes, sheet, {"vertex_project": "p"}, [1],
                                   log=lambda *_: None)
@@ -376,7 +407,7 @@ def main() -> int:
         cur = {"now": 0, "max": 0}
         clock = _thr.Lock()
 
-        def busy_image(prompt, cfg, dest, log=None, should_cancel=None):
+        def busy_image(prompt, cfg, dest, log=None, should_cancel=None, detail=None):
             with clock:                                # count how many run simultaneously
                 cur["now"] += 1
                 cur["max"] = max(cur["max"], cur["now"])

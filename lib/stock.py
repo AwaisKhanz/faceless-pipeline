@@ -592,9 +592,11 @@ def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
     slug = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16]
     dest = cache / f"gen_{slug}.png"
     eng = ""
+    det: dict = {}                            # filled with the exact model/region used
     for attempt in (1, 2):
         try:
-            eng = gen.image(prompt, cfg, dest, log=log, should_cancel=should_cancel)
+            eng = gen.image(prompt, cfg, dest, log=log,
+                            should_cancel=should_cancel, detail=det)
             break
         except getattr(gen, "Cancelled", ()):
             return None                       # Stop pressed — abort, don't retry
@@ -606,8 +608,10 @@ def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
     path = str(dest)
     if path in used:
         return None                        # already on screen elsewhere
-    label = gen.engine_label(eng) if hasattr(gen, "engine_label") else "AI"
+    label = det.get("label") or (gen.engine_label(eng) if hasattr(gen, "engine_label") else "AI")
+    log(f"  ✦ S{s.n:>3} generated · {label}")
     return {"path": path, "src": eng or "imagen", "query": s.query or prompt[:60],
+            "model": det.get("model", ""),
             "media": "IMAGE", "credit": f"AI-generated ({label})", "page": "",
             "license": "AI-generated", "score": None, "generated": True}
 

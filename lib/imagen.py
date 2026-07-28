@@ -155,6 +155,20 @@ def engine_label(engine: str | None) -> str:
     return _ENGINE_LABELS.get(engine or "", "AI")
 
 
+def _cf_short(model: str) -> str:
+    """Trim a Cloudflare model path to its readable tail: '@cf/black-forest-
+    labs/flux-2-klein-4b' -> 'flux-2-klein-4b'."""
+    return (model or "").rsplit("/", 1)[-1] or model
+
+
+def _detail_label(engine: str | None, used: str | None) -> str:
+    """Exactly what produced an image, for the activity log and the asset credit:
+    'Vertex · gemini-2.5-flash-image@us-east4' or 'Cloudflare · flux-2-klein-4b …ab12cd'.
+    Falls back to just the engine name when the specific model isn't known."""
+    base = engine_label(engine)
+    return f"{base} · {used}" if used else base
+
+
 def _truthy(v) -> bool:
     if isinstance(v, bool):
         return v
@@ -570,7 +584,7 @@ def _cloudflare_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     for account_id, token in usable:
         try:
             _cf_one(account_id, token, model, prompt, dest, cfg)
-            return                                     # success
+            return f"{_cf_short(model)} · …{account_id[-6:]}"   # what made it
         except _CFRateLimited:
             _cf_put_to_rest(account_id, rest_min)
             if callable(log):
@@ -749,7 +763,7 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     for model, region in usable:
         try:
             _vertex_one(project, region, model, sa_path, prompt, cfg, dest)
-            return                                     # success
+            return f"{model}@{region}"                 # what made it
         except _VertexBusy as vb:
             _vertex_put_to_rest((model, region), vb.rest_minutes or rest_min)
             if callable(log):
@@ -766,11 +780,17 @@ _ENGINE_RAW = {"cloudflare": _cloudflare_raw,
                "vertex": _vertex_raw}
 
 
-def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> str:
+def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None,
+          detail: dict | None = None) -> str:
     """Generate ONE image for `prompt`, write it to `dest`, and RETURN the name of
     the engine that produced it ("cloudflare" / "vertex"), so the caller can label
     the asset's source accurately (not always "imagen"). Uses the engine chosen in
     Settings and falls through the failover chain if it can't.
+
+    If `detail` is a dict, it is filled in on success with exactly what produced the
+    image — {"engine": "vertex", "model": "gemini-2.5-flash-image@us-east4",
+    "label": "Vertex · gemini-2.5-flash-image@us-east4"} — so the caller can show
+    the real model/region in its activity log and the asset credit.
 
     Cached: if `dest` already holds an image it is returned without a call. Each
     engine is paced by the shared adaptive throttle and its 429s are waited out
@@ -824,8 +844,11 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> s
                     raise Cancelled()
                 _THROTTLE.pace(floor, should_cancel if callable(should_cancel) else None)
                 try:
-                    _ENGINE_RAW[eng](prompt, cfg, dest, log)
+                    used = _ENGINE_RAW[eng](prompt, cfg, dest, log)
                     _THROTTLE.ok(floor)
+                    if isinstance(detail, dict):
+                        detail.update(engine=eng, model=(used or ""),
+                                      label=_detail_label(eng, used))
                     if eng != order[0]:
                         _note(f"· generated with {eng} (failover)")
                     return eng

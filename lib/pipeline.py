@@ -1064,29 +1064,33 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
         s = by_n[n]
         prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
         dest = p["stockcache"] / _gen_asset_name(p["id"], n, "gen", "png")
+        det: dict = {}                                # filled with the exact model/region used
         try:
-            eng = imagen.image(prompt, cfg, dest, log=_safelog, should_cancel=should_cancel)
+            eng = imagen.image(prompt, cfg, dest, log=_safelog,
+                               should_cancel=should_cancel, detail=det)
         except imagen.Cancelled:                      # Stop pressed mid-wait
             _stopped.set()
             return ("cancel", n, None, None)
         except Exception as e:                        # GenError or anything else
             return ("fail", n, None, str(e))
+        label = det.get("label") or imagen.engine_label(eng)
         rec = {"path": str(dest), "src": eng or "imagen", "query": s.query,
+               "model": det.get("model", ""),         # e.g. gemini-2.5-flash-image@us-east4
                "media": "IMAGE",
-               "credit": f"AI-generated ({imagen.engine_label(eng)})",
+               "credit": f"AI-generated ({label})",
                "page": "", "license": "AI-generated", "score": None,
                "generated": True}
-        return ("ok", n, (eng, rec), None)
+        return ("ok", n, (label, rec), None)
 
     def _handle(res: tuple) -> None:                  # main thread only — no lock needed
         kind, n, payload, err = res
         _done[0] += 1
         on_progress(_done[0], len(want), f"S{n} generating")
         if kind == "ok":
-            _eng, rec = payload
+            label, rec = payload
             assets[n] = rec
             generated.append(n)
-            _safelog(f"✦ S{n:>3} image · generated · \"{(by_n[n].query or '')[:46]}\"")
+            _safelog(f"✦ S{n:>3} · {label} · \"{(by_n[n].query or '')[:46]}\"")
         elif kind == "fail":
             failed.append((n, err))
             _safelog(f"✗ S{n:>3} · could not generate · {str(err)[:80]}")
