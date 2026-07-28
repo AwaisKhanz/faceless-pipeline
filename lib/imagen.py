@@ -29,7 +29,6 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import quote, urlencode
 
 from . import llm
 
@@ -40,21 +39,23 @@ DEFAULT_MODEL = "gemini-2.5-flash-image"       # "Nano Banana", ~$0.039/image
 DEFAULT_ASPECT = "16:9"
 
 # Which service actually makes the picture. The engine is chosen in Settings
-# (config `generate_engine`); if the chosen one fails or isn't configured, we
-# fall through the chain below to the next available engine, so a scene is never
-# left empty by one provider being down.
-#   pollinations — free, no key, public GET endpoint (default)
-#   cloudflare   — Cloudflare Workers AI (needs an account id + API token)
-#   vertex       — Google Vertex Gemini image models (needs a Vertex project)
-DEFAULT_ENGINE = "pollinations"
-ENGINE_CHAIN = ("pollinations", "cloudflare", "vertex")
-POLLINATIONS_URL = "https://image.pollinations.ai/prompt/"
+# (config `generate_engine`); if the chosen one fails or isn't configured, and
+# generate_failover is on, we fall through the chain to the next available one.
+#   cloudflare — Cloudflare Workers AI (needs an account id + API token)
+#   vertex     — Google Vertex image models, POOLED across models × regions
+DEFAULT_ENGINE = "cloudflare"
+ENGINE_CHAIN = ("cloudflare", "vertex")
 CF_RUN_URL = "https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/{model}"
 CF_DEFAULT_MODEL = "@cf/black-forest-labs/flux-1-schnell"
-# Pollinations' anonymous tier allows ~1 request / 15s; a free token lifts that.
-# We default the gap between calls to a polite 6s (the adaptive throttle widens
-# it automatically if the server still says "slow down").
-POLLINATIONS_MIN_INTERVAL = 6.0
+
+# Vertex image generation is POOLED across (model, region) combinations. Each
+# combo has its OWN quota (quotas are tracked per base_model per region), so
+# rotating across several multiplies throughput — the same trick as the
+# Cloudflare account pool, but for Vertex, and it all draws on Google Cloud
+# credit. Imagen models are dedicated image models with a separate quota from
+# the throttled Gemini image models.
+VERTEX_DEFAULT_MODELS = ("imagen-3.0-generate-002", "imagen-3.0-fast-generate-001")
+VERTEX_DEFAULT_REGIONS = ("us-central1", "us-east4", "europe-west4", "asia-northeast1")
 # Strong photoreal styling so a generated scene reads as a REAL photograph, not
 # an AI illustration/render. Kept explicit (and with the "not a…" negatives that
 # these models respond to) because the default otherwise drifts arty.
@@ -117,11 +118,9 @@ def _interruptible_sleep(seconds: float, should_cancel=None) -> None:
 
 
 def engine_ready(engine: str, cfg: dict | None) -> bool:
-    """Is one engine usable with the current config? Pollinations needs nothing,
-    Cloudflare needs an account id + token, Vertex needs a project (+ google-auth)."""
+    """Is one engine usable with the current config? Cloudflare needs an account
+    id + token, Vertex needs a project (+ google-auth)."""
     cfg = cfg or {}
-    if engine == "pollinations":
-        return True                                     # free, no key
     if engine == "cloudflare":
         return bool(_cloudflare_accounts(cfg))         # single pair OR a pool
     if engine == "vertex":
@@ -130,13 +129,12 @@ def engine_ready(engine: str, cfg: dict | None) -> bool:
 
 
 def selected_engine(cfg: dict | None) -> str:
-    """The engine the user picked in Settings, defaulting to Pollinations."""
+    """The engine the user picked in Settings, defaulting to Cloudflare."""
     e = str((cfg or {}).get("generate_engine") or DEFAULT_ENGINE).strip().lower()
     return e if e in ENGINE_CHAIN else DEFAULT_ENGINE
 
 
-_ENGINE_LABELS = {"pollinations": "Pollinations", "cloudflare": "Cloudflare",
-                  "vertex": "Vertex"}
+_ENGINE_LABELS = {"cloudflare": "Cloudflare", "vertex": "Vertex"}
 
 
 def engine_label(engine: str | None) -> str:
@@ -164,9 +162,9 @@ def engine_order(cfg: dict | None) -> list[str]:
 
 
 def available(cfg: dict | None) -> bool:
-    """Can we generate at all? True when ANY engine is usable. Pollinations needs
-    no key, so generation is available out of the box; the UI can always offer it
-    and sourcing can always fall back to it."""
+    """Can we generate at all? True when ANY engine is usable — Cloudflare (with a
+    token) or Vertex (with a project). The UI only offers generation, and sourcing
+    only falls back to it, when one is configured."""
     cfg = cfg or {}
     return any(engine_ready(e, cfg) for e in ENGINE_CHAIN)
 
@@ -341,8 +339,8 @@ def _read_error(e: urllib.error.HTTPError) -> str:
 
 def _aspect_wh(cfg: dict) -> tuple[int, int]:
     """Pixel size for a requested aspect (default 16:9 → 1280×720). Engines that
-    take width/height (Pollinations) get a frame-shaped image instead of a square
-    one that would later be cropped."""
+    take width/height get a frame-shaped image instead of a square one that would
+    later be cropped."""
     asp = str((cfg or {}).get("generate_aspect") or DEFAULT_ASPECT)
     try:
         a, b = (float(x) for x in asp.split(":"))
@@ -354,13 +352,8 @@ def _aspect_wh(cfg: dict) -> tuple[int, int]:
 
 
 def _engine_floor(engine: str, cfg: dict) -> float:
-    """Minimum seconds between calls for an engine. Pollinations' public tier is
-    slow (≈1 req/15s), so it gets a larger polite floor than the paid engines."""
-    base = float((cfg or {}).get("generate_min_interval", 4.0) or 0)
-    if engine == "pollinations":
-        want = float((cfg or {}).get("pollinations_interval", POLLINATIONS_MIN_INTERVAL) or 0)
-        return max(base, want)
-    return base
+    """Minimum seconds between calls for an engine."""
+    return float((cfg or {}).get("generate_min_interval", 4.0) or 0)
 
 
 # ───────────────────────────────────────────── engines (one raw attempt each)
@@ -369,32 +362,6 @@ def _engine_floor(engine: str, cfg: dict) -> float:
 # _RateLimited for a 429/5xx (the shared throttle waits it out), GenError for a
 # real failure (image() moves on to the next engine). None of them retry or
 # sleep — pacing, backoff and cancellation all live in image().
-
-def _pollinations_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
-    w, h = _aspect_wh(cfg)
-    params = {"width": w, "height": h, "seed": random.randint(1, 2_000_000_000),
-              "model": (cfg.get("pollinations_model") or "flux").strip(),
-              "nologo": "true", "private": "true"}
-    url = POLLINATIONS_URL + quote(prompt, safe="") + "?" + urlencode(params)
-    headers = {"User-Agent": "faceless-pipeline"}
-    token = (cfg.get("pollinations_token") or "").strip()
-    if token:                                          # lifts rate limit + watermark
-        headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            ctype = r.headers.get("Content-Type", "")
-            data = r.read()
-    except urllib.error.HTTPError as e:
-        if e.code in (429, 500, 502, 503, 504):
-            raise _RateLimited(_server_retry_after(_read_error(e), e.headers))
-        raise GenError(f"Pollinations HTTP {e.code}") from None
-    except Exception as e:
-        raise GenError(f"Pollinations request failed: {e}") from None
-    if not data or (ctype and not ctype.lower().startswith("image")):
-        raise GenError("Pollinations returned no image (busy or filtered)")
-    dest.write_bytes(data)
-
 
 # Cloudflare accounts each get their OWN free daily Neuron allowance, so pooling
 # several (yours + friends') multiplies the free images per day. We rotate through
@@ -588,26 +555,80 @@ def _cloudflare_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     raise GenError(f"all {len(accounts)} Cloudflare account(s) are rate-limited")
 
 
-def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
-    if not llm.vertex_ready(cfg):
-        raise GenError("Vertex needs \"vertex_project\" in config")
-    location = cfg.get("generate_location") or DEFAULT_LOCATION
-    model = cfg.get("generate_model") or DEFAULT_MODEL
-    sa_path = cfg.get("vertex_service_account") or ""
+# ─────────────────────────────────────── Vertex model × region pool
+#
+# Vertex quotas are tracked per base_model per region, so a single model in one
+# region is one small quota bucket (and the Gemini image models share a fixed
+# "dynamic shared quota" you can't raise). We POOL instead: rotate across several
+# models (Imagen, which has its OWN quota) and several regions, resting any combo
+# that's busy and moving to the next — so the effective throughput is the sum of
+# all the buckets, and it all draws on Google Cloud credit.
+_VERTEX_LOCK = threading.Lock()
+_VERTEX_REST: dict[tuple, float] = {}          # (model, region) → monotonic time free again
+
+
+class _VertexBusy(Exception):
+    """A Vertex (model, region) combo is busy / rate-limited / unavailable. Rest it
+    and rotate to the next combo. rest_minutes overrides the default (e.g. a long
+    rest for a 404, meaning the model isn't served in that region)."""
+
+    def __init__(self, rest_minutes: float | None = None):
+        super().__init__("vertex busy")
+        self.rest_minutes = rest_minutes
+
+
+def _split_list(v) -> list[str]:
+    return [x.strip() for x in re.split(r"[\s,]+", str(v or "")) if x.strip()]
+
+
+def _vertex_combos(cfg: dict) -> list[tuple[str, str]]:
+    """(model, region) pairs to rotate over — vertex_models × vertex_regions,
+    defaulting to the Imagen models across a few regions."""
+    models = _split_list(cfg.get("vertex_models")) or list(VERTEX_DEFAULT_MODELS)
+    regions = _split_list(cfg.get("vertex_regions")) or list(VERTEX_DEFAULT_REGIONS)
+    out, seen = [], set()
+    for m in models:
+        for r in regions:
+            if (m, r) not in seen:
+                seen.add((m, r))
+                out.append((m, r))
+    return out
+
+
+def _vertex_ready(combos: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    now = time.monotonic()
+    with _VERTEX_LOCK:
+        return [c for c in combos if _VERTEX_REST.get(c, 0.0) <= now]
+
+
+def _vertex_put_to_rest(combo: tuple[str, str], minutes: float) -> None:
+    with _VERTEX_LOCK:
+        _VERTEX_REST[combo] = time.monotonic() + max(0.0, minutes) * 60.0
+
+
+def _vertex_reset() -> None:                   # for tests
+    with _VERTEX_LOCK:
+        _VERTEX_REST.clear()
+
+
+def _vertex_predict_endpoint(project: str, region: str, model: str) -> str:
+    return (f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
+            f"/locations/{region}/publishers/google/models/{model}:predict")
+
+
+def _vertex_generate_one(project, region, model, sa_path, prompt, cfg, dest) -> None:
+    """One Gemini image request (generateContent) to one region."""
     aspect = cfg.get("generate_aspect") or DEFAULT_ASPECT
     try:
         token = llm._vertex_token(sa_path)
     except llm.LLMError as e:
         raise GenError(str(e)) from None
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"],
-                             "imageConfig": {"aspectRatio": aspect}},
-    }
-    url = _endpoint(cfg["vertex_project"], location, model)
-    auth_retried = False
-    out = None
-    while out is None:                                 # only auth / imageConfig retries here
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"],
+                                 "imageConfig": {"aspectRatio": aspect}}}
+    url = _endpoint(project, region, model)
+    auth_retried, out = False, None
+    while out is None:
         try:
             out = _generate(url, body, token)
         except urllib.error.HTTPError as e:
@@ -623,8 +644,10 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
             if e.code == 400 and "imageConfig" in detail:
                 body["generationConfig"].pop("imageConfig", None)
                 continue
+            if e.code == 404:
+                raise _VertexBusy(rest_minutes=720) from None   # not served in this region
             if e.code in (429, 500, 503):
-                raise _RateLimited(_server_retry_after(detail, e.headers)) from None
+                raise _VertexBusy() from None
             raise GenError(f"Vertex HTTP {e.code}: {detail}") from None
         except Exception as e:
             raise GenError(f"Vertex request failed: {e}") from None
@@ -634,16 +657,89 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     dest.write_bytes(base64.b64decode(b64))
 
 
-_ENGINE_RAW = {"pollinations": _pollinations_raw,
-               "cloudflare": _cloudflare_raw,
+def _vertex_predict_one(project, region, model, sa_path, prompt, cfg, dest) -> None:
+    """One Imagen request (:predict) to one region. Imagen is a dedicated image
+    model with a separate quota from the Gemini image models."""
+    aspect = cfg.get("generate_aspect") or DEFAULT_ASPECT
+    try:
+        token = llm._vertex_token(sa_path)
+    except llm.LLMError as e:
+        raise GenError(str(e)) from None
+    body = {"instances": [{"prompt": prompt}],
+            "parameters": {"sampleCount": 1, "aspectRatio": aspect,
+                           "personGeneration": "allow_adult", "safetySetting": "block_few"}}
+    url = _vertex_predict_endpoint(project, region, model)
+    auth_retried, out = False, None
+    while out is None:
+        try:
+            out = _generate(url, body, token)
+        except urllib.error.HTTPError as e:
+            detail = _read_error(e)
+            if e.code in (401, 403) and not auth_retried:
+                auth_retried = True
+                llm._VERTEX_CREDS.clear()
+                try:
+                    token = llm._vertex_token(sa_path)
+                except Exception as e2:
+                    raise GenError(f"Imagen auth failed: {e2}") from None
+                continue
+            if e.code == 404:
+                raise _VertexBusy(rest_minutes=720) from None   # not served in this region
+            if e.code in (429, 500, 503):
+                raise _VertexBusy() from None
+            raise GenError(f"Imagen HTTP {e.code}: {detail}") from None
+        except Exception as e:
+            raise GenError(f"Imagen request failed: {e}") from None
+    preds = out.get("predictions") or []
+    b64 = preds[0].get("bytesBase64Encoded") if preds and isinstance(preds[0], dict) else ""
+    if not b64:
+        raise GenError("Imagen produced nothing (safety filter or empty response)")
+    dest.write_bytes(base64.b64decode(b64))
+
+
+def _vertex_one(project, region, model, sa_path, prompt, cfg, dest) -> None:
+    if "imagen" in model.lower():
+        _vertex_predict_one(project, region, model, sa_path, prompt, cfg, dest)
+    else:
+        _vertex_generate_one(project, region, model, sa_path, prompt, cfg, dest)
+
+
+def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
+    if not llm.vertex_ready(cfg):
+        raise GenError("Vertex needs \"vertex_project\" in config")
+    project = cfg["vertex_project"]
+    sa_path = cfg.get("vertex_service_account") or ""
+    combos = _vertex_combos(cfg)
+    if not combos:
+        raise GenError("no Vertex models/regions configured")
+    rest_min = float(cfg.get("vertex_rest_minutes", 5) or 5)
+    usable = _vertex_ready(combos)
+    if not usable:                                     # whole pool resting → fail fast
+        raise GenError(f"all {len(combos)} Vertex model/region combos are resting")
+    for model, region in usable:
+        try:
+            _vertex_one(project, region, model, sa_path, prompt, cfg, dest)
+            return                                     # success
+        except _VertexBusy as vb:
+            _vertex_put_to_rest((model, region), vb.rest_minutes or rest_min)
+            if callable(log):
+                mins = vb.rest_minutes or rest_min
+                log(f"  · Vertex {model}@{region} busy — resting {mins:.0f}m, "
+                    f"trying the next model/region")
+            continue
+        # a real GenError (bad prompt / safety) is combo-independent: re-raise
+    raise GenError(f"all {len(combos)} Vertex model/region combos are busy")
+
+
+_ENGINE_RAW = {"cloudflare": _cloudflare_raw,
                "vertex": _vertex_raw}
 
 
 def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None) -> str:
     """Generate ONE image for `prompt`, write it to `dest`, and RETURN the name of
-    the engine that produced it ("pollinations" / "cloudflare" / "vertex"), so the
-    caller can label the asset's source accurately (not always "imagen"). Uses the
-    engine chosen in Settings and falls through the failover chain if it can't.
+    the engine that produced it ("cloudflare" / "vertex"), so the caller can label
+    the asset's source accurately (not always "imagen"). Uses the engine chosen in
+    Settings and falls through the failover chain if it can't.
 
     Cached: if `dest` already holds an image it is returned without a call. Each
     engine is paced by the shared adaptive throttle and its 429s are waited out

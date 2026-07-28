@@ -890,7 +890,7 @@ def approval_data(pid: str) -> dict:
     cfg = pl.load_config()
     try:
         from lib import imagen as _IM
-        generate_on = _IM.available(cfg)          # image gen: true out of the box (Pollinations)
+        generate_on = _IM.available(cfg)          # image gen: on when Cloudflare or Vertex is set up
     except Exception:
         generate_on = False
     try:
@@ -902,7 +902,7 @@ def approval_data(pid: str) -> dict:
             "clip_min": float(cfg.get("clip_min") or 0.45),
             "clip_on": VIS.capability(cfg)["ok"],
             "generate_on": generate_on, "veo_on": veo_on,
-            "engine": (cfg.get("generate_engine") or "pollinations"),
+            "engine": (cfg.get("generate_engine") or "cloudflare"),
             "missing": [i["n"] for i in items if not i["url"]]}
 
 

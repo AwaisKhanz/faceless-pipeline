@@ -26,12 +26,11 @@ def main() -> int:
     # Vertex readiness is a real config check (incl. google-auth); stub it here so
     # this suite tests the delegation, not the env.
     llm.vertex_ready = lambda cfg: bool((cfg or {}).get("vertex_project"))
-    # Generation is available out of the box now (Pollinations needs no key), so
-    # available() is True even with no Vertex project. Vertex readiness is tested
-    # separately via engine_ready().
-    check("generation available with no keys (Pollinations)", im.available({}), True)
-    check("Vertex engine needs a project",
-          im.engine_ready("vertex", {}), False)
+    # Engines are Cloudflare (needs keys) and Vertex (needs a project); with
+    # neither configured, generation isn't available.
+    check("no engine configured -> unavailable", im.available({}), False)
+    check("available with a Vertex project", im.available({"vertex_project": "p"}), True)
+    check("Vertex engine needs a project", im.engine_ready("vertex", {}), False)
     check("Vertex engine ready with a project",
           im.engine_ready("vertex", {"vertex_project": "p"}), True)
 
@@ -55,24 +54,20 @@ def main() -> int:
             {"inlineData": {"mimeType": "image/png", "data": tiny}}]}}]}
     im._generate = fake_generate
 
-    # Isolate the Vertex engine for these checks: make the other engines fail
-    # instantly so failover can't reach the real network.
-    def _no_net(*a, **k):
-        raise im.GenError("no network in test")
-    im._ENGINE_RAW["pollinations"] = _no_net
-    im._ENGINE_RAW["cloudflare"] = _no_net
-
-    cfg = {"vertex_project": "proj", "generate_location": "global",
-           "vertex_service_account": "", "generate_engine": "vertex"}
+    # Isolate Vertex: pin it to a single Gemini model + region and turn failover
+    # off, so image() uses ONLY the vertex generateContent path here.
+    cfg = {"vertex_project": "proj", "vertex_service_account": "",
+           "generate_engine": "vertex", "generate_failover": False,
+           "vertex_models": "gemini-2.5-flash-image", "vertex_regions": "us-central1"}
     dest = Path(tempfile.mkdtemp()) / "g.png"
     eng = im.image("a rocket launch", cfg, dest)
     check("writes the image file", dest.exists() and dest.stat().st_size > 0)
     check("reports the engine that produced it", eng, "vertex")
-    check("endpoint targets the project", "projects/proj/locations/global" in cap["url"])
-    check("endpoint uses generateContent (Gemini image API)",
+    check("endpoint targets the project + region",
+          "projects/proj/locations/us-central1" in cap["url"])
+    check("a Gemini image model uses generateContent",
           cap["url"].endswith(":generateContent"))
-    check("endpoint targets the default Gemini image model",
-          "gemini-2.5-flash-image" in cap["url"])
+    check("endpoint targets the chosen model", "gemini-2.5-flash-image" in cap["url"])
     check("asks for an IMAGE modality",
           "IMAGE" in cap["body"]["generationConfig"]["responseModalities"])
     check("asks for 16:9",
@@ -104,73 +99,75 @@ def main() -> int:
     except im.GenError:
         check("no working engine raises GenError", True)
 
-    # ── rate limiting: back off on 429 instead of surrendering ──────────────
-    print("\n  429 backoff + throttle:")
-    import io
-    import urllib.error
-    from types import SimpleNamespace as _NS
-
+    # ── helpers + Vertex model×region pool ──────────────────────────────────
+    print("\n  helpers + Vertex pool:")
     check("retryDelay is read from the server's 429 body",
           im._server_retry_after('{"error":{"details":[{"retryDelay":"7s"}]}}', None), 7.5)
-    check("Retry-After header is honoured when there's no body delay",
+    check("Retry-After honoured when no body delay",
           im._server_retry_after("{}", {"Retry-After": "9"}), 9.5)
-    check("no server hint -> None (caller backs off exponentially)",
-          im._server_retry_after("{}", None), None)
+    check("no server hint -> None", im._server_retry_after("{}", None), None)
     check("generate_workers sizes the concurrency gate",
           im._semaphore({"generate_workers": 2})._value, 2)
 
-    def _http_error(code, body=b"{}"):
-        return urllib.error.HTTPError("http://x", code, "busy", {}, io.BytesIO(body))
+    check("pool = models × regions (deduped)",
+          im._vertex_combos({"vertex_models": "m1, m2", "vertex_regions": "r1\nr2"}),
+          [("m1", "r1"), ("m1", "r2"), ("m2", "r1"), ("m2", "r2")])
+    check("pool defaults to the Imagen models",
+          im._vertex_combos({})[0][0].startswith("imagen-"))
 
-    # Don't actually sleep during the test; record what we'd have waited.
-    saved_time, sleeps = im.time, []
-    im.time = _NS(sleep=lambda s: sleeps.append(s), monotonic=saved_time.monotonic)
-    im._THROTTLE.reset()
-    rl_cfg = {"vertex_project": "proj", "generate_location": "global",
-              "vertex_service_account": "", "generate_min_interval": 0,
-              "generate_retries": 5, "generate_workers": 1,
-              "generate_engine": "vertex"}
+    # Imagen models use :predict (dedicated image model, its own quota).
+    cap2 = {}
+    im._generate = lambda url, body, token: (
+        cap2.update(url=url, body=body)
+        or {"predictions": [{"bytesBase64Encoded": tiny, "mimeType": "image/png"}]})
+    im._vertex_reset()
+    pdest = Path(tempfile.mkdtemp()) / "imagen.png"
+    im._vertex_raw("a cat", {"vertex_project": "proj", "vertex_service_account": "",
+                             "vertex_models": "imagen-3.0-generate-002",
+                             "vertex_regions": "us-central1"}, pdest)
+    check("Imagen uses the :predict endpoint", cap2["url"].endswith(":predict"))
+    check("Imagen endpoint targets the region", "locations/us-central1" in cap2["url"])
+    check("Imagen sends instances[].prompt", cap2["body"]["instances"][0]["prompt"], "a cat")
+    check("Imagen writes the image", pdest.exists() and pdest.stat().st_size > 0)
+
+    # rotation: a busy (model, region) is rested; another combo carries the load.
+    vseen = []
+    saved_vone = im._vertex_one
+
+    def v_one(project, region, model, sa, prompt, cfg2, dst):
+        vseen.append((model, region))
+        if region == "r1":
+            raise im._VertexBusy()
+        Path(dst).write_bytes(b"VX")
+    im._vertex_one = v_one
+    vpool = {"vertex_project": "p", "vertex_models": "m",
+             "vertex_regions": "r1\nr2", "vertex_rest_minutes": 5}
     try:
-        tries = {"n": 0}
-
-        def flaky(url, body, token):
-            tries["n"] += 1
-            if tries["n"] <= 2:                      # busy the first two times
-                raise _http_error(429, b'{"error":{"details":[{"retryDelay":"3s"}]}}')
-            return {"candidates": [{"content": {"parts": [
-                {"inlineData": {"data": tiny}}]}}]}
-        im._generate = flaky
-        notes = []
-        rp = Path(tempfile.mkdtemp()) / "r.png"
-        im.image("retry me", rl_cfg, rp, log=notes.append)
-        check("succeeds once the model frees up (3 attempts)",
-              rp.exists() and tries["n"] == 3)
-        check("waited out the server's cooldown (~3.5s)",
-              any(abs(s - 3.5) < 0.3 for s in sleeps))
-        check("a 429 widened the gap for the next scene (adaptive)",
-              im._THROTTLE.gap >= 3.5)
-        check("surfaced a retry notice to the log", any("retry" in m for m in notes))
-
-        im._THROTTLE.reset()
-        im._generate = lambda u, b, t: (_ for _ in ()).throw(_http_error(429))
+        im._vertex_reset()
+        im._vertex_raw("x", vpool, Path(tempfile.mkdtemp()) / "vp1.png")
+        check("busy combo m@r1 → rotated to m@r2", vseen, [("m", "r1"), ("m", "r2")])
+        vseen.clear()
+        im._vertex_raw("x", vpool, Path(tempfile.mkdtemp()) / "vp2.png")
+        check("a rested combo is skipped next time", vseen, [("m", "r2")])
+        im._vertex_reset()
+        im._vertex_one = lambda *a: (_ for _ in ()).throw(im._VertexBusy())
         try:
-            im.image("always busy", {**rl_cfg, "generate_retries": 2},
-                     Path(tempfile.mkdtemp()) / "r2.png")
-            check("a persistent 429 eventually raises", False)
+            im._vertex_raw("x", vpool, Path(tempfile.mkdtemp()) / "vp3.png")
+            check("exhausted vertex pool raises", False)
         except im.GenError as e:
-            check("a persistent 429 gives up (all engines failed)",
-                  "rate-limited" in str(e) and "engines failed" in str(e))
+            check("whole vertex pool busy → GenError", "busy" in str(e))
     finally:
-        im.time = saved_time
-        im._THROTTLE.reset()
+        im._vertex_one = saved_vone
+        im._vertex_reset()
 
-    print("\n  Stop is honoured promptly (no waiting out the backoff):")
+    print("\n  Stop is honoured promptly:")
     im._THROTTLE.reset()
     im._generate = lambda u, b, t: {"candidates": [{"content": {"parts": [
-        {"inlineData": {"data": tiny}}]}}]}          # would succeed if not cancelled
+        {"inlineData": {"data": tiny}}]}}]}
     try:
-        im.image("stop me", {"vertex_project": "proj", "generate_location": "global",
-                             "vertex_service_account": "", "generate_min_interval": 30},
+        im.image("stop me", {"vertex_project": "proj", "generate_engine": "vertex",
+                             "vertex_models": "gemini-2.5-flash-image",
+                             "generate_min_interval": 30},
                  Path(tempfile.mkdtemp()) / "c.png", should_cancel=lambda: True)
         check("a cancelled generation raises Cancelled", False)
     except im.Cancelled:
@@ -181,21 +178,20 @@ def main() -> int:
     # ── engine selection + failover chain ───────────────────────────────────
     print("\n  engine selection + failover chain:")
     im._THROTTLE.reset()
-    check("default engine is Pollinations", im.selected_engine({}), "pollinations")
-    check("Pollinations needs no key", im.engine_ready("pollinations", {}), True)
+    check("default engine is Cloudflare", im.selected_engine({}), "cloudflare")
     check("Cloudflare needs id AND token",
           im.engine_ready("cloudflare", {"cf_account_id": "a"}), False)
     check("Cloudflare ready with id + token",
           im.engine_ready("cloudflare", {"cf_account_id": "a", "cf_api_token": "t"}), True)
     check("order = chosen first, then chain, ready only",
-          im.engine_order({"generate_engine": "cloudflare",
+          im.engine_order({"generate_engine": "vertex", "vertex_project": "p",
                            "cf_account_id": "a", "cf_api_token": "t"}),
-          ["cloudflare", "pollinations"])
+          ["vertex", "cloudflare"])
     check("failover OFF → ONLY the chosen engine (no switching)",
           im.engine_order({"generate_engine": "vertex", "generate_failover": False,
                            "vertex_project": "p"}),
           ["vertex"])
-    check("generation is available out of the box (Pollinations)", im.available({}), True)
+    check("no engine configured → available() False", im.available({}), False)
 
     calls = []
 
@@ -212,17 +208,17 @@ def main() -> int:
         return f
 
     saved_raw = dict(im._ENGINE_RAW)
-    im._ENGINE_RAW["pollinations"] = _bad("pollinations")
-    im._ENGINE_RAW["cloudflare"] = _good("cloudflare")
-    im._ENGINE_RAW["vertex"] = _bad("vertex")
+    im._ENGINE_RAW["cloudflare"] = _bad("cloudflare")
+    im._ENGINE_RAW["vertex"] = _good("vertex")
     try:
         fo = Path(tempfile.mkdtemp()) / "fo.png"
-        eng = im.image("x", {"cf_account_id": "a", "cf_api_token": "t",
-                             "generate_min_interval": 0, "pollinations_interval": 0}, fo)
-        check("failover: Pollinations failed → Cloudflare made it",
-              calls, ["pollinations", "cloudflare"])
+        eng = im.image("x", {"generate_engine": "cloudflare", "cf_account_id": "a",
+                             "cf_api_token": "t", "vertex_project": "p",
+                             "generate_min_interval": 0}, fo)
+        check("failover: Cloudflare failed → Vertex made it",
+              calls, ["cloudflare", "vertex"])
         check("failover wrote the image", fo.exists() and fo.stat().st_size > 0)
-        check("reports the engine that actually succeeded", eng, "cloudflare")
+        check("reports the engine that actually succeeded", eng, "vertex")
     finally:
         im._ENGINE_RAW.clear()
         im._ENGINE_RAW.update(saved_raw)
@@ -234,14 +230,15 @@ def main() -> int:
     saved_pace = im._THROTTLE.pace
     im._THROTTLE.pace = lambda floor, sc=None: paces.append(floor)
     saved_raw2 = dict(im._ENGINE_RAW)
-    im._ENGINE_RAW["pollinations"] = lambda p, c, d, l=None: Path(d).write_bytes(b"IMG")
+    im._ENGINE_RAW["cloudflare"] = lambda p, c, d, l=None: Path(d).write_bytes(b"IMG")
+    wcfg = {"generate_engine": "cloudflare", "cf_account_id": "a", "cf_api_token": "t"}
     try:
-        im.image("x", {"generate_min_interval": 8, "pollinations_interval": 8,
-                       "generate_workers": 4}, Path(tempfile.mkdtemp()) / "w4.png")
+        im.image("x", {**wcfg, "generate_min_interval": 8, "generate_workers": 4},
+                 Path(tempfile.mkdtemp()) / "w4.png")
         check("4 workers → pace floor is base/4 (8→2s)", abs(paces[-1] - 2.0) < 0.01)
         paces.clear()
-        im.image("y", {"generate_min_interval": 8, "pollinations_interval": 8,
-                       "generate_workers": 1}, Path(tempfile.mkdtemp()) / "w1.png")
+        im.image("y", {**wcfg, "generate_min_interval": 8, "generate_workers": 1},
+                 Path(tempfile.mkdtemp()) / "w1.png")
         check("1 worker → full pace floor (8s)", abs(paces[-1] - 8.0) < 0.01)
     finally:
         im._THROTTLE.pace = saved_pace
