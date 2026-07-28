@@ -26,8 +26,8 @@ def main() -> int:
     # Vertex readiness is a real config check (incl. google-auth); stub it here so
     # this suite tests the delegation, not the env.
     llm.vertex_ready = lambda cfg: bool((cfg or {}).get("vertex_project"))
-    # Engines are Cloudflare (needs keys) and Vertex (needs a project); with
-    # neither configured, generation isn't available.
+    # The only engine is Vertex (needs a project); with none configured,
+    # generation isn't available.
     check("no engine configured -> unavailable", im.available({}), False)
     check("available with a Vertex project", im.available({"vertex_project": "p"}), True)
     check("Vertex engine needs a project", im.engine_ready("vertex", {}), False)
@@ -54,10 +54,9 @@ def main() -> int:
             {"inlineData": {"mimeType": "image/png", "data": tiny}}]}}]}
     im._generate = fake_generate
 
-    # Isolate Vertex: pin it to a single Gemini model + region and turn failover
-    # off, so image() uses ONLY the vertex generateContent path here.
+    # Pin Vertex to a single Gemini model + region so this exercises the
+    # generateContent path deterministically.
     cfg = {"vertex_project": "proj", "vertex_service_account": "",
-           "generate_engine": "vertex", "generate_failover": False,
            "vertex_models": "gemini-2.5-flash-image", "vertex_regions": "us-central1"}
     dest = Path(tempfile.mkdtemp()) / "g.png"
     eng = im.image("a rocket launch", cfg, dest)
@@ -91,10 +90,9 @@ def main() -> int:
     except im.GenError:
         check("a reply with no image raises GenError", True)
 
-    # no working engine (Vertex chosen but unconfigured, others stubbed off) -> GenError
+    # Vertex unconfigured (no project) -> GenError, so the scene falls back to search
     try:
-        im.image("x", {"generate_engine": "vertex"},
-                 Path(tempfile.mkdtemp()) / "g3.png")
+        im.image("x", {}, Path(tempfile.mkdtemp()) / "g3.png")
         check("no working engine raises", False)
     except im.GenError:
         check("no working engine raises GenError", True)
@@ -167,7 +165,7 @@ def main() -> int:
     im._generate = lambda u, b, t: {"candidates": [{"content": {"parts": [
         {"inlineData": {"data": tiny}}]}}]}
     try:
-        im.image("stop me", {"vertex_project": "proj", "generate_engine": "vertex",
+        im.image("stop me", {"vertex_project": "proj",
                              "vertex_models": "gemini-2.5-flash-image",
                              "generate_min_interval": 30},
                  Path(tempfile.mkdtemp()) / "c.png", should_cancel=lambda: True)
@@ -177,50 +175,31 @@ def main() -> int:
     except Exception as e:
         check("a cancelled generation raises Cancelled", False, repr(e))
 
-    # ── engine selection + failover chain ───────────────────────────────────
-    print("\n  engine selection + failover chain:")
+    # ── engine selection (Vertex is the only engine) ────────────────────────
+    print("\n  engine selection (Vertex only):")
     im._THROTTLE.reset()
-    check("default engine is Cloudflare", im.selected_engine({}), "cloudflare")
-    check("Cloudflare needs id AND token",
-          im.engine_ready("cloudflare", {"cf_account_id": "a"}), False)
-    check("Cloudflare ready with id + token",
-          im.engine_ready("cloudflare", {"cf_account_id": "a", "cf_api_token": "t"}), True)
-    check("order = chosen first, then chain, ready only",
-          im.engine_order({"generate_engine": "vertex", "vertex_project": "p",
-                           "cf_account_id": "a", "cf_api_token": "t"}),
-          ["vertex", "cloudflare"])
-    check("failover OFF → ONLY the chosen engine (no switching)",
-          im.engine_order({"generate_engine": "vertex", "generate_failover": False,
-                           "vertex_project": "p"}),
-          ["vertex"])
-    check("no engine configured → available() False", im.available({}), False)
+    check("the engine is Vertex", im.selected_engine({}), "vertex")
+    check("Vertex needs a project", im.engine_ready("vertex", {}), False)
+    check("Vertex ready with a project",
+          im.engine_ready("vertex", {"vertex_project": "p"}), True)
+    check("order is [vertex] when ready",
+          im.engine_order({"vertex_project": "p"}), ["vertex"])
+    check("order is empty when Vertex isn't configured", im.engine_order({}), [])
+    check("no project → available() False", im.available({}), False)
+    check("a project → available() True", im.available({"vertex_project": "p"}), True)
 
-    calls = []
-
-    def _bad(name):
-        def f(prompt, cfg, dest, log=None):
-            calls.append(name)
-            raise im.GenError(name + " down")
-        return f
-
-    def _good(name):
-        def f(prompt, cfg, dest, log=None):
-            calls.append(name)
-            Path(dest).write_bytes(b"IMG")
-        return f
-
+    print("\n  a hard Vertex failure raises GenError (the scene then searches):")
     saved_raw = dict(im._ENGINE_RAW)
-    im._ENGINE_RAW["cloudflare"] = _bad("cloudflare")
-    im._ENGINE_RAW["vertex"] = _good("vertex")
+
+    def _boom(prompt, cfg, dest, log=None):
+        raise im.GenError("vertex down")
+    im._ENGINE_RAW["vertex"] = _boom
     try:
-        fo = Path(tempfile.mkdtemp()) / "fo.png"
-        eng = im.image("x", {"generate_engine": "cloudflare", "cf_account_id": "a",
-                             "cf_api_token": "t", "vertex_project": "p",
-                             "generate_min_interval": 0}, fo)
-        check("failover: Cloudflare failed → Vertex made it",
-              calls, ["cloudflare", "vertex"])
-        check("failover wrote the image", fo.exists() and fo.stat().st_size > 0)
-        check("reports the engine that actually succeeded", eng, "vertex")
+        im.image("x", {"vertex_project": "p", "generate_min_interval": 0,
+                       "generate_retries": 0}, Path(tempfile.mkdtemp()) / "f.png")
+        check("a dead engine raises GenError (no silent success)", False)
+    except im.GenError:
+        check("a dead engine raises GenError (no silent success)", True)
     finally:
         im._ENGINE_RAW.clear()
         im._ENGINE_RAW.update(saved_raw)
@@ -236,8 +215,7 @@ def main() -> int:
     im._ENGINE_RAW["vertex"] = _vraw
     try:
         det: dict = {}
-        im.image("x", {"generate_engine": "vertex", "generate_failover": False,
-                       "vertex_project": "p", "generate_min_interval": 0},
+        im.image("x", {"vertex_project": "p", "generate_min_interval": 0},
                  Path(tempfile.mkdtemp()) / "d.png", detail=det)
         check("detail carries the exact model@region", det.get("model"),
               "gemini-2.5-flash-image@us-east4")
@@ -247,8 +225,6 @@ def main() -> int:
         im._ENGINE_RAW.clear()
         im._ENGINE_RAW.update(saved_raw3)
         im._THROTTLE.reset()
-    check("_cf_short trims the @cf/ path",
-          im._cf_short("@cf/black-forest-labs/flux-2-klein-4b"), "flux-2-klein-4b")
 
     print("\n  generate_workers actually speeds up (pace = floor / workers):")
     im._THROTTLE.reset()
@@ -256,8 +232,8 @@ def main() -> int:
     saved_pace = im._THROTTLE.pace
     im._THROTTLE.pace = lambda floor, sc=None: paces.append(floor)
     saved_raw2 = dict(im._ENGINE_RAW)
-    im._ENGINE_RAW["cloudflare"] = lambda p, c, d, l=None: Path(d).write_bytes(b"IMG")
-    wcfg = {"generate_engine": "cloudflare", "cf_account_id": "a", "cf_api_token": "t"}
+    im._ENGINE_RAW["vertex"] = lambda p, c, d, l=None: Path(d).write_bytes(b"IMG")
+    wcfg = {"vertex_project": "p"}
     try:
         im.image("x", {**wcfg, "generate_min_interval": 8, "generate_workers": 4},
                  Path(tempfile.mkdtemp()) / "w4.png")
@@ -271,85 +247,6 @@ def main() -> int:
         im._ENGINE_RAW.clear()
         im._ENGINE_RAW.update(saved_raw2)
         im._THROTTLE.reset()
-
-    # ── Cloudflare multi-account pooling + per-account cooldown ──────────────
-    print("\n  Cloudflare multi-account rotation:")
-    im._cf_reset()
-    check("parses the single pair",
-          im._cloudflare_accounts({"cf_account_id": "a1", "cf_api_token": "t1"}),
-          [("a1", "t1")])
-    check("parses a pool (id:token per line) and dedups by id",
-          im._cloudflare_accounts({"cf_account_id": "a1", "cf_api_token": "t1",
-                                   "cf_accounts": "a2:t2\na3 t3\na1:tX"}),
-          [("a1", "t1"), ("a2", "t2"), ("a3", "t3")])
-    check("Cloudflare is ready with only a pool",
-          im.engine_ready("cloudflare", {"cf_accounts": "a2:t2"}), True)
-    check("cap detection: 429 is a cap", im._cf_is_cap(429, ""), True)
-    check("cap detection: neuron-limit 400 is a cap",
-          im._cf_is_cap(400, "free neuron limit exceeded"), True)
-    check("cap detection: a content 400 is NOT a cap",
-          im._cf_is_cap(400, "Input prompt contains inappropriate content"), False)
-
-    print("\n  Cloudflare model-aware request (quality params + FLUX.2 multipart):")
-    sdxl_data, sdxl_ct = im._cf_request("@cf/bytedance/stable-diffusion-xl-lightning",
-                                        "a cat", {"cf_steps": 20, "generate_aspect": "16:9"})
-    sdxl = json.loads(sdxl_data)
-    check("SDXL uses JSON", sdxl_ct, "application/json")
-    check("SDXL has 16:9 width/height", (sdxl["width"], sdxl["height"]), (1280, 720))
-    check("SDXL sends num_steps", sdxl["num_steps"], 20)
-    check("SDXL sends a negative prompt (pushes realism)", bool(sdxl.get("negative_prompt")))
-    flux = json.loads(im._cf_request("@cf/black-forest-labs/flux-1-schnell",
-                                     "a cat", {"cf_steps": 20})[0])
-    check("flux-1 caps steps at 8", flux["steps"], 8)
-    check("flux-1 has no width/height (fixed square)", "width" not in flux)
-    f2_data, f2_ct = im._cf_request("@cf/black-forest-labs/flux-2-dev", "a cat",
-                                    {"cf_steps": 28, "generate_aspect": "16:9"})
-    check("FLUX.2 uses multipart form-data (not JSON)",
-          f2_ct.startswith("multipart/form-data"))
-    check("FLUX.2 form carries prompt + 16:9 + 28 steps",
-          b'name="prompt"' in f2_data and b'name="width"' in f2_data
-          and b"1280" in f2_data and b"28" in f2_data)
-    k4_data, k4_ct = im._cf_request("@cf/black-forest-labs/flux-2-klein-4b", "a cat",
-                                    {"generate_aspect": "16:9"})
-    check("FLUX.2 klein also uses multipart", k4_ct.startswith("multipart/form-data"))
-    check("klein defaults to few steps (distilled)", b'name="steps"' in k4_data and b"\r\n\r\n8\r\n" in k4_data)
-    check("extract top-level image (FLUX.2 shape)",
-          im._cf_extract_b64(b'{"image":"AAA"}'), "AAA")
-    check("extract result.image (flux-1 shape)",
-          im._cf_extract_b64(b'{"result":{"image":"BBB"}}'), "BBB")
-
-    seen = []
-    saved_one = im._cf_one
-
-    def cf_one(aid, tok, model, prompt, dest, cfg):
-        seen.append(aid)
-        if aid == "a1":
-            raise im._CFRateLimited()          # first account is over its cap
-        Path(dest).write_bytes(b"CF")
-    im._cf_one = cf_one
-    cf_cfg = {"cf_accounts": "a1:t1\na2:t2", "cf_rest_minutes": 15}
-    try:
-        im._cf_reset()
-        im._cloudflare_raw("x", cf_cfg, Path(tempfile.mkdtemp()) / "c1.png")
-        check("rotated a1 (capped) → a2 (made the image)", seen, ["a1", "a2"])
-        seen.clear()
-        im._cloudflare_raw("x", cf_cfg, Path(tempfile.mkdtemp()) / "c2.png")
-        check("a rested account is skipped next time", seen, ["a2"])
-
-        im._cf_reset()
-
-        def cf_all(aid, tok, model, prompt, dest, cfg):
-            raise im._CFRateLimited()
-        im._cf_one = cf_all
-        try:
-            im._cloudflare_raw("x", cf_cfg, Path(tempfile.mkdtemp()) / "c3.png")
-            check("an exhausted pool raises", False)
-        except im.GenError as e:
-            check("whole pool exhausted → GenError (fast engine failover)",
-                  "rate-limited" in str(e))
-    finally:
-        im._cf_one = saved_one
-        im._cf_reset()
 
     # ── manual per-scene generation (review page path) ──────────────────────
     print("\n  manual generate_scenes (the review-page 'Generate' button):")
@@ -367,9 +264,9 @@ def main() -> int:
         Path(dest).write_bytes(b"IMG")
         made.append(str(dest))
         if isinstance(detail, dict):               # report exactly what made it
-            detail.update(engine="cloudflare", model="flux-2-klein-4b · …ab12cd",
-                          label="Cloudflare · flux-2-klein-4b · …ab12cd")
-        return "cloudflare"                        # image() reports the engine used
+            detail.update(engine="vertex", model="gemini-2.5-flash-image@us-east4",
+                          label="Vertex · gemini-2.5-flash-image@us-east4")
+        return "vertex"                            # image() reports the engine used
     im.image = fake_image
 
     root = Path(__file__).resolve().parent.parent
@@ -388,12 +285,12 @@ def main() -> int:
               [n for n, _ in res["failed"]], [2])
         check("the generated asset is tagged generated", res["assets"][1]["generated"], True)
         check("the asset's source is the engine that made it (not always 'imagen')",
-              res["assets"][1]["src"], "cloudflare")
+              res["assets"][1]["src"], "vertex")
         check("the asset records the exact model that made it",
-              res["assets"][1]["model"], "flux-2-klein-4b · …ab12cd")
+              res["assets"][1]["model"], "gemini-2.5-flash-image@us-east4")
         check("the credit names the engine AND the model",
               res["assets"][1]["credit"],
-              "AI-generated (Cloudflare · flux-2-klein-4b · …ab12cd)")
+              "AI-generated (Vertex · gemini-2.5-flash-image@us-east4)")
         prev = res["assets"][1]["path"]
         res2 = pl.generate_scenes(scenes, sheet, {"vertex_project": "p"}, [1],
                                   log=lambda *_: None)

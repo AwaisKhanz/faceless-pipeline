@@ -1043,7 +1043,7 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
 
     # Generate CONCURRENTLY — up to generate_workers images in flight at once,
     # instead of one-at-a-time. Each is an independent imagen.image() call, so the
-    # Vertex region pool / Cloudflare account pool spread them over separate quota
+    # Vertex region pool spreads them over separate regional backends / quota
     # buckets and the shared adaptive throttle still keeps them from stampeding.
     # A batch of N scenes now finishes in roughly N/workers of the old wall time.
     for n in want:                                    # bump takes up front (single-thread)

@@ -50,10 +50,10 @@ def main() -> int:
 
     print("\n  allow_custom selects accept any model id (open set):")
     check("a brand-new model id is accepted",
-          CS._coerce(F["cf_model"], "@cf/black-forest-labs/flux-2-dev"),
-          "@cf/black-forest-labs/flux-2-dev")
+          CS._coerce(F["vertex_model"], "gemini-9.9-flash-image"),
+          "gemini-9.9-flash-image")
     check("empty custom value is rejected",
-          "cf_model" in CS.validate_and_merge({}, {"cf_model": "  "})[1], True)
+          "vertex_model" in CS.validate_and_merge({}, {"vertex_model": "  "})[1], True)
     check("clip_model allows empty (means auto)", CS._coerce(F["clip_model"], ""), "")
     check("clip_model accepts a custom id",
           CS._coerce(F["clip_model"], "myorg/model"), "myorg/model")

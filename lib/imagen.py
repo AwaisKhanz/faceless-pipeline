@@ -38,21 +38,17 @@ DEFAULT_LOCATION = "global"
 DEFAULT_MODEL = "gemini-2.5-flash-image"       # "Nano Banana", ~$0.039/image
 DEFAULT_ASPECT = "16:9"
 
-# Which service actually makes the picture. The engine is chosen in Settings
-# (config `generate_engine`); if the chosen one fails or isn't configured, and
-# generate_failover is on, we fall through the chain to the next available one.
-#   cloudflare — Cloudflare Workers AI (needs an account id + API token)
-#   vertex     — Google Vertex image models, POOLED across models × regions
-DEFAULT_ENGINE = "cloudflare"
-ENGINE_CHAIN = ("cloudflare", "vertex")
-CF_RUN_URL = "https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/{model}"
-CF_DEFAULT_MODEL = "@cf/black-forest-labs/flux-1-schnell"
+# Which service makes the picture. There is one engine — Google Vertex image
+# models — kept behind a tiny router so the pooling/failover machinery stays
+# generic. `image()` returns the engine name so callers can label the asset.
+#   vertex — Google Vertex image models, POOLED across models × regions
+DEFAULT_ENGINE = "vertex"
+ENGINE_CHAIN = ("vertex",)
 
 # Vertex image generation is POOLED across (model, region) combinations. Each
 # combo is served by its own regional backend, so rotating across several spreads
 # the load (and the Gemini image models' dynamic shared quota) over many endpoints
-# instead of hammering one — the same trick as the Cloudflare account pool, and it
-# all draws on Google Cloud credit.
+# instead of hammering one, and it all draws on Google Cloud credit.
 #
 # NOTE: the Imagen models (imagegeneration@*, imagen-3.0-*) were DEPRECATED and
 # shut down (as early as 2026-06-30) — calling them now returns HTTP 404. Google's
@@ -131,23 +127,20 @@ def _interruptible_sleep(seconds: float, should_cancel=None) -> None:
 
 
 def engine_ready(engine: str, cfg: dict | None) -> bool:
-    """Is one engine usable with the current config? Cloudflare needs an account
-    id + token, Vertex needs a project (+ google-auth)."""
+    """Is the engine usable with the current config? Vertex needs a project
+    (+ google-auth)."""
     cfg = cfg or {}
-    if engine == "cloudflare":
-        return bool(_cloudflare_accounts(cfg))         # single pair OR a pool
     if engine == "vertex":
         return llm.vertex_ready(cfg)
     return False
 
 
-def selected_engine(cfg: dict | None) -> str:
-    """The engine the user picked in Settings, defaulting to Cloudflare."""
-    e = str((cfg or {}).get("generate_engine") or DEFAULT_ENGINE).strip().lower()
-    return e if e in ENGINE_CHAIN else DEFAULT_ENGINE
+def selected_engine(cfg: dict | None = None) -> str:
+    """The image engine — Vertex (the only one)."""
+    return DEFAULT_ENGINE
 
 
-_ENGINE_LABELS = {"cloudflare": "Cloudflare", "vertex": "Vertex"}
+_ENGINE_LABELS = {"vertex": "Vertex"}
 
 
 def engine_label(engine: str | None) -> str:
@@ -155,16 +148,10 @@ def engine_label(engine: str | None) -> str:
     return _ENGINE_LABELS.get(engine or "", "AI")
 
 
-def _cf_short(model: str) -> str:
-    """Trim a Cloudflare model path to its readable tail: '@cf/black-forest-
-    labs/flux-2-klein-4b' -> 'flux-2-klein-4b'."""
-    return (model or "").rsplit("/", 1)[-1] or model
-
-
 def _detail_label(engine: str | None, used: str | None) -> str:
-    """Exactly what produced an image, for the activity log and the asset credit:
-    'Vertex · gemini-2.5-flash-image@us-east4' or 'Cloudflare · flux-2-klein-4b …ab12cd'.
-    Falls back to just the engine name when the specific model isn't known."""
+    """Exactly what produced an image, for the activity log and the asset credit,
+    e.g. 'Vertex · gemini-2.5-flash-image@us-east4'. Falls back to just the engine
+    name when the specific model isn't known."""
     base = engine_label(engine)
     return f"{base} · {used}" if used else base
 
@@ -176,22 +163,17 @@ def _truthy(v) -> bool:
 
 
 def engine_order(cfg: dict | None) -> list[str]:
-    """The engines to try, in order. Normally the chosen one first, then the rest
-    of the failover chain (ready ones only). With generate_failover off, ONLY the
-    chosen engine is used — so 'vertex' means vertex or nothing (the scene then
-    falls back to a stock search, never to another generator)."""
+    """The engines to try, in order — just Vertex, when it's ready. If Vertex isn't
+    usable the list is empty and the scene falls back to a normal stock search
+    (generation never switches to another generator; there is only Vertex)."""
     cfg = cfg or {}
-    chosen = selected_engine(cfg)
-    if not _truthy(cfg.get("generate_failover", True)):
-        return [chosen] if engine_ready(chosen, cfg) else []
-    seq = [chosen] + [e for e in ENGINE_CHAIN if e != chosen]
-    return [e for e in seq if engine_ready(e, cfg)]
+    return [e for e in ENGINE_CHAIN if engine_ready(e, cfg)]
 
 
 def available(cfg: dict | None) -> bool:
-    """Can we generate at all? True when ANY engine is usable — Cloudflare (with a
-    token) or Vertex (with a project). The UI only offers generation, and sourcing
-    only falls back to it, when one is configured."""
+    """Can we generate at all? True when Vertex is usable (a project + google-auth).
+    The UI only offers generation, and sourcing only falls back to it, when it's
+    configured."""
     cfg = cfg or {}
     return any(engine_ready(e, cfg) for e in ENGINE_CHAIN)
 
@@ -396,204 +378,13 @@ def _engine_floor(engine: str, cfg: dict) -> float:
     return float((cfg or {}).get("generate_min_interval", 4.0) or 0)
 
 
-# ───────────────────────────────────────────── engines (one raw attempt each)
+# ───────────────────────────────────────────── engine (one raw attempt)
 #
-# Each `_*_raw` makes ONE request and either writes the image to `dest` or raises:
-# _RateLimited for a 429/5xx (the shared throttle waits it out), GenError for a
-# real failure (image() moves on to the next engine). None of them retry or
-# sleep — pacing, backoff and cancellation all live in image().
-
-# Cloudflare accounts each get their OWN free daily Neuron allowance, so pooling
-# several (yours + friends') multiplies the free images per day. We rotate through
-# them and, when one hits its cap, rest it for a while and move to the next — the
-# resting map is process-wide so every scene/worker shares the same knowledge.
-_CF_LOCK = threading.Lock()
-_CF_REST: dict[str, float] = {}                # account_id → monotonic time it may be used again
-
-
-class _CFRateLimited(Exception):
-    """One Cloudflare account is rate-limited / over its daily cap — rest it and
-    rotate to the next account (distinct from _RateLimited, which pauses the whole
-    engine)."""
-
-
-def _cloudflare_accounts(cfg: dict) -> list[tuple[str, str]]:
-    """Every configured (account_id, token) pair: the single cf_account_id/token
-    first, then one 'account_id:token' per line of cf_accounts (a comma or space
-    between the two also works). Deduped by account id, blanks skipped."""
-    out, seen = [], set()
-
-    def add(aid, tok):
-        aid, tok = (aid or "").strip(), (tok or "").strip()
-        if aid and tok and aid not in seen:
-            seen.add(aid)
-            out.append((aid, tok))
-
-    add(cfg.get("cf_account_id"), cfg.get("cf_api_token"))
-    for line in str(cfg.get("cf_accounts") or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = re.split(r"[\s:,]+", line, maxsplit=1)
-        if len(parts) == 2:
-            add(parts[0], parts[1])
-    return out
-
-
-def _cf_ready(accounts: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    now = time.monotonic()
-    with _CF_LOCK:
-        return [(a, t) for (a, t) in accounts if _CF_REST.get(a, 0.0) <= now]
-
-
-def _cf_put_to_rest(account_id: str, minutes: float) -> None:
-    with _CF_LOCK:
-        _CF_REST[account_id] = time.monotonic() + max(0.0, minutes) * 60.0
-
-
-def _cf_reset() -> None:                       # for tests
-    with _CF_LOCK:
-        _CF_REST.clear()
-
-
-def _cf_is_cap(code: int, detail: str) -> bool:
-    """True when a Cloudflare error means 'this account is out of allowance / too
-    many requests' (rest it) rather than a bad prompt (fail over engines). The
-    daily-cap error (code 3040/4006 'neuron limit exceeded') can arrive as 400."""
-    if code in (429, 500, 502, 503, 504):
-        return True
-    low = detail.lower()
-    return any(s in low for s in ("neuron", "exceeded", "rate limit",
-                                  "too many", "3040", "4006"))
-
-
-def _cf_is_flux2(model: str) -> bool:
-    m = model.lower()
-    return "flux-2" in m or "flux2" in m
-
-
-def _cf_steps(model: str, cfg: dict) -> int:
-    """Diffusion steps for a Cloudflare model, clamped to what it accepts.
-    More steps = more detail (and, for flux-2-dev, more cost)."""
-    m = model.lower()
-    want = cfg.get("cf_steps")
-    if _cf_is_flux2(model):
-        if "klein" in m:
-            return max(1, int(want or 8))              # distilled FLUX.2 — few steps
-        return max(1, int(want or 28))                 # flux-2-dev — flagship
-    if "schnell" in m:
-        return max(1, min(int(want or 8), 8))          # distilled flux: max 8
-    return max(1, min(int(want or 20), 20))            # SDXL: max 20
-
-
-def _cf_multipart(fields: dict) -> tuple[bytes, str]:
-    """Encode form fields as multipart/form-data — the format FLUX.2 requires."""
-    boundary = "----faceless" + "".join(random.choices("0123456789abcdef", k=20))
-    buf = []
-    for k, v in fields.items():
-        buf.append(f"--{boundary}\r\n"
-                   f'Content-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n')
-    buf.append(f"--{boundary}--\r\n")
-    return "".join(buf).encode("utf-8"), f"multipart/form-data; boundary={boundary}"
-
-
-def _cf_request(model: str, prompt: str, cfg: dict) -> tuple[bytes, str]:
-    """The request body + Content-Type for a model. FLUX.2 takes multipart form
-    fields (prompt/steps/width/height); everything else takes JSON, with SDXL
-    getting a negative prompt + guidance for the best photoreal look."""
-    w, h = _aspect_wh(cfg)
-    steps = _cf_steps(model, cfg)
-    if _cf_is_flux2(model):                            # FLUX.2 [dev] — flagship quality
-        return _cf_multipart({"prompt": prompt, "steps": steps,
-                              "width": w, "height": h})
-    m = model.lower()
-    seed = random.randint(1, 2_000_000_000)
-    if "flux" in m:                                    # flux-1-schnell — fixed square
-        body = {"prompt": prompt, "steps": steps, "seed": seed}
-    else:                                              # SDXL / Stable-Diffusion
-        body = {"prompt": prompt, "width": w, "height": h, "num_steps": steps,
-                "guidance": float(cfg.get("cf_guidance") or 7.5), "seed": seed}
-        neg = str(cfg.get("cf_negative") or PHOTO_NEG).strip()
-        if neg:
-            body["negative_prompt"] = neg
-    return json.dumps(body).encode("utf-8"), "application/json"
-
-
-def _cf_extract_b64(raw: bytes) -> str:
-    """Base64 image data out of a JSON Cloudflare response, across its shapes:
-    {"image": …} (FLUX.2), {"result":{"image": …}} (flux-1), or …data[0].b64_json."""
-    try:
-        j = json.loads(raw)
-    except Exception:
-        return ""
-    if not isinstance(j, dict):
-        return ""
-    if j.get("image"):
-        return j["image"]
-    res = j.get("result") if isinstance(j.get("result"), dict) else {}
-    if res.get("image"):
-        return res["image"]
-    try:
-        return res["data"][0]["b64_json"]
-    except Exception:
-        return ""
-
-
-def _cf_one(account_id: str, token: str, model: str, prompt: str,
-            dest: Path, cfg: dict) -> None:
-    """One request to one Cloudflare account. Raises _CFRateLimited when THAT
-    account is capped/limited, GenError for a genuine (prompt/model) failure."""
-    url = CF_RUN_URL.format(acct=account_id, model=model)
-    data, ctype = _cf_request(model, prompt, cfg)
-    req = urllib.request.Request(url, data=data, headers={
-        "Authorization": f"Bearer {token}", "Content-Type": ctype})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            resp_ctype = r.headers.get("Content-Type", "")
-            raw = r.read()
-    except urllib.error.HTTPError as e:
-        detail = _read_error(e)
-        if _cf_is_cap(e.code, detail):
-            raise _CFRateLimited() from None
-        raise GenError(f"Cloudflare HTTP {e.code}: {detail}") from None
-    except Exception as e:
-        raise GenError(f"Cloudflare request failed: {e}") from None
-    if resp_ctype.lower().startswith("image"):         # SDXL returns raw image bytes
-        dest.write_bytes(raw)
-        return
-    b64 = _cf_extract_b64(raw)
-    if not b64:
-        why = raw[:200].decode("utf-8", "replace")
-        if _cf_is_cap(200, why):                       # cap sometimes reported in a 200 body
-            raise _CFRateLimited()
-        raise GenError(f"Cloudflare produced nothing: {why[:120]}")
-    dest.write_bytes(base64.b64decode(b64))
-
-
-def _cloudflare_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
-    accounts = _cloudflare_accounts(cfg)
-    if not accounts:
-        raise GenError("Cloudflare needs an account id + token "
-                       "(cf_account_id/cf_api_token, or cf_accounts)")
-    model = (cfg.get("cf_model") or CF_DEFAULT_MODEL).strip()
-    rest_min = float(cfg.get("cf_rest_minutes", 15) or 15)
-    usable = _cf_ready(accounts)
-    if not usable:                                     # whole pool resting → fail fast
-        raise GenError(f"all {len(accounts)} Cloudflare account(s) are resting "
-                       "(daily cap) — will retry after their rest / the UTC reset")
-    for account_id, token in usable:
-        try:
-            _cf_one(account_id, token, model, prompt, dest, cfg)
-            return f"{_cf_short(model)} · …{account_id[-6:]}"   # what made it
-        except _CFRateLimited:
-            _cf_put_to_rest(account_id, rest_min)
-            if callable(log):
-                log(f"  · Cloudflare account …{account_id[-6:]} over its limit — "
-                    f"resting {rest_min:.0f}m, trying the next account")
-            continue                                   # rotate to the next account
-        # a real GenError (bad prompt/model) is the same for every account: re-raise
-    raise GenError(f"all {len(accounts)} Cloudflare account(s) are rate-limited")
-
+# `_vertex_raw` makes ONE generation and either writes the image to `dest` or
+# raises: _RateLimited for a 429/5xx (the shared throttle waits it out), GenError
+# for a real failure (image() gives up and the scene falls back to a stock
+# search). It doesn't retry or sleep — pacing, backoff and cancellation all live
+# in image().
 
 # ─────────────────────────────────────── Vertex model × region pool
 #
@@ -776,27 +567,24 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     raise GenError(f"all {len(combos)} Vertex model/region combos are busy")
 
 
-_ENGINE_RAW = {"cloudflare": _cloudflare_raw,
-               "vertex": _vertex_raw}
+_ENGINE_RAW = {"vertex": _vertex_raw}
 
 
 def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None,
           detail: dict | None = None) -> str:
     """Generate ONE image for `prompt`, write it to `dest`, and RETURN the name of
-    the engine that produced it ("cloudflare" / "vertex"), so the caller can label
-    the asset's source accurately (not always "imagen"). Uses the engine chosen in
-    Settings and falls through the failover chain if it can't.
+    the engine that produced it ("vertex"), so the caller can label the asset's
+    source accurately (not always "imagen"). Uses the Vertex model×region pool.
 
     If `detail` is a dict, it is filled in on success with exactly what produced the
     image — {"engine": "vertex", "model": "gemini-2.5-flash-image@us-east4",
     "label": "Vertex · gemini-2.5-flash-image@us-east4"} — so the caller can show
     the real model/region in its activity log and the asset credit.
 
-    Cached: if `dest` already holds an image it is returned without a call. Each
+    Cached: if `dest` already holds an image it is returned without a call. The
     engine is paced by the shared adaptive throttle and its 429s are waited out
-    with backoff; a hard failure moves on to the next available engine, and only
-    when EVERY engine has failed does GenError bubble up (so the caller can fall
-    back to search). `log` receives one line per retry / engine switch.
+    with backoff; when it can't produce the image GenError bubbles up (so the
+    caller can fall back to a stock search). `log` receives one line per retry.
 
     `should_cancel` is polled while WAITING — for a free concurrency slot and
     during every throttle/backoff sleep — and raises Cancelled the moment Stop is
@@ -849,8 +637,6 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None,
                     if isinstance(detail, dict):
                         detail.update(engine=eng, model=(used or ""),
                                       label=_detail_label(eng, used))
-                    if eng != order[0]:
-                        _note(f"· generated with {eng} (failover)")
                     return eng
                 except Cancelled:
                     raise
@@ -864,12 +650,12 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None,
                               f"(retry {attempt}/{retries})")
                         continue                    # pace() serves the cooldown
                     errors.append(f"{eng}: still rate-limited after {retries} tries")
-                    _note(f"· {eng} still busy — switching engine")
+                    _note(f"· {eng} still busy — searching instead")
                     break
                 except GenError as e:
                     errors.append(f"{eng}: {e}")
-                    _note(f"· {eng} failed ({str(e)[:80]}) — switching engine")
+                    _note(f"· {eng} failed ({str(e)[:80]}) — searching instead")
                     break
-        raise GenError("all image engines failed — " + " | ".join(errors))
+        raise GenError("Vertex could not generate — " + " | ".join(errors))
     finally:
         sem.release()
