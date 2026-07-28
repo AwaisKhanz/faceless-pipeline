@@ -7,8 +7,10 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import align, captions as cap, render, sheet as sheetlib, stock, tts
@@ -1039,30 +1041,70 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
     generated: list[int] = []
     failed: list[tuple] = []
 
-    for i, n in enumerate(want):
-        if should_cancel and should_cancel():
-            break
+    # Generate CONCURRENTLY — up to generate_workers images in flight at once,
+    # instead of one-at-a-time. Each is an independent imagen.image() call, so the
+    # Vertex region pool / Cloudflare account pool spread them over separate quota
+    # buckets and the shared adaptive throttle still keeps them from stampeding.
+    # A batch of N scenes now finishes in roughly N/workers of the old wall time.
+    for n in want:                                    # bump takes up front (single-thread)
+        picks[n] = picks.get(n, 0) + 1                # so each is a fresh, deterministic take
+    workers = max(1, int(cfg.get("generate_workers") or 1))
+    _lock = threading.Lock()                          # serialises the log callback only
+    _done = [0]
+    _stopped = threading.Event()
+
+    def _safelog(msg: str) -> None:
+        with _lock:
+            log(msg)
+
+    def _gen_one(n: int) -> tuple:
+        """Runs on a worker thread: returns ('ok'|'fail'|'cancel', n, payload, err)."""
+        if _stopped.is_set() or (should_cancel and should_cancel()):
+            return ("cancel", n, None, None)
         s = by_n[n]
-        on_progress(i + 1, len(want), f"S{n} generating")
-        picks[n] = picks.get(n, 0) + 1                # bump take (history/telemetry)
         prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
         dest = p["stockcache"] / _gen_asset_name(p["id"], n, "gen", "png")
         try:
-            eng = imagen.image(prompt, cfg, dest, log=log, should_cancel=should_cancel)
+            eng = imagen.image(prompt, cfg, dest, log=_safelog, should_cancel=should_cancel)
         except imagen.Cancelled:                      # Stop pressed mid-wait
-            log(f"Stopped before S{n}.")
-            break
+            _stopped.set()
+            return ("cancel", n, None, None)
         except Exception as e:                        # GenError or anything else
-            failed.append((n, str(e)))
-            log(f"✗ S{n:>3} · could not generate · {str(e)[:80]}")
-            continue
-        assets[n] = {"path": str(dest), "src": eng or "imagen", "query": s.query,
-                     "media": "IMAGE",
-                     "credit": f"AI-generated ({imagen.engine_label(eng)})",
-                     "page": "", "license": "AI-generated", "score": None,
-                     "generated": True}
-        generated.append(n)
-        log(f"✦ S{n:>3} image · generated · \"{(s.query or '')[:46]}\"")
+            return ("fail", n, None, str(e))
+        rec = {"path": str(dest), "src": eng or "imagen", "query": s.query,
+               "media": "IMAGE",
+               "credit": f"AI-generated ({imagen.engine_label(eng)})",
+               "page": "", "license": "AI-generated", "score": None,
+               "generated": True}
+        return ("ok", n, (eng, rec), None)
+
+    def _handle(res: tuple) -> None:                  # main thread only — no lock needed
+        kind, n, payload, err = res
+        _done[0] += 1
+        on_progress(_done[0], len(want), f"S{n} generating")
+        if kind == "ok":
+            _eng, rec = payload
+            assets[n] = rec
+            generated.append(n)
+            _safelog(f"✦ S{n:>3} image · generated · \"{(by_n[n].query or '')[:46]}\"")
+        elif kind == "fail":
+            failed.append((n, err))
+            _safelog(f"✗ S{n:>3} · could not generate · {str(err)[:80]}")
+        # 'cancel' → just counted; Stop is reported once after the loop
+
+    if workers > 1 and len(want) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_gen_one, n): n for n in want}
+            for fut in as_completed(futs):
+                _handle(fut.result())
+    else:
+        for n in want:
+            if _stopped.is_set() or (should_cancel and should_cancel()):
+                break
+            _handle(_gen_one(n))
+    if _stopped.is_set():
+        log("Stopped.")
+    generated.sort()
 
     p["assets"].write_text(
         json.dumps({str(k): v for k, v in assets.items()}, indent=2),

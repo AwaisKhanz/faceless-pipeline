@@ -85,7 +85,10 @@ _NONPHOTO = re.compile(
     r"\brender\b|cgi|clay|claymation|pixar|comic|caricature|logo|icon|"
     r"diagram|chart|infographic|blueprint|low ?poly|pixel art|graffiti|"
     r"mural|concept art|storybook|cel[- ]?shaded|stylised|stylized)\b", re.I)
-TIMEOUT = 120                              # a generation is slower than a search
+TIMEOUT = 60                               # a generation is slower than a search, but a
+                                           # socket still hung >60s is dead — fail fast and
+                                           # rotate to the next region rather than block a
+                                           # worker (the old 120s cost a 2-min stall on a hang)
 
 
 class GenError(RuntimeError):

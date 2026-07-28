@@ -369,6 +369,37 @@ def main() -> int:
         check("re-generating makes a NEW take (fresh file)",
               res2["assets"][1]["path"] != prev, True)
 
+        # ── concurrency: generate_workers images generate AT ONCE ───────────
+        print("\n  concurrent generation (generate_workers images at once):")
+        import threading as _thr
+        import time as _t
+        cur = {"now": 0, "max": 0}
+        clock = _thr.Lock()
+
+        def busy_image(prompt, cfg, dest, log=None, should_cancel=None):
+            with clock:                                # count how many run simultaneously
+                cur["now"] += 1
+                cur["max"] = max(cur["max"], cur["now"])
+            _t.sleep(0.15)                             # simulate a slow API call
+            with clock:
+                cur["now"] -= 1
+            Path(dest).parent.mkdir(parents=True, exist_ok=True)
+            Path(dest).write_bytes(b"IMG")
+            return "vertex"
+        im.image = busy_image
+        # scenes 11-16 so this doesn't touch scenes 1/2 the later checks rely on
+        many = [SimpleNamespace(n=k, query=f"scene {k}", narration="", media="IMAGE")
+                for k in range(11, 17)]
+        t0 = _t.time()
+        resC = pl.generate_scenes(many, sheet,
+                                  {"vertex_project": "p", "generate_workers": 4},
+                                  list(range(11, 17)), log=lambda *_: None)
+        dt = _t.time() - t0
+        check("all 6 scenes generated", resC["generated"], [11, 12, 13, 14, 15, 16])
+        check("ran concurrently (more than one image at a time)", cur["max"] > 1, True)
+        check("6 slow calls beat the sequential time (0.9s) handily", dt < 0.72, True)
+        im.image = fake_image                          # restore for later sections
+
         # ── user upload (review 'Upload your own') ──────────────────────────
         print("\n  upload your own image / video (only the target scene changes):")
         keep1 = res2["assets"][1]["path"]

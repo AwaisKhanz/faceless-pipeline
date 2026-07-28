@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -336,6 +337,7 @@ def openai_complete(model: str, key: str, prompt: str, schema: dict,
 # $300 free credit); the existing AI Studio "gemini" provider is untouched.
 
 _VERTEX_CREDS: dict = {}          # credential-source -> cached google-auth creds
+_VERTEX_CREDS_LOCK = threading.Lock()   # concurrent generation workers share the cache
 
 
 def _parse_vertex(model: str) -> tuple[str, str, str]:
@@ -364,21 +366,24 @@ def _vertex_token(sa_path: str) -> str:
             "then set \"llm\": \"vertex\" in config.json.") from None
 
     cache_key = sa_path or "__adc__"
-    creds = _VERTEX_CREDS.get(cache_key)
-    if creds is None:
-        if sa_path:
-            if not os.path.exists(sa_path):
-                raise LLMError(
-                    f"Service-account file not found: {sa_path}\n"
-                    f"Check \"vertex_service_account\" in config.json.")
-            creds = service_account.Credentials.from_service_account_file(
-                sa_path, scopes=[_VERTEX_SCOPE])
-        else:
-            creds, _ = google.auth.default(scopes=[_VERTEX_SCOPE])
-        _VERTEX_CREDS[cache_key] = creds
-    if not creds.valid:
-        creds.refresh(Request())
-    return creds.token
+    # Serialise mint/refresh so a cold-start burst of concurrent workers doesn't
+    # race on creds.refresh() (google-auth Credentials aren't refresh-thread-safe).
+    with _VERTEX_CREDS_LOCK:
+        creds = _VERTEX_CREDS.get(cache_key)
+        if creds is None:
+            if sa_path:
+                if not os.path.exists(sa_path):
+                    raise LLMError(
+                        f"Service-account file not found: {sa_path}\n"
+                        f"Check \"vertex_service_account\" in config.json.")
+                creds = service_account.Credentials.from_service_account_file(
+                    sa_path, scopes=[_VERTEX_SCOPE])
+            else:
+                creds, _ = google.auth.default(scopes=[_VERTEX_SCOPE])
+            _VERTEX_CREDS[cache_key] = creds
+        if not creds.valid:
+            creds.refresh(Request())
+        return creds.token
 
 
 def vertex_complete(model: str, key: str, prompt: str, schema: dict,
