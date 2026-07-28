@@ -221,17 +221,43 @@ def project_id(sheet: Path) -> str:
     return sheet.stem.replace("_main_script", "")
 
 
-def channel_voice(sheet: Path, lang: str) -> str:
-    """The voice this project's CHANNEL narrates `lang` with, or '' if the project
-    has no channel or the channel set no voice. This is the per-channel override:
-    every project in a channel narrates with the channel's chosen voice unless a
-    run passes an explicit voice of its own. '' means fall back to the global
-    per-language default. Tolerates a missing channels file (returns '')."""
+_CLIP_VOICE_EXTS = (".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac")
+
+
+def _is_clip_voice(v: str) -> bool:
+    """A reference-CLIP voice (Chatterbox/Higgs) looks like a file — 'de/awais.mp3'
+    — whereas a Chirp voice is a catalogue NAME like 'de-DE-Chirp3-HD-Enceladus'."""
+    v = (v or "").lower()
+    return "/" in v or v.endswith(_CLIP_VOICE_EXTS)
+
+
+def channel_voice(sheet: Path, lang: str, cfg: dict | None = None) -> str:
+    """The voice this project's CHANNEL narrates `lang` with — but ONLY when it fits
+    the engine that will actually run, else '' (fall back to the per-language
+    Settings default).
+
+    A channel voice is a single string whose meaning depends on the engine: a Chirp
+    catalogue name under Chirp, a reference clip under Chatterbox/Higgs. If the
+    stored voice doesn't match the active engine — e.g. a Chirp channel voice while
+    narrating locally with Chatterbox — using it would break the run, so we ignore
+    it and let the language's own Settings voice speak instead. Every project in a
+    channel narrates with the channel's voice; a run passing an explicit voice of
+    its own still wins. Tolerates a missing channels file (returns '')."""
     try:
         from . import channels as _ch
-        return _ch.voice_for_project(project_id(sheet), lang)
+        v = _ch.voice_for_project(project_id(sheet), lang)
     except Exception:
         return ""
+    if not v:
+        return ""
+    try:
+        chirp = tts.active_engine(cfg if cfg is not None else load_config()) == "chirp"
+    except Exception:
+        chirp = False
+    # Compatible pairing only: Chirp name ↔ Chirp engine, clip ↔ clip engine.
+    if chirp != _is_clip_voice(v):          # chirp AND name, or clip-engine AND clip
+        return v
+    return ""                                # mismatch → use the Settings default
 
 
 def find_project(pid: str) -> dict | None:
@@ -358,8 +384,13 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
     out = {"scenes": n_scenes, "assets": assets_n,
            "match": match_avg, "weak": weak_n, "languages": {}}
     cfg_ps = load_config()
-    chirp_engine = str(cfg_ps.get("voice_engine", "")).strip().lower() in (
-        "chirp", "gtts", "google")
+    # The engine that will ACTUALLY narrate (Chirp only if it's ready, else the
+    # local fallback) — so the shown voice matches what a run would use.
+    try:
+        chirp_engine = tts.active_engine(cfg_ps) == "chirp"
+    except Exception:
+        chirp_engine = str(cfg_ps.get("voice_engine", "")).strip().lower() in (
+            "chirp", "gtts", "google")
     for lg in langs:
         code = lg["code"]
         pl_ = paths_for(sheet, code)
@@ -372,7 +403,7 @@ def project_status(sheet: Path, langs: list[dict]) -> dict:
         # language + scene number alone, which borrowed other projects' "de scene
         # 1" clips and falsely showed a never-voiced project as done — removed.)
         voiced = 0
-        chv = channel_voice(sheet, code)          # the channel's voice, if any
+        chv = channel_voice(sheet, code, cfg_ps)  # channel voice (engine-compatible only)
         try:
             scenes = load_scenes(sheet, code,
                                  narration_file(sheet.parent, pid, code))
