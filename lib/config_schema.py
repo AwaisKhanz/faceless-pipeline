@@ -167,9 +167,6 @@ _FIELDS: list[dict] = [
      "show_if": {"generate": ["mixed", "all"]}},
     {"key": "vertex_regions", "section": "imagegen", "type": "textarea",
      "show_if": {"generate": ["mixed", "all"]}},
-    {"key": "vertex_rest_minutes", "section": "imagegen", "type": "number",
-     "int": True, "min": 1, "max": 720, "step": 1,
-     "show_if": {"generate": ["mixed", "all"]}},
 
     # ── video (Veo) ─────────────────────────────────────────────────────────
     {"key": "veo_max", "section": "videogen", "type": "number", "int": True, "min": 1, "max": 20, "step": 1},

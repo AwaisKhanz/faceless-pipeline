@@ -57,11 +57,21 @@ ENGINE_CHAIN = ("vertex",)
 #   gemini-3.1-flash-image        Nano Banana 2, higher quality (fewer regions)
 #   gemini-3.1-flash-lite-image   Nano Banana 2 Lite, tuned for high-volume batches
 #   gemini-3-pro-image            Nano Banana Pro, premium 4K — GLOBAL endpoint only
-VERTEX_DEFAULT_MODELS = ("gemini-2.5-flash-image",)
-# Regions that serve gemini-2.5-flash-image (a combo a project can't reach just
-# 404s and is auto-skipped, so an over-broad list is safe).
-VERTEX_DEFAULT_REGIONS = ("global", "us-central1", "us-east4", "us-west1",
-                          "europe-west1", "europe-west4")
+#
+# Each MODEL is a separate dynamic-quota pool, so listing several genuinely
+# multiplies capacity (unlike regions of one model, which largely share a pool).
+# We list gemini-2.5-flash-image FIRST (most reliable) so it's tried first, then
+# fall through to the 3.1 models under load. A (model, region) a project can't
+# reach just 404s and is auto-skipped, so an over-broad list is safe.
+VERTEX_DEFAULT_MODELS = ("gemini-2.5-flash-image",
+                         "gemini-3.1-flash-image",
+                         "gemini-3.1-flash-lite-image")
+# All regions that serve gemini-2.5-flash-image (US + Europe + global).
+VERTEX_DEFAULT_REGIONS = ("global",
+                          "us-central1", "us-east1", "us-east4", "us-east5",
+                          "us-south1", "us-west1", "us-west4",
+                          "europe-central2", "europe-north1", "europe-southwest1",
+                          "europe-west1", "europe-west4", "europe-west8")
 # Strong photoreal styling so a generated scene reads as a REAL photograph, not
 # an AI illustration/render. Kept explicit (and with the "not a…" negatives that
 # these models respond to) because the default otherwise drifts arty.
@@ -428,10 +438,25 @@ def _vertex_combos(cfg: dict) -> list[tuple[str, str]]:
     return out
 
 
+# A combo that returns 429/5xx rests only briefly — the Gemini shared quota
+# recovers in seconds, not minutes — so the pool keeps cycling instead of parking
+# everything. (A 404 "not served here" still rests 12h; that won't recover.)
+_VERTEX_BUSY_MIN = 20.0 / 60.0                 # ~20 seconds
+
+
 def _vertex_ready(combos: list[tuple[str, str]]) -> list[tuple[str, str]]:
     now = time.monotonic()
     with _VERTEX_LOCK:
         return [c for c in combos if _VERTEX_REST.get(c, 0.0) <= now]
+
+
+def _vertex_soonest(combos: list[tuple[str, str]]) -> float:
+    """Seconds until the soonest resting combo frees up (0 if one is ready now) —
+    so a fully-busy pool can tell image()'s backoff exactly how long to wait."""
+    now = time.monotonic()
+    with _VERTEX_LOCK:
+        waits = [max(0.0, _VERTEX_REST.get(c, 0.0) - now) for c in combos]
+    return min(waits) if waits else 0.0
 
 
 def _vertex_put_to_rest(combo: tuple[str, str], minutes: float) -> None:
@@ -547,24 +572,29 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     combos = _vertex_combos(cfg)
     if not combos:
         raise GenError("no Vertex models/regions configured")
-    rest_min = float(cfg.get("vertex_rest_minutes", 2) or 2)
     usable = _vertex_ready(combos)
-    if not usable:                                     # whole pool resting → fail fast
-        raise GenError(f"all {len(combos)} Vertex model/region combos are resting")
+    if not usable:                                     # whole pool resting → WAIT, don't fail
+        # Raise a rate-limit (not GenError) so image()'s backoff waits for the
+        # soonest combo to free up and RETRIES, instead of killing the scene.
+        wait = min(45.0, max(3.0, _vertex_soonest(combos)))
+        raise _RateLimited(retry_after=wait)
     for model, region in usable:
         try:
             _vertex_one(project, region, model, sa_path, prompt, cfg, dest)
             return f"{model}@{region}"                 # what made it
         except _VertexBusy as vb:
-            _vertex_put_to_rest((model, region), vb.rest_minutes or rest_min)
+            rest = vb.rest_minutes if vb.rest_minutes else _VERTEX_BUSY_MIN
+            _vertex_put_to_rest((model, region), rest)
             if callable(log):
-                mins = vb.rest_minutes or rest_min
                 why = f" [{vb.reason}]" if vb.reason else ""
+                secs = rest * 60.0
+                unit = f"{secs:.0f}s" if secs < 90 else f"{rest / 60.0:.0f}h" if secs >= 3600 else f"{rest:.0f}m"
                 log(f"  · Vertex {model}@{region} unavailable{why} — resting "
-                    f"{mins:.0f}m, trying the next model/region")
+                    f"{unit}, trying the next model/region")
             continue
         # a real GenError (bad prompt / safety) is combo-independent: re-raise
-    raise GenError(f"all {len(combos)} Vertex model/region combos are busy")
+    # tried every ready combo and they all just went busy → wait briefly and retry
+    raise _RateLimited(retry_after=_VERTEX_BUSY_MIN * 60.0)
 
 
 _ENGINE_RAW = {"vertex": _vertex_raw}

@@ -112,8 +112,12 @@ def main() -> int:
           [("m1", "r1"), ("m1", "r2"), ("m2", "r1"), ("m2", "r2")])
     check("pool defaults to the Gemini image models (Imagen was retired)",
           im._vertex_combos({})[0][0].startswith("gemini-"))
+    check("pool defaults to MULTIPLE models (separate quota pools)",
+          len({m for m, _ in im._vertex_combos({})}) >= 3)
     check("default regions include global (for global-only models)",
           any(r == "global" for _, r in im._vertex_combos({})))
+    check("default region pool is wide (14+)",
+          len({r for _, r in im._vertex_combos({})}) >= 14)
 
     # Imagen models use :predict (dedicated image model, its own quota).
     cap2 = {}
@@ -140,8 +144,7 @@ def main() -> int:
             raise im._VertexBusy()
         Path(dst).write_bytes(b"VX")
     im._vertex_one = v_one
-    vpool = {"vertex_project": "p", "vertex_models": "m",
-             "vertex_regions": "r1\nr2", "vertex_rest_minutes": 5}
+    vpool = {"vertex_project": "p", "vertex_models": "m", "vertex_regions": "r1\nr2"}
     try:
         im._vertex_reset()
         im._vertex_raw("x", vpool, Path(tempfile.mkdtemp()) / "vp1.png")
@@ -149,13 +152,28 @@ def main() -> int:
         vseen.clear()
         im._vertex_raw("x", vpool, Path(tempfile.mkdtemp()) / "vp2.png")
         check("a rested combo is skipped next time", vseen, [("m", "r2")])
+        # whole pool busy → raises _RateLimited (WAITABLE), NOT a fatal GenError,
+        # so image()'s backoff waits for a combo to free up and retries.
         im._vertex_reset()
         im._vertex_one = lambda *a: (_ for _ in ()).throw(im._VertexBusy())
         try:
             im._vertex_raw("x", vpool, Path(tempfile.mkdtemp()) / "vp3.png")
             check("exhausted vertex pool raises", False)
-        except im.GenError as e:
-            check("whole vertex pool busy → GenError", "busy" in str(e))
+        except im._RateLimited as rl:
+            check("whole vertex pool busy → _RateLimited (waits, doesn't fail)", True)
+            check("carries a retry_after so the scene waits", rl.retry_after is not None)
+        except im.GenError:
+            check("exhausted pool must WAIT, not GenError", False)
+        # a fully-RESTING pool also waits (raises _RateLimited), never fails
+        im._vertex_put_to_rest(("m", "r1"), 5)
+        im._vertex_put_to_rest(("m", "r2"), 5)
+        try:
+            im._vertex_raw("x", vpool, Path(tempfile.mkdtemp()) / "vp4.png")
+            check("resting pool raises", False)
+        except im._RateLimited:
+            check("fully-resting pool → _RateLimited (waits, doesn't fail)", True)
+        except im.GenError:
+            check("resting pool must WAIT, not GenError", False)
     finally:
         im._vertex_one = saved_vone
         im._vertex_reset()
@@ -224,6 +242,33 @@ def main() -> int:
     finally:
         im._ENGINE_RAW.clear()
         im._ENGINE_RAW.update(saved_raw3)
+        im._THROTTLE.reset()
+
+    print("\n  a busy pool is WAITED OUT and retried, not failed:")
+    im._THROTTLE.reset()
+    saved_pace2 = im._THROTTLE.pace
+    im._THROTTLE.pace = lambda floor, sc=None: None      # don't actually sleep in the test
+    saved_raw4 = dict(im._ENGINE_RAW)
+    tries = {"n": 0}
+
+    def _busy_then_ok(p, c, d, l=None):
+        tries["n"] += 1
+        if tries["n"] == 1:
+            raise im._RateLimited(retry_after=0.01)      # whole pool busy on the 1st try
+        Path(d).write_bytes(b"IMG")
+        return "gemini-2.5-flash-image@global"
+    im._ENGINE_RAW["vertex"] = _busy_then_ok
+    try:
+        got = Path(tempfile.mkdtemp()) / "retry.png"
+        eng = im.image("x", {"vertex_project": "p", "generate_min_interval": 0,
+                             "generate_retries": 3}, got)
+        check("a busy pool retries and then succeeds (scene not killed)", eng, "vertex")
+        check("it retried exactly once then wrote the image",
+              got.exists() and tries["n"] == 2, True)
+    finally:
+        im._THROTTLE.pace = saved_pace2
+        im._ENGINE_RAW.clear()
+        im._ENGINE_RAW.update(saved_raw4)
         im._THROTTLE.reset()
 
     print("\n  generate_workers actually speeds up (pace = floor / workers):")
