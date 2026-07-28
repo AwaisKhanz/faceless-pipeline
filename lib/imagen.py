@@ -49,13 +49,23 @@ CF_RUN_URL = "https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/{model
 CF_DEFAULT_MODEL = "@cf/black-forest-labs/flux-1-schnell"
 
 # Vertex image generation is POOLED across (model, region) combinations. Each
-# combo has its OWN quota (quotas are tracked per base_model per region), so
-# rotating across several multiplies throughput — the same trick as the
-# Cloudflare account pool, but for Vertex, and it all draws on Google Cloud
-# credit. Imagen models are dedicated image models with a separate quota from
-# the throttled Gemini image models.
-VERTEX_DEFAULT_MODELS = ("imagen-3.0-generate-002", "imagen-3.0-fast-generate-001")
-VERTEX_DEFAULT_REGIONS = ("us-central1", "us-east4", "europe-west4", "asia-northeast1")
+# combo is served by its own regional backend, so rotating across several spreads
+# the load (and the Gemini image models' dynamic shared quota) over many endpoints
+# instead of hammering one — the same trick as the Cloudflare account pool, and it
+# all draws on Google Cloud credit.
+#
+# NOTE: the Imagen models (imagegeneration@*, imagen-3.0-*) were DEPRECATED and
+# shut down (as early as 2026-06-30) — calling them now returns HTTP 404. Google's
+# replacement is the Gemini "Nano Banana" image family, called via generateContent:
+#   gemini-2.5-flash-image        GA, ~13 regions + global — the reliable workhorse
+#   gemini-3.1-flash-image        Nano Banana 2, higher quality (fewer regions)
+#   gemini-3.1-flash-lite-image   Nano Banana 2 Lite, tuned for high-volume batches
+#   gemini-3-pro-image            Nano Banana Pro, premium 4K — GLOBAL endpoint only
+VERTEX_DEFAULT_MODELS = ("gemini-2.5-flash-image",)
+# Regions that serve gemini-2.5-flash-image (a combo a project can't reach just
+# 404s and is auto-skipped, so an over-broad list is safe).
+VERTEX_DEFAULT_REGIONS = ("global", "us-central1", "us-east4", "us-west1",
+                          "europe-west1", "europe-west4")
 # Strong photoreal styling so a generated scene reads as a REAL photograph, not
 # an AI illustration/render. Kept explicit (and with the "not a…" negatives that
 # these models respond to) because the default otherwise drifts arty.
@@ -729,7 +739,7 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     combos = _vertex_combos(cfg)
     if not combos:
         raise GenError("no Vertex models/regions configured")
-    rest_min = float(cfg.get("vertex_rest_minutes", 5) or 5)
+    rest_min = float(cfg.get("vertex_rest_minutes", 2) or 2)
     usable = _vertex_ready(combos)
     if not usable:                                     # whole pool resting → fail fast
         raise GenError(f"all {len(combos)} Vertex model/region combos are resting")

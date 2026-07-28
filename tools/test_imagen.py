@@ -112,8 +112,10 @@ def main() -> int:
     check("pool = models × regions (deduped)",
           im._vertex_combos({"vertex_models": "m1, m2", "vertex_regions": "r1\nr2"}),
           [("m1", "r1"), ("m1", "r2"), ("m2", "r1"), ("m2", "r2")])
-    check("pool defaults to the Imagen models",
-          im._vertex_combos({})[0][0].startswith("imagen-"))
+    check("pool defaults to the Gemini image models (Imagen was retired)",
+          im._vertex_combos({})[0][0].startswith("gemini-"))
+    check("default regions include global (for global-only models)",
+          any(r == "global" for _, r in im._vertex_combos({})))
 
     # Imagen models use :predict (dedicated image model, its own quota).
     cap2 = {}
