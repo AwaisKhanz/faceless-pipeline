@@ -20,6 +20,7 @@ import threading
 import time
 import traceback
 import webbrowser
+from email.utils import formatdate, parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -937,12 +938,32 @@ class Handler(BaseHTTPRequestHandler):
         if not str(f).startswith(str(root.resolve()) + os.sep) or not f.is_file():
             return self._send(404, b"not found", "text/plain")
 
-        size = f.stat().st_size
+        st = f.stat()
+        size = st.st_size
+        mtime = int(st.st_mtime)
         ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
         start, end = 0, size - 1
         partial = False
 
         rng = self.headers.get("Range", "")
+
+        # Rendered outputs keep a STABLE filename ({pid}_{lang}.mp4), so a browser
+        # left to its own devices happily replays the CACHED old video after a
+        # re-render — "I changed a scene but the video still shows the old one".
+        # Force revalidation (no-cache) and answer If-Modified-Since so an
+        # unchanged file is a cheap 304 but a re-rendered one is always re-sent.
+        # Only for full GETs — a Range (seek) request must still serve bytes.
+        ims = self.headers.get("If-Modified-Since")
+        if ims and not rng:
+            try:
+                if mtime <= int(parsedate_to_datetime(ims).timestamp()):
+                    self.send_response(304)
+                    self.send_header("Last-Modified", formatdate(mtime, usegmt=True))
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    return
+            except Exception:
+                pass
         m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip()) if rng else None
         if m:
             a, b = m.group(1), m.group(2)
@@ -964,6 +985,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(length))
         self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Last-Modified", formatdate(mtime, usegmt=True))
+        self.send_header("Cache-Control", "no-cache")   # revalidate, don't replay stale
         if partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
