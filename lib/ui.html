@@ -662,10 +662,23 @@ function channelEditor(name, meta = {}) {
     const chLangs = (meta.langs && meta.langs.length) ? meta.langs : [];
     const chVoices = meta.voices || {};
     const voiceSel = {};                      // lang code -> <select>
+    const engineByLang = {};                  // lang code -> active voice engine
+    const previewVoice = async (code, value, btn) => {
+      if (!value) return toast('Pick a voice first — “Default” has no preview.');
+      const t = btn.textContent; btn.textContent = 'Generating…'; btn.disabled = true;
+      // Chirp auditions a catalogue voice; clip engines audition a reference clip.
+      const body = engineByLang[code] === 'chirp'
+        ? { lang: code, google_voice: value } : { lang: code, reference: value };
+      const j = await api('/api/preview', body);
+      btn.textContent = t; btn.disabled = false;
+      if (j && j.url) new Audio(j.url + '?t=' + Date.now()).play();
+      else toast('Preview failed: ' + ((j && j.error) || 'unknown error'), true);
+    };
     const fillVoiceOptions = async (l, sel, current) => {
       try {
         const dv = await api('/api/voices?lang=' + encodeURIComponent(l.code));
         const eng = dv.engine || {};
+        engineByLang[l.code] = eng.selected;
         const opts = [];                      // [value, label]
         if (eng.selected === 'chirp') {
           const favs = dv.google_favorites || [];
@@ -690,11 +703,12 @@ function channelEditor(name, meta = {}) {
     const voiceBox = el('div', {});
     if (chLangs.length) {
       for (const l of chLangs) {
-        const sel = el('select', { style: 'min-width:260px' },
+        const sel = el('select', { style: 'min-width:240px' },
           el('option', { value: '' }, 'Default (from the Voices page)'));
         voiceSel[l.code] = sel;
-        voiceBox.append(el('div', { class: 'row', style: 'align-items:center;gap:10px;margin-top:6px' },
-          el('span', { class: 'sub', style: 'min-width:74px' }, l.name || l.code), sel));
+        const prevBtn = el('button', { class: 'btn sm', onclick: e => previewVoice(l.code, sel.value, e.target) }, 'Preview');
+        voiceBox.append(el('div', { class: 'row', style: 'align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap' },
+          el('span', { class: 'sub', style: 'min-width:74px' }, l.name || l.code), sel, prevBtn));
         fillVoiceOptions(l, sel, chVoices[l.code] || '');
       }
     } else {
