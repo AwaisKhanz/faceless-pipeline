@@ -207,6 +207,23 @@ def progress(done: int, total: int, label: str = "") -> None:
     _progress_to(_cur_id(), done, total, label)
 
 
+def _render_progress(tag: str):
+    """A render on_progress callback that also TEES each new message into the
+    Output log. render's per-scene detail ('scene 136 of 193 · image · voice 4.0s
+    → clip 5.0s · built') and its post-steps ('crossfading scenes', 'muxing',
+    'burning captions', …) otherwise only reached the progress subtitle, leaving
+    the Output panel empty through a long render. Consecutive identical messages
+    are logged once, so a step that ticks the same label repeatedly doesn't spam."""
+    last = [None]
+
+    def cb(d: int, t: int, m: str) -> None:
+        progress(d, t, f"{tag} — {m}")
+        if m and m != last[0]:
+            last[0] = m
+            log(f"  {m}")
+    return cb
+
+
 def bound_reporters():
     """A (log, progress) pair locked to the CURRENT job id, safe to call from any
     thread. Pass these to steps that fan work out across worker threads (parallel
@@ -658,14 +675,18 @@ def run_build(pid: str, langs: list[str], captions: bool, music: str | None,
 
             begin_step("render", lang)
             set_job(label=f"{tag} — building video")
-            log(f"{tag}: rendering")
+            log(f"{tag}: rendering {len(scenes)} scene(s) · "
+                f"captions {'on' if captions else 'off'} · "
+                f"slow-zoom {'on' if zoom else 'off'} · "
+                f"master {'on' if master else 'off'} · "
+                f"music {Path(music).name if music else 'none'}")
             t0 = time.time()
             try:
                 out = pl.render_video(
                     scenes, assets, vs, sheet, lang, captions=captions,
                     music=Path(music) if music else None, zoom=zoom,
                     style=pl.effective_caption_style(pid), master=master,
-                    on_progress=lambda d, t, m: progress(d, t, f"{tag} — {m}"))
+                    on_progress=_render_progress(tag))
             except pl.CaptionsSkipped as cs:
                 out = cs.video
                 log(f"{tag}: ⚠ video is finished, but captions were not burned in.")
@@ -801,14 +822,18 @@ def run_steps(pid: str, langs: list[str], steps: list[str], captions: bool,
                                            voice=voices.get(lang) or None)
                 begin_step("render", lang)
                 set_job(label=f"{tag} — building video")
-                log(f"{tag}: rendering")
+                log(f"{tag}: rendering {len(scenes)} scene(s) · "
+                    f"captions {'on' if captions else 'off'} · "
+                    f"slow-zoom {'on' if zoom else 'off'} · "
+                    f"master {'on' if master else 'off'} · "
+                    f"music {Path(music).name if music else 'none'}")
                 t0 = time.time()
                 try:
                     out = pl.render_video(
                         scenes, assets, vs, sheet, lang, captions=captions,
                         music=Path(music) if music else None, zoom=zoom,
                         style=pl.effective_caption_style(pid), master=master,
-                        on_progress=lambda d, t, m: progress(d, t, f"{tag} — {m}"))
+                        on_progress=_render_progress(tag))
                 except pl.CaptionsSkipped as cs:
                     out = cs.video
                     log(f"{tag}: WARNING video finished, captions not burned in.")
