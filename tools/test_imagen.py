@@ -240,10 +240,22 @@ def main() -> int:
     check("cap detection: a content 400 is NOT a cap",
           im._cf_is_cap(400, "Input prompt contains inappropriate content"), False)
 
+    print("\n  Cloudflare model-aware request body (quality params):")
+    sdxl = im._cf_body("@cf/bytedance/stable-diffusion-xl-lightning", "a cat",
+                       {"cf_steps": 20, "generate_aspect": "16:9"})
+    check("SDXL body has 16:9 width/height", (sdxl["width"], sdxl["height"]), (1280, 720))
+    check("SDXL body sends num_steps", sdxl["num_steps"], 20)
+    check("SDXL body sends a negative prompt (pushes realism)",
+          bool(sdxl.get("negative_prompt")))
+    flux = im._cf_body("@cf/black-forest-labs/flux-1-schnell", "a cat", {"cf_steps": 20})
+    check("flux body caps steps at 8", flux["steps"], 8)
+    check("flux body has no width/height (fixed square)", "width" not in flux)
+    check("flux body has no negative prompt", "negative_prompt" not in flux)
+
     seen = []
     saved_one = im._cf_one
 
-    def cf_one(aid, tok, model, prompt, dest):
+    def cf_one(aid, tok, model, prompt, dest, cfg):
         seen.append(aid)
         if aid == "a1":
             raise im._CFRateLimited()          # first account is over its cap
@@ -260,7 +272,7 @@ def main() -> int:
 
         im._cf_reset()
 
-        def cf_all(aid, tok, model, prompt, dest):
+        def cf_all(aid, tok, model, prompt, dest, cfg):
             raise im._CFRateLimited()
         im._cf_one = cf_all
         try:

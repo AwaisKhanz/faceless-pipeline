@@ -440,11 +440,40 @@ def _cf_is_cap(code: int, detail: str) -> bool:
                                   "too many", "3040", "4006"))
 
 
-def _cf_one(account_id: str, token: str, model: str, prompt: str, dest: Path) -> None:
+def _cf_body(model: str, prompt: str, cfg: dict) -> dict:
+    """Build the best-quality request body for the chosen Cloudflare model.
+
+    The old code sent only {"prompt": …}, so flux-1-schnell ran at its default 4
+    steps and a SQUARE 1024 (then cropped to 16:9) — which is why it looked poor.
+    Now we pass real quality controls per model family:
+      • SDXL / Stable-Diffusion — native width/height (16:9), a negative prompt to
+        push realism, num_steps (default 20) and guidance. This is the big win.
+      • flux — prompt + steps (schnell caps at 8); it has a fixed square canvas
+        and no negative-prompt input, so those are omitted.
+    """
+    m = model.lower()
+    seed = random.randint(1, 2_000_000_000)
+    if "flux" in m:
+        steps = int(cfg.get("cf_steps") or 8)
+        steps = min(steps, 8) if "schnell" in m else steps
+        return {"prompt": prompt, "steps": max(1, steps), "seed": seed}
+    # SDXL / Stable-Diffusion family — full control gives the best photoreal look.
+    w, h = _aspect_wh(cfg)
+    steps = max(1, min(int(cfg.get("cf_steps") or 20), 20))
+    out = {"prompt": prompt, "width": w, "height": h, "num_steps": steps,
+           "guidance": float(cfg.get("cf_guidance") or 7.5), "seed": seed}
+    neg = str(cfg.get("cf_negative") or PHOTO_NEG).strip()
+    if neg:
+        out["negative_prompt"] = neg
+    return out
+
+
+def _cf_one(account_id: str, token: str, model: str, prompt: str,
+            dest: Path, cfg: dict) -> None:
     """One request to one Cloudflare account. Raises _CFRateLimited when THAT
     account is capped/limited, GenError for a genuine (prompt/model) failure."""
     url = CF_RUN_URL.format(acct=account_id, model=model)
-    body = json.dumps({"prompt": prompt}).encode("utf-8")
+    body = json.dumps(_cf_body(model, prompt, cfg)).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={
         "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     try:
@@ -493,7 +522,7 @@ def _cloudflare_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
                        "(daily cap) — will retry after their rest / the UTC reset")
     for account_id, token in usable:
         try:
-            _cf_one(account_id, token, model, prompt, dest)
+            _cf_one(account_id, token, model, prompt, dest, cfg)
             return                                     # success
         except _CFRateLimited:
             _cf_put_to_rest(account_id, rest_min)
