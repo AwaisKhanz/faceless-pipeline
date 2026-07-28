@@ -261,6 +261,10 @@ def main() -> int:
     check("FLUX.2 form carries prompt + 16:9 + 28 steps",
           b'name="prompt"' in f2_data and b'name="width"' in f2_data
           and b"1280" in f2_data and b"28" in f2_data)
+    k4_data, k4_ct = im._cf_request("@cf/black-forest-labs/flux-2-klein-4b", "a cat",
+                                    {"generate_aspect": "16:9"})
+    check("FLUX.2 klein also uses multipart", k4_ct.startswith("multipart/form-data"))
+    check("klein defaults to few steps (distilled)", b'name="steps"' in k4_data and b"\r\n\r\n8\r\n" in k4_data)
     check("extract top-level image (FLUX.2 shape)",
           im._cf_extract_b64(b'{"image":"AAA"}'), "AAA")
     check("extract result.image (flux-1 shape)",

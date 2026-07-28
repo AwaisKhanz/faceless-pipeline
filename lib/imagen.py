@@ -456,11 +456,13 @@ def _cf_is_flux2(model: str) -> bool:
 
 def _cf_steps(model: str, cfg: dict) -> int:
     """Diffusion steps for a Cloudflare model, clamped to what it accepts.
-    More steps = more detail (and, for flux-2, more cost)."""
+    More steps = more detail (and, for flux-2-dev, more cost)."""
     m = model.lower()
     want = cfg.get("cf_steps")
     if _cf_is_flux2(model):
-        return max(1, int(want or 28))                 # flagship: default 28, no hard cap
+        if "klein" in m:
+            return max(1, int(want or 8))              # distilled FLUX.2 — few steps
+        return max(1, int(want or 28))                 # flux-2-dev — flagship
     if "schnell" in m:
         return max(1, min(int(want or 8), 8))          # distilled flux: max 8
     return max(1, min(int(want or 20), 20))            # SDXL: max 20
