@@ -165,7 +165,7 @@ _FIELDS: list[dict] = [
     {"key": "generate_exact", "section": "imagegen", "type": "bool",
      "show_if": {"generate": ["mixed", "all"]}},
     {"key": "generate_workers", "section": "imagegen", "type": "number",
-     "int": True, "min": 1, "max": 4, "step": 1,
+     "int": True, "min": 1, "max": 16, "step": 1,
      "show_if": {"generate": ["mixed", "all"]}},
     {"key": "generate_min_interval", "section": "imagegen", "type": "number",
      "min": 0, "max": 30, "step": 0.5,

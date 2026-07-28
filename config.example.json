@@ -78,7 +78,7 @@
   "generate_style": "",
   "_generate_exact": "Only matters when generation is on. The AI that writes the sheet marks scenes whose visual must be EXACT — a specific named fruit, a labelled diagram, a specific product — where an ordinary stock search would return a plausible but WRONG look-alike. true (default) generates those scenes regardless of any search score, so they show the right thing; false treats them like any other scene (search, generate only if the match is weak). Real named-person scenes are never generated either way (they're found from photo archives).",
   "generate_exact": true,
-  "_generate_workers": "How many images may be generated AT ONCE. The image model has a strict per-minute quota, and sourcing runs scenes in parallel — fire too many together and every one comes back rate-limited (429) and silently falls back to a stock photo. Default 1 (one at a time) is the safe, quota-friendly choice. Raise to 2 only if your project has a high image quota.",
+  "_generate_workers": "How many images to generate AT ONCE (1-16). More = faster, and it now also tightens the pacing gap (floor/workers), so raising it genuinely speeds generation up. Safe to go high (6-12) on Cloudflare with pooled accounts or a generous quota; keep it low (1-2) on a single rate-limited engine like Vertex or anonymous Pollinations. A rate limit still backs off automatically, so it can't run away.",
   "generate_workers": 1,
   "_generate_min_interval": "Minimum seconds between the START of one generation and the next — spaces calls out so a burst never trips the quota. Default 4. Increase (e.g. 6-10) if you still see 429s; lower toward 0 to go faster on a generous quota.",
   "generate_min_interval": 4,
