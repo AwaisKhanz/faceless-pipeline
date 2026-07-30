@@ -1583,6 +1583,11 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         # Legacy callers passed only a pixel size; honour it when no style chosen.
         if style is None and caption_size:
             st = st.merged(size=caption_size)
+        # Shorts: bigger, punchier captions for a phone screen, lifted clear of the
+        # bottom Shorts UI (progress bar, title, buttons) that covers ~12% of frame.
+        if _orient["format"] == "short":
+            st = st.merged(size=int(round(st.size * 1.35)),
+                           margin_v=max(st.margin_v, int(round(_fh * 0.13))))
 
         # Word-by-word timing. Aligned once per scene against its own audio and
         # cached, so a caption-only re-render doesn't realign 100+ clips.

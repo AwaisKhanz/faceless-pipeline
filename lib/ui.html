@@ -943,6 +943,9 @@ async function viewDashboard() {
           el('div', { class: 'sub', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
             (p.label || '').replace(p.id + ' — ', ''))),
         el('div', { class: 'row', style: 'flex:none;gap:6px' },
+          (p.format === 'short')
+            ? el('span', { class: 'pill', style: 'background:rgba(124,131,253,.18);color:var(--accent)', title: '9:16 vertical short' }, '▮ Short')
+            : el('span', { class: 'pill', style: 'opacity:.55', title: '16:9 landscape video' }, '▭ Video'),
           p.uploaded ? el('span', { class: 'pill yt', title: 'Marked as uploaded to YouTube' }, '▶ Uploaded') : null,
           el('span', { class: 'pill ' + o.cls }, o.text))),
       el('div', { style: 'margin:12px 0 4px' },
@@ -994,8 +997,15 @@ async function viewDashboard() {
     ? el('div', { class: 'chavatar' }, el('img', { src: m.image_url, alt: name }))
     : el('div', { class: 'chavatar' }, initials(name));
 
+  // Filter the whole dashboard by output format (All / Videos / Shorts), so a
+  // channel's mix of 16:9 videos and 9:16 shorts can be viewed on its own.
+  if (!S.formatFilter) S.formatFilter = 'all';
+  const fmtOk = p => S.formatFilter === 'all' || (p.format || 'video') === S.formatFilter;
+
   const channelBlock = name => {
-    const projs = S.projects.filter(p => p.channel === name);
+    const projs = S.projects.filter(p => p.channel === name && fmtOk(p));
+    // While filtering, hide channels that have nothing of the chosen format.
+    if (!projs.length && S.formatFilter !== 'all') return null;
     const done = projs.filter(p => overall(p.status || {}).text === 'complete').length;
     const m = (S.channelMeta || {})[name] || {};
     const open = S.openChannels.has(name);
@@ -1029,16 +1039,35 @@ async function viewDashboard() {
   const wrap = el('div', {});
   const render = () => {
     wrap.innerHTML = '';
+    // Format filter — only worth showing once at least one Short exists.
+    const nShort = S.projects.filter(p => p.format === 'short').length;
+    if (nShort) {
+      const counts = { all: S.projects.length, video: S.projects.length - nShort, short: nShort };
+      const labels = { all: 'All', video: 'Videos', short: 'Shorts' };
+      wrap.append(el('div', { class: 'row', style: 'gap:6px;margin-bottom:14px;flex-wrap:wrap' },
+        ['all', 'video', 'short'].map(f => el('button', {
+          class: 'btn sm' + (S.formatFilter === f ? ' primary' : ''),
+          onclick: () => { S.formatFilter = f; render(); }
+        }, `${labels[f]} · ${counts[f]}`))));
+    }
     const chNames = [...new Set([...(S.channels || []),
       ...S.projects.map(p => p.channel).filter(Boolean)])];
-    const loose = S.projects.filter(p => !p.channel);
+    const loose = S.projects.filter(p => !p.channel && fmtOk(p));
     if (chNames.length) {
-      wrap.append(secTitle('Channels'));
-      chNames.forEach(name => wrap.append(channelBlock(name)));
+      const blocks = chNames.map(channelBlock).filter(Boolean);
+      if (blocks.length) {
+        wrap.append(secTitle('Channels'));
+        blocks.forEach(b => wrap.append(b));
+      }
     }
     if (loose.length) {
       wrap.append(secTitle(chNames.length ? 'Not in a channel' : 'All projects'));
       wrap.append(el('div', { class: 'cards' }, loose.map(projectCard)));
+    }
+    // Nothing matched the filter at all.
+    if (S.formatFilter !== 'all' && !S.projects.some(fmtOk)) {
+      wrap.append(el('div', { class: 'sub', style: 'padding:14px 2px' },
+        `No ${S.formatFilter === 'short' ? 'shorts' : 'videos'} yet.`));
     }
   };
   render();
