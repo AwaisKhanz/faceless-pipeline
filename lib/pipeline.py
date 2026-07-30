@@ -221,6 +221,41 @@ def project_id(sheet: Path) -> str:
     return sheet.stem.replace("_main_script", "")
 
 
+# The output shape a project is built at. 'short' is a vertical 9:16 reel;
+# 'video' (default) is a standard 16:9 landscape video. This ONE choice drives
+# the whole pipeline: the aspect images are generated at, and the frame size the
+# render (clips + captions) is produced at.
+_ORIENTATION = {
+    "video": {"aspect": "16:9", "w": 1920, "h": 1080},
+    "short": {"aspect": "9:16", "w": 1080, "h": 1920},
+}
+
+
+def project_format(sheet_or_pid) -> str:
+    """A project's format: 'video' (16:9, default) or 'short' (9:16)."""
+    pid = project_id(sheet_or_pid) if isinstance(sheet_or_pid, Path) else str(sheet_or_pid)
+    try:
+        from . import pflags as _pf
+        return _pf.get(pid).get("format", "video")
+    except Exception:
+        return "video"
+
+
+def orientation(sheet_or_pid) -> dict:
+    """The output shape for a project: {format, aspect, w, h}."""
+    fmt = project_format(sheet_or_pid)
+    o = dict(_ORIENTATION.get(fmt, _ORIENTATION["video"]))
+    o["format"] = fmt
+    return o
+
+
+def _cfg_with_aspect(sheet, cfg: dict | None) -> dict:
+    """A copy of `cfg` with generate_aspect forced to THIS project's orientation,
+    so a Short project always generates 9:16 images (and Veo clips) regardless of
+    the global Settings aspect — image gen and render then agree on the shape."""
+    return {**(cfg or {}), "generate_aspect": orientation(sheet)["aspect"]}
+
+
 _CLIP_VOICE_EXTS = (".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac")
 
 
@@ -911,6 +946,7 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
     `log` receives the detailed per-scene feedback (searches, scores, the pick);
     `on_progress` drives the progress bar. They are separate so the live Output
     can show real detail without the bar's bare labels cluttering it."""
+    cfg = _cfg_with_aspect(sheet, cfg)           # generate 9:16 for a Short project
     p = paths_for(sheet, "en")
     p["base"].parent.mkdir(parents=True, exist_ok=True)   # work/
     p["approval"].parent.mkdir(parents=True, exist_ok=True)  # out/
@@ -1068,6 +1104,7 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
         raise SystemExit(
             "Image generation needs \"vertex_project\" in config.json — the same "
             "Vertex setup the LLM uses. Add it, then try again.")
+    cfg = _cfg_with_aspect(sheet, cfg)           # 9:16 for a Short project
 
     p = paths_for(sheet, "en")
     p["stockcache"].mkdir(parents=True, exist_ok=True)
@@ -1178,6 +1215,7 @@ def generate_videos(scenes, sheet: Path, cfg: dict, which: list[int],
         raise SystemExit(
             "Video generation needs \"vertex_project\" in config.json — the same "
             "Vertex setup the LLM uses. Add it, then try again.")
+    cfg = _cfg_with_aspect(sheet, cfg)           # 9:16 Veo clips for a Short project
 
     cap = max(1, int(cfg.get("veo_max") or 2))
     p = paths_for(sheet, "en")
@@ -1361,19 +1399,22 @@ def _aligned_words(scenes, voices, vdurs, starts, lang, p, on_progress, n,
     return out
 
 
-def _clip_fingerprint(src: Path, target: float, zoom: bool) -> str:
+def _clip_fingerprint(src: Path, target: float, zoom: bool,
+                      size: tuple | None = None) -> str:
     """Identity of the per-scene clip `c{n}.mp4` — everything that, if changed,
     means the cached clip no longer represents this scene. Crucially it includes
     the SOURCE picture (path + size + mtime), so swapping a scene's image in
     review (by search OR by AI) forces its clip to be rebuilt instead of the old
-    one being silently reused. Target length and zoom are folded in too, so a
-    timing or effect change also invalidates the cache."""
+    one being silently reused. Target length, zoom AND the FRAME SIZE are folded
+    in too, so a timing/effect change — or switching a project between video (16:9)
+    and short (9:16) — also invalidates the cache and rebuilds at the new shape."""
     try:
         st = src.stat()
         sig = f"{st.st_size}:{int(st.st_mtime)}"
     except OSError:
         sig = "missing"
-    return f"{src}|{sig}|t={round(float(target), 3)}|z={int(bool(zoom))}"
+    dims = f"|{size[0]}x{size[1]}" if size else ""
+    return f"{src}|{sig}|t={round(float(target), 3)}|z={int(bool(zoom))}{dims}"
 
 
 def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Path,
@@ -1384,6 +1425,14 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
     p = paths_for(sheet, lang)
     for d in (p["clips"], p["tmp"], p["out"].parent):
         d.mkdir(parents=True, exist_ok=True)
+
+    # The output shape for THIS project (16:9 video or 9:16 short). Set it on the
+    # render and caption modules for the whole run, so clips are built and captions
+    # positioned at the right frame size. Thread-safe per render.
+    _orient = orientation(sheet)
+    _fw, _fh = _orient["w"], _orient["h"]
+    render.set_frame(_fw, _fh)
+    cap.set_frame(_fw, _fh)
 
     missing = [s.n for s in scenes if s.n not in assets]
     if missing:
@@ -1447,7 +1496,7 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         #     was swapped in review (search or AI). Without this the render happily
         #     reuses the clip built from the OLD image, which is exactly the "I
         #     changed it but the video still shows the old one" bug.
-        want_fp = _clip_fingerprint(src, target, zoom)
+        want_fp = _clip_fingerprint(src, target, zoom, (_fw, _fh))
         have_fp = fp_file.read_text(encoding="utf-8") if fp_file.exists() else ""
         stale = out.exists() and (
             have_fp != want_fp

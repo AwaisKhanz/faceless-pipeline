@@ -1092,6 +1092,22 @@ async function viewProject(id) {
       el('h1', { style: 'margin-top:4px' }, p.id),
       el('p', {}, p.label || '')),
     el('div', { class: 'row', style: 'align-items:center;gap:10px' },
+      el('span', { class: 'sub' }, 'Format'),
+      el('select', {
+        title: 'Video = 16:9 landscape · Short = 9:16 vertical. Drives BOTH image '
+             + 'generation and the render shape.',
+        onchange: async e => {
+          const prev = p.format || 'video';
+          const r = await api('/api/project_format', { id: p.id, format: e.target.value });
+          if (r.error) { e.target.value = prev; return toast(r.error, true); }
+          p.format = r.format;
+          toast(r.format === 'short'
+            ? 'Now a 9:16 Short — re-generate visuals & re-render to apply the new shape.'
+            : 'Now a 16:9 Video — re-generate visuals & re-render to apply the new shape.');
+        }
+      },
+        el('option', { value: 'video', selected: (p.format || 'video') === 'video' }, 'Video · 16:9'),
+        el('option', { value: 'short', selected: p.format === 'short' }, 'Short · 9:16')),
       el('span', { class: 'sub' }, 'Channel'),
       channelSel,
       el('label', { class: 'chk', style: 'gap:6px', title: 'Mark once this video is published on YouTube' },

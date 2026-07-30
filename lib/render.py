@@ -17,13 +17,29 @@ Timing model (this is the part that matters, so it is written down):
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import math
 import shutil
 import subprocess
 from pathlib import Path
 
-W, H, FPS = 1920, 1080, 25
+W, H, FPS = 1920, 1080, 25          # default 16:9 frame; short mode overrides per-render
+
+# The frame size for the CURRENT render, thread-safely. A vertical Short renders
+# at 1080x1920; a normal video at 1920x1080. render_video sets this once per run
+# (set_frame), and every size-dependent step (clip scaling, caption PlayRes/
+# position, the drawtext fallback) reads it via frame(). A ContextVar keeps
+# concurrent renders of DIFFERENT formats isolated — no global mutation races.
+_FRAME: contextvars.ContextVar[tuple] = contextvars.ContextVar("frame", default=(W, H))
+
+
+def set_frame(w: int, h: int) -> None:
+    _FRAME.set((int(w), int(h)))
+
+
+def frame() -> tuple:
+    return _FRAME.get()
 
 
 def run(cmd: list[str], quiet: bool = True, cwd: str | None = None) -> None:
@@ -145,29 +161,34 @@ def duration_of(path: Path) -> float:
 # ---------------------------------------------------------------- scene clips
 
 def make_image_clip(src: Path, dur: float, out: Path, zoom: bool = True) -> None:
-    """Still -> 1080p clip with a slow Ken Burns push (or a plain hold)."""
+    """Still -> a clip at the current frame size (16:9 or 9:16 Short) with a slow
+    Ken Burns push (or a plain hold). The source is scaled to fill and centre-
+    cropped to the frame, so a 9:16 image fills a 9:16 frame edge to edge."""
+    w, h = frame()
     frames = max(2, int(round(dur * FPS)))
     if zoom:
         # Pre-scale generously so the zoom never shows softness, then zoompan.
         vf = (
-            f"scale={W*2}:{H*2}:force_original_aspect_ratio=increase,"
-            f"crop={W*2}:{H*2},"
+            f"scale={w*2}:{h*2}:force_original_aspect_ratio=increase,"
+            f"crop={w*2}:{h*2},"
             f"zoompan=z='min(zoom+0.00035,1.12)':d={frames}:"
-            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={FPS},"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps={FPS},"
             f"setsar=1,format=yuv420p"
         )
     else:
-        vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,"
-              f"crop={W}:{H},fps={FPS},setsar=1,format=yuv420p")
+        vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+              f"crop={w}:{h},fps={FPS},setsar=1,format=yuv420p")
     run(["ffmpeg", "-y", "-loop", "1", "-i", str(src), "-t", f"{dur:.3f}",
          "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
          "-pix_fmt", "yuv420p", "-an", str(out)])
 
 
 def make_video_clip(src: Path, dur: float, out: Path) -> None:
-    """Stock video -> 1080p clip trimmed (or looped) to exactly `dur`."""
-    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,"
-          f"crop={W}:{H},fps={FPS},setsar=1,format=yuv420p")
+    """Stock video -> a clip at the current frame size, trimmed (or looped) to
+    exactly `dur`. Filled and centre-cropped to the frame like the still path."""
+    w, h = frame()
+    vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+          f"crop={w}:{h},fps={FPS},setsar=1,format=yuv420p")
     run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-t", f"{dur:.3f}",
          "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
          "-pix_fmt", "yuv420p", "-an", str(out)])
@@ -476,10 +497,11 @@ def write_ass(texts: list[str], starts: list[float], durs: list[float], out: Pat
     `size` is real pixels. BorderStyle=3 draws its box from OutlineColour
     (BackColour is only the shadow), which is why Outline must be non-zero.
     """
+    w, h = frame()
     header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {W}
-PlayResY: {H}
+PlayResX: {w}
+PlayResY: {h}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -504,15 +526,16 @@ def _drawtext_filter(texts: list[str], starts: list[float], durs: list[float],
     Not as pretty as ASS — no per-line box hugging the text — but it burns real
     captions with only filters that ship in almost every ffmpeg.
     """
+    w, h = frame()
     line_h = int(size * 1.35)
     parts = []
     for txt, st, du in zip(texts, starts, durs):
         lines = _wrap(txt, 42).split("\n")[:2]
         n = len(lines)
         box_h = line_h * n + 24
-        y0 = H - margin_v - box_h
+        y0 = h - margin_v - box_h
         en = f"between(t,{st:.3f},{st + du:.3f})"
-        parts.append(f"drawbox=x=0:y={y0}:w={W}:h={box_h}:"
+        parts.append(f"drawbox=x=0:y={y0}:w={w}:h={box_h}:"
                      f"color=black@0.62:t=fill:enable='{en}'")
         for i, ln in enumerate(lines):
             safe = (ln.replace("\\", "\\\\").replace(":", r"\:")

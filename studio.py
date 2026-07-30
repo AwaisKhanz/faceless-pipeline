@@ -1166,6 +1166,7 @@ class Handler(BaseHTTPRequestHandler):
             for pr in projects:
                 pr["channel"] = chan["assign"].get(pr["id"], "")
                 pr["uploaded"] = bool(flags.get(pr["id"], {}).get("uploaded"))
+                pr["format"] = flags.get(pr["id"], {}).get("format", "video")
             # Which languages each channel actually uses (union of its projects'
             # languages), so the editor can offer one voice picker per language.
             ch_langs: dict = {}
@@ -1603,6 +1604,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": f"no project called {pid!r}"}, 404)
             f = _pf.set_uploaded(pid, bool(b.get("uploaded")))
             return self._json({"uploaded": f["uploaded"], "uploaded_at": f["uploaded_at"]})
+
+        if path == "/api/project_format":
+            # Set a project's output shape: 'video' (16:9) or 'short' (9:16). This
+            # drives image generation aspect AND the render frame size, so switching
+            # it means re-generating visuals and re-rendering at the new shape.
+            from lib import pflags as _pf
+            pid = (b.get("id") or "").strip()
+            if not pid or pl.find_project(pid) is None:
+                return self._json({"error": f"no project called {pid!r}"}, 404)
+            f = _pf.set_format(pid, b.get("format") or "video")
+            return self._json({"format": f["format"]})
 
         if path == "/api/channels":
             # Manage the channel list itself: create / rename / delete a channel,

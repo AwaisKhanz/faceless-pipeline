@@ -20,6 +20,15 @@ ROOT = Path(__file__).resolve().parent.parent
 FILE = ROOT / "project_flags.json"
 
 
+FORMATS = ("video", "short")               # 16:9 and 9:16
+DEFAULT_FORMAT = "video"
+
+
+def _clean_format(v) -> str:
+    v = str(v or "").strip().lower()
+    return v if v in FORMATS else DEFAULT_FORMAT
+
+
 def _load() -> dict:
     if FILE.exists():
         try:
@@ -27,8 +36,13 @@ def _load() -> dict:
             out = {}
             for pid, f in (d or {}).items():
                 if isinstance(f, dict):
-                    out[str(pid)] = {"uploaded": bool(f.get("uploaded")),
-                                     "uploaded_at": str(f.get("uploaded_at") or "")}
+                    row = {"uploaded": bool(f.get("uploaded")),
+                           "uploaded_at": str(f.get("uploaded_at") or "")}
+                    # Only store a format when it's non-default, so old files and
+                    # plain-video projects stay clean.
+                    if _clean_format(f.get("format")) != DEFAULT_FORMAT:
+                        row["format"] = _clean_format(f.get("format"))
+                    out[str(pid)] = row
             return out
         except Exception:
             pass
@@ -54,23 +68,53 @@ def data(valid_pids=None) -> dict:
 
 
 def get(pid: str) -> dict:
-    """This project's flags, with sane blanks when unset."""
+    """This project's flags, with sane blanks/defaults when unset."""
     f = _load().get((pid or "").strip(), {})
     return {"uploaded": bool(f.get("uploaded")),
-            "uploaded_at": f.get("uploaded_at", "")}
+            "uploaded_at": f.get("uploaded_at", ""),
+            "format": _clean_format(f.get("format"))}
 
 
 def set_uploaded(pid: str, value: bool) -> dict:
-    """Mark (or unmark) a project as uploaded to YouTube, stamping the time."""
+    """Mark (or unmark) a project as uploaded to YouTube, stamping the time.
+    Never disturbs the project's format."""
     pid = (pid or "").strip()
     if not pid:
         raise ValueError("no project id")
     d = _load()
+    row = dict(d.get(pid, {}))
     if value:
-        d[pid] = {"uploaded": True,
-                  "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        row["uploaded"] = True
+        row["uploaded_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     else:
-        d.pop(pid, None)                       # unmarked == absent
+        row.pop("uploaded", None)
+        row.pop("uploaded_at", None)
+    if row:                                    # keep the row if it still holds a format
+        d[pid] = row
+    else:
+        d.pop(pid, None)
+    _save(d)
+    return get(pid)
+
+
+def set_format(pid: str, fmt: str) -> dict:
+    """Set the project's output format: 'video' (16:9) or 'short' (9:16). This
+    drives image generation aspect AND the render frame size. Never disturbs the
+    uploaded mark."""
+    pid = (pid or "").strip()
+    if not pid:
+        raise ValueError("no project id")
+    fmt = _clean_format(fmt)
+    d = _load()
+    row = dict(d.get(pid, {}))
+    if fmt == DEFAULT_FORMAT:
+        row.pop("format", None)                # default == absent
+    else:
+        row["format"] = fmt
+    if row:
+        d[pid] = row
+    else:
+        d.pop(pid, None)
     _save(d)
     return get(pid)
 

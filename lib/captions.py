@@ -18,12 +18,24 @@ looser sync rather than falling back to a dead, whole-line caption.
 """
 from __future__ import annotations
 
+import contextvars
 import re
 from dataclasses import dataclass, asdict, fields
 
-# The frame the pipeline renders at. Kept in step with render.W/H; captions are
-# positioned in these coordinates via the ASS PlayRes header.
+# The frame the pipeline renders at. Default 16:9; a vertical Short is 1080x1920.
+# Captions are positioned in these coordinates via the ASS PlayRes header, so the
+# frame must match render's for the box + words to sit in the right place. Set
+# per-render (set_frame) and read via frame() — thread-safe for concurrent renders.
 W, H = 1920, 1080
+_FRAME: contextvars.ContextVar[tuple] = contextvars.ContextVar("cap_frame", default=(W, H))
+
+
+def set_frame(w: int, h: int) -> None:
+    _FRAME.set((int(w), int(h)))
+
+
+def frame() -> tuple:
+    return _FRAME.get()
 
 
 # ─────────────────────────────────────────────────────────────── style model
@@ -258,7 +270,7 @@ def ass_header(style: Style) -> str:
     return (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        f"PlayResX: {W}\nPlayResY: {H}\n"
+        f"PlayResX: {frame()[0]}\nPlayResY: {frame()[1]}\n"
         "WrapStyle: 2\nScaledBorderAndShadow: yes\n\n"
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
@@ -286,8 +298,9 @@ def _group_events(g: dict, style: Style) -> list[str]:
             for w in words]
     phrase = " ".join(disp)
 
-    cx = W // 2
-    cy = (H - style.margin_v) if style.position == "bottom" else (H // 2)
+    w, h = frame()
+    cx = w // 2
+    cy = (h - style.margin_v) if style.position == "bottom" else (h // 2)
 
     # Inline \c overrides take 6-digit BGR with a trailing '&' (alpha is separate);
     # the 8-digit form is only for the [V4+ Styles] colour fields.

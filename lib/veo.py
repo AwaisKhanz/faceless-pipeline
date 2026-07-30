@@ -113,13 +113,17 @@ def video(prompt: str, cfg: dict, dest: Path, on_wait=None, should_cancel=None) 
     model = cfg.get("veo_model") or DEFAULT_MODEL
     sa_path = cfg.get("vertex_service_account") or ""
     seconds = int(cfg.get("veo_seconds") or DEFAULT_SECONDS)
+    # Match the project's shape: a Short renders 9:16, so its Veo clips must be
+    # 9:16 too (Veo supports 16:9 and 9:16). Driven by generate_aspect, which the
+    # pipeline sets from the project format.
+    aspect = "9:16" if str(cfg.get("generate_aspect") or "").strip() == "9:16" else "16:9"
     base = (f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
             f"/locations/{location}/publishers/google/models/{model}")
 
     body = {
         "instances": [{"prompt": prompt}],
         "parameters": {
-            "aspectRatio": "16:9",
+            "aspectRatio": aspect,
             "sampleCount": 1,              # one clip, never a batch
             "durationSeconds": seconds,
             "personGeneration": cfg.get("veo_person") or "allow_adult",
