@@ -1115,51 +1115,59 @@ async function viewProject(id) {
     toast(r.channel ? `Moved to “${r.channel}”.` : 'Removed from its channel.');
   };
 
+  // Controls that live in the "Project settings" section below (defined up here
+  // so the clean header carries only the icon + title).
+  const formatSel = el('select', {
+    style: 'min-width:168px',
+    title: 'Video = 16:9 landscape · Short = 9:16 vertical. Drives BOTH image '
+         + 'generation and the render shape.',
+    onchange: async e => {
+      const prev = p.format || 'video';
+      const r = await api('/api/project_format', { id: p.id, format: e.target.value });
+      if (r.error) { e.target.value = prev; return toast(r.error, true); }
+      p.format = r.format;
+      toast(r.format === 'short'
+        ? 'Now a 9:16 Short — re-generate visuals & re-render to apply the new shape.'
+        : 'Now a 16:9 Video — re-generate visuals & re-render to apply the new shape.');
+    }
+  },
+    el('option', { value: 'video', selected: (p.format || 'video') === 'video' }, 'Video · 16:9'),
+    el('option', { value: 'short', selected: p.format === 'short' }, 'Short · 9:16'));
+  const onYouTube = el('label', { class: 'chk', style: 'gap:6px', title: 'Mark once this video is published on YouTube' },
+    el('input', {
+      type: 'checkbox', checked: !!p.uploaded,
+      onchange: async e => {
+        const r = await api('/api/project_upload', { id: p.id, uploaded: e.target.checked });
+        if (r.error) { e.target.checked = !e.target.checked; return toast(r.error, true); }
+        p.uploaded = r.uploaded;
+        toast(r.uploaded ? 'Marked as uploaded to YouTube.' : 'Unmarked.');
+      }
+    }),
+    'On YouTube');
+  const flag = c => ({ en: '🇬🇧', de: '🇩🇪', es: '🇪🇸', fr: '🇫🇷', it: '🇮🇹', pt: '🇵🇹',
+    nl: '🇳🇱', pl: '🇵🇱', ru: '🇷🇺', tr: '🇹🇷', ja: '🇯🇵', zh: '🇨🇳', ar: '🇸🇦',
+    hi: '🇮🇳', ko: '🇰🇷' }[c] || '🌐');
+  const sourced = st.assets >= st.scenes && st.scenes > 0;
+
+  // ── header: icon + title ────────────────────────────────────────────────
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' },
       el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
-      el('h1', { style: 'margin-top:4px' }, p.id),
-      el('p', {}, p.label || '')),
-    el('div', { class: 'row', style: 'align-items:center;gap:10px' },
-      el('span', { class: 'sub' }, 'Format'),
-      el('select', {
-        title: 'Video = 16:9 landscape · Short = 9:16 vertical. Drives BOTH image '
-             + 'generation and the render shape.',
-        onchange: async e => {
-          const prev = p.format || 'video';
-          const r = await api('/api/project_format', { id: p.id, format: e.target.value });
-          if (r.error) { e.target.value = prev; return toast(r.error, true); }
-          p.format = r.format;
-          toast(r.format === 'short'
-            ? 'Now a 9:16 Short — re-generate visuals & re-render to apply the new shape.'
-            : 'Now a 16:9 Video — re-generate visuals & re-render to apply the new shape.');
-        }
-      },
-        el('option', { value: 'video', selected: (p.format || 'video') === 'video' }, 'Video · 16:9'),
-        el('option', { value: 'short', selected: p.format === 'short' }, 'Short · 9:16')),
-      el('span', { class: 'sub' }, 'Channel'),
-      channelSel,
-      el('label', { class: 'chk', style: 'gap:6px', title: 'Mark once this video is published on YouTube' },
-        el('input', {
-          type: 'checkbox', checked: !!p.uploaded,
-          onchange: async e => {
-            const r = await api('/api/project_upload', { id: p.id, uploaded: e.target.checked });
-            if (r.error) { e.target.checked = !e.target.checked; return toast(r.error, true); }
-            p.uploaded = r.uploaded;
-            toast(r.uploaded ? 'Marked as uploaded to YouTube.' : 'Unmarked.');
-          }
-        }),
-        'On YouTube'),
-      el('span', { class: 'pill ' + o.cls }, o.text),
-      el('button', { class: 'btn sm danger', onclick: () => askDelete(p.id) },
-        'Delete…'))));
+      el('div', { class: 'row', style: 'align-items:center;gap:14px;margin-top:8px' },
+        el('div', {
+          style: 'width:54px;height:54px;border-radius:14px;flex:none;display:flex;'
+               + 'align-items:center;justify-content:center;font-size:26px;'
+               + 'background:linear-gradient(135deg,#6d5efc,#8b7bff)'
+        }, '🎬'),
+        el('div', { style: 'min-width:0' },
+          el('h1', {}, p.id),
+          el('p', {}, p.label || ''))))));
 
-  // visuals ---------------------------------------------------------------
-  const sourced = st.assets >= st.scenes && st.scenes > 0;
-  v.append(el('div', { class: 'sec' }, el('h2', {}, 'Visuals'),
-    el('span', { class: 'sub' }, 'sourced once, shared by every language')));
+  // ── project controls ────────────────────────────────────────────────────
+  v.append(el('div', { class: 'sec' }, el('h2', {}, 'Project controls'),
+    el('span', { class: 'sub' }, 'Manage visuals and source files')));
   v.append(el('div', { class: 'card', style: 'margin-bottom:22px' },
-    el('div', { class: 'row' },
+    el('div', { class: 'row', style: 'align-items:center' },
       el('button', {
         class: 'btn' + (st.assets ? '' : ' primary'), disabled: busy,
         title: busy ? busyTitle : '',
@@ -1168,9 +1176,11 @@ async function viewProject(id) {
           const r = await api('/api/source', { id: p.id });
           if (r.started) go('/activity'); else e.target.disabled = false;
         }
-      }, st.assets ? 'Re-source all' : 'Find visuals'),
-      // Only offer "Auto-process the rest" while there IS a rest to do — a
-      // finished project has nothing left to chain.
+      }, st.assets ? 'Re-resource all' : 'Find visuals'),
+      st.assets ? el('button', { class: 'btn', onclick: () => go('/review/' + p.id) },
+        'Review & swap pictures') : null,
+      el('button', { class: 'btn', onclick: () => viewScript(p.id) }, 'View script'),
+      // "Auto-process the rest" only while there IS a rest to chain.
       complete ? null : el('button', {
         class: 'btn', disabled: busy,
         title: busy ? busyTitle : 'Find visuals, then voice and render every language — no stops.',
@@ -1180,17 +1190,12 @@ async function viewProject(id) {
           if (r.started) go('/queue'); else e.target.disabled = false;
         }
       }, 'Auto-process the rest'),
-      st.assets ? el('button', { class: 'btn', onclick: () => go('/review/' + p.id) },
-        'Review & swap pictures') : null,
-      el('button', { class: 'btn', onclick: () => viewScript(p.id) }, 'View script'),
       el('div', { style: 'flex:1' }),
-      // Match quality, when visuals were scored. A quiet read that the pictures
-      // actually fit, with a nudge when some don't.
-      st.match != null ? el('span', { class: 'sub', style: 'margin-right:4px' },
+      st.match != null ? el('span', { class: 'sub', style: 'margin-right:6px' },
         `avg match ${Math.round(st.match * 100)}%`) : null,
       st.weak ? el('span', { class: 'pill part' }, `${st.weak} weak`) : null,
       el('span', { class: 'pill ' + (sourced ? 'ok' : st.assets ? 'part' : 'none') },
-        `${st.assets} / ${st.scenes}`))));
+        (sourced ? '✓ ' : '') + `${st.assets} / ${st.scenes}`))));
 
   // languages -------------------------------------------------------------
   const opts = { captions: true, zoom: true, music: '', master: true };
@@ -1232,7 +1237,9 @@ async function viewProject(id) {
       el('thead', {}, el('tr', {},
         ['Language', 'Voice', 'Progress', 'Narration', 'Video', ''].map(h => el('th', {}, h)))),
       el('tbody', {}, Object.entries(st.languages || {}).map(([code, l]) => el('tr', {},
-        el('td', {}, el('b', {}, l.name || code), el('div', { class: 'sub mono' }, code)),
+        el('td', {}, el('div', { class: 'row', style: 'align-items:center;gap:9px;flex-wrap:nowrap' },
+          el('span', { style: 'font-size:20px;flex:none' }, flag(code)),
+          el('div', {}, el('b', {}, l.name || code), el('div', { class: 'sub mono' }, code)))),
         el('td', {}, voiceCell(code, l)),
         el('td', { style: 'width:180px' }, stepBar(st, l)),
         el('td', {}, l.voice ? el('span', { class: 'pill ok' }, 'complete')
@@ -1295,6 +1302,17 @@ async function viewProject(id) {
           : 'Every language needs a voice first',
         onclick: () => run(codes, ['voice', 'render'], false)
       }, 'Build every language'))));
+
+  // ── project settings ────────────────────────────────────────────────────
+  v.append(el('div', { class: 'sec mt' }, el('h2', {}, 'Project settings')));
+  v.append(el('div', { class: 'card', style: 'margin-bottom:22px' },
+    el('div', { class: 'row', style: 'align-items:flex-end;gap:20px;flex-wrap:wrap' },
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Format'), formatSel),
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Channel'), channelSel),
+      el('div', { style: 'padding-bottom:8px' }, onYouTube),
+      el('div', { style: 'flex:1' }),
+      el('span', { class: 'pill ' + o.cls, style: 'align-self:center' }, o.text),
+      el('button', { class: 'btn danger', onclick: () => askDelete(p.id) }, 'Delete…'))));
 
   // add a language --------------------------------------------------------
   // Paste a script for a language this project does not have yet. It is
