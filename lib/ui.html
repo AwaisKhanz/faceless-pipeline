@@ -229,20 +229,35 @@ input[type=range]{accent-color:var(--accent)}
 .pill.yt{color:#ff5a5f;border-color:color-mix(in srgb,#ff5a5f 42%,transparent);
   background:color-mix(in srgb,#ff5a5f 14%,transparent)}
 .pill.yt::before{display:none}
+/* format + uploaded badges (icon pills, no leading dot) */
+.pill.video,.pill.short{color:var(--accent);
+  border-color:color-mix(in srgb,var(--accent) 40%,transparent);
+  background:color-mix(in srgb,var(--accent) 15%,transparent)}
+.pill.up{color:#c586f0;border-color:color-mix(in srgb,#a855f7 42%,transparent);
+  background:color-mix(in srgb,#a855f7 15%,transparent)}
 .card.uploaded{border-color:color-mix(in srgb,#ff5a5f 55%,var(--line));
   box-shadow:0 0 0 1px color-mix(in srgb,#ff5a5f 45%,transparent) inset}
 .card.uploaded:hover{border-color:#ff5a5f}
 
-/* ─── per-language rows & step bars ──────────────────────────────────────── */
-.langrow{display:flex;align-items:center;gap:12px;padding:0}
-.lang{width:26px;font-family:var(--mono);font-weight:600;font-size:12px;color:var(--ink2);
+/* ─── per-language rows & step timeline ──────────────────────────────────── */
+.langrow{display:flex;align-items:center;gap:14px;padding:2px 0}
+.lang{width:30px;font-family:var(--mono);font-weight:700;font-size:12px;color:var(--ink2);
   text-transform:uppercase;flex:none}
-.steps{display:flex;gap:4px;flex:1}
-.step{flex:1;height:6px;border-radius:3px;background:var(--surface3)}
-.step.done{background:var(--ok)}
-.step.part{background:linear-gradient(90deg,var(--warn) var(--p,50%),var(--surface3) var(--p,50%))}
-.steplabels{display:flex;gap:4px;margin-top:4px}
-.steplabels span{flex:1;font-size:10px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
+/* A connected stepper: circles joined by a line, green with a check once a step
+   is done; the line fills green up to the furthest reached step. */
+.stepper{display:flex;flex:1;min-width:0}
+.stp{flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;position:relative;min-width:0}
+.stp .dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;line-height:1;color:transparent;background:var(--surface3);
+  border:2px solid var(--line);z-index:1}
+.stp.done .dot{background:var(--ok);border-color:var(--ok);color:#04120b}
+.stp.part .dot{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 26%,transparent)}
+.stp .lbl{font-size:10.5px;color:var(--ink3);letter-spacing:.01em;white-space:nowrap}
+.stp.done .lbl,.stp.part .lbl{color:var(--ink2)}
+/* connector line coming INTO each step (all but the first) */
+.stp:not(:first-child)::before{content:"";position:absolute;top:10px;left:-50%;width:100%;height:2px;
+  background:var(--line);z-index:0}
+.stp.done::before,.stp.part::before{background:var(--ok)}
 
 /* ─── section hairline header ────────────────────────────────────────────── */
 .sec{display:flex;align-items:center;gap:14px;margin:0 0 14px}
@@ -810,16 +825,15 @@ function overall(st) {
   if (ls.some(l => l.voice_n > 0) || st.assets > 0) return { cls: 'part', text: 'in progress' };
   return { cls: 'none', text: 'not started' };
 }
+const STEP_LABELS = { sheets: 'Sheets', visuals: 'Visuals', voice: 'Voice', render: 'Render' };
 function stepBar(st, l) {
   const f = fractions(st, l);
-  return el('div', {},
-    el('div', { class: 'steps' }, STEPS.map(k => {
-      const v = f[k];
-      const d = el('div', { class: 'step ' + (v >= 1 ? 'done' : v > 0 ? 'part' : '') });
-      if (v > 0 && v < 1) d.style.setProperty('--p', Math.round(v * 100) + '%');
-      return d;
-    })),
-    el('div', { class: 'steplabels' }, STEPS.map(k => el('span', {}, k))));
+  return el('div', { class: 'stepper' }, STEPS.map(k => {
+    const v = f[k];
+    return el('div', { class: 'stp ' + (v >= 1 ? 'done' : v > 0 ? 'part' : '') },
+      el('span', { class: 'dot' }, v >= 1 ? '✓' : ''),
+      el('span', { class: 'lbl' }, STEP_LABELS[k] || k));
+  }));
 }
 
 // ═══ dashboard ════════════════════════════════════════════════════════════
@@ -944,9 +958,9 @@ async function viewDashboard() {
             (p.label || '').replace(p.id + ' — ', ''))),
         el('div', { class: 'row', style: 'flex:none;gap:6px' },
           (p.format === 'short')
-            ? el('span', { class: 'pill', style: 'background:rgba(124,131,253,.18);color:var(--accent)', title: '9:16 vertical short' }, '▮ Short')
-            : el('span', { class: 'pill', style: 'opacity:.55', title: '16:9 landscape video' }, '▭ Video'),
-          p.uploaded ? el('span', { class: 'pill yt', title: 'Marked as uploaded to YouTube' }, '▶ Uploaded') : null,
+            ? el('span', { class: 'pill plain short', title: '9:16 vertical short' }, '⚡ Short')
+            : el('span', { class: 'pill plain video', title: '16:9 landscape video' }, '🎬 Video'),
+          p.uploaded ? el('span', { class: 'pill plain up', title: 'Marked as uploaded to YouTube' }, '✦ Uploaded') : null,
           el('span', { class: 'pill ' + o.cls }, o.text))),
       el('div', { style: 'margin:12px 0 4px' },
         Object.entries(st.languages || {}).map(([code, l]) =>
@@ -1044,9 +1058,10 @@ async function viewDashboard() {
     if (nShort) {
       const counts = { all: S.projects.length, video: S.projects.length - nShort, short: nShort };
       const labels = { all: 'All', video: 'Videos', short: 'Shorts' };
-      wrap.append(el('div', { class: 'row', style: 'gap:6px;margin-bottom:14px;flex-wrap:wrap' },
+      wrap.append(el('div', { class: 'row', style: 'gap:8px;margin-bottom:18px;flex-wrap:wrap' },
         ['all', 'video', 'short'].map(f => el('button', {
           class: 'btn sm' + (S.formatFilter === f ? ' primary' : ''),
+          style: 'border-radius:999px;padding:7px 16px',
           onclick: () => { S.formatFilter = f; render(); }
         }, `${labels[f]} · ${counts[f]}`))));
     }
@@ -1056,7 +1071,8 @@ async function viewDashboard() {
     if (chNames.length) {
       const blocks = chNames.map(channelBlock).filter(Boolean);
       if (blocks.length) {
-        wrap.append(secTitle('Channels'));
+        wrap.append(el('div', { class: 'sec' }, el('h2', {}, 'Channels'),
+          el('span', { class: 'note' }, 'Manage your channels and their projects')));
         blocks.forEach(b => wrap.append(b));
       }
     }
