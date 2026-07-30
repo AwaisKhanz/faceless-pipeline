@@ -108,7 +108,7 @@ const js = html.match(/<script>([\s\S]*)<\/script>/)[1];
 
 // Expose the view functions so we can call them one at a time.
 const mod = js + `
-;globalThis.__views = { viewDashboard, viewProject, viewRun, viewNew,
+;globalThis.__views = { viewDashboard, viewChannel, viewProject, viewRun, viewNew,
                         viewVoices, viewConfig, viewStatus, viewReview, route, go,
                         paintBanner, ROUTES, fractions, overall, fmtT, ago };`;
 
@@ -173,6 +173,8 @@ console.log('\n  routes');
 const ROUTE_CASES = [
   ['/', 'viewDashboard', undefined],
   ['/dashboard', 'viewDashboard', undefined],
+  ['/channel/News', 'viewChannel', 'News'],
+  ['/uncategorized', 'viewUncategorized', undefined],
   ['/project/video05', 'viewProject', 'video05'],
   ['/review/video05', 'viewReview', 'video05'],
   ['/activity', 'viewRun', undefined],
@@ -223,6 +225,9 @@ for (const t of [...targets].sort()) {
 
 console.log('');
 await run('dashboard', V.viewDashboard);
+const firstChannel = projects.channels?.[0];
+if (firstChannel) await run('channel', V.viewChannel, firstChannel);
+await run('uncategorized', V.viewChannel, null);
 if (firstId) await run('project', V.viewProject, firstId);
 if (firstId) await run('review', V.viewReview, firstId);
 await run('run/activity', V.viewRun);

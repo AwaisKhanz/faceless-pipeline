@@ -197,22 +197,29 @@ input[type=range]{accent-color:var(--accent)}
 .sub{color:var(--ink3);font-size:12.5px}
 .card.click{cursor:pointer;transition:.14s ease}
 .card.click:hover{border-color:var(--line2);transform:translateY(-2px);box-shadow:var(--shadow)}
-.chwrap{margin-bottom:12px}
-.chhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  padding:13px 16px;cursor:pointer;transition:.14s ease}
-.chhead:hover{border-color:var(--line2)}
-.chhead.open{background:var(--surface2);border-color:var(--line2)}
 .chleft{display:flex;align-items:center;gap:12px;min-width:0}
 .chname{font:600 15.5px var(--ui);overflow-wrap:anywhere;line-height:1.25}
 .chev{color:var(--ink3);font-size:11px;flex:none;width:12px;text-align:center}
-.chbody{margin:12px 0 4px}
 .chavatar{width:38px;height:38px;border-radius:50%;flex:none;object-fit:cover;overflow:hidden;
   background:var(--surface3,#2a2a30);display:flex;align-items:center;justify-content:center;
   font:600 14px var(--ui);color:var(--ink2);text-transform:uppercase}
 .chavatar img{width:100%;height:100%;object-fit:cover}
 .chmeta{font-size:12px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;max-width:520px}
+/* ─── dashboard channel rows (navigate to the channel page) ──────────────── */
+.chrow{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:14px 18px;margin-bottom:12px;cursor:pointer;transition:.14s ease}
+.chrow:hover{border-color:var(--line2);background:var(--surface2)}
+.chright{display:flex;align-items:center;gap:16px;flex:none}
+.chcounts{display:flex;align-items:center;gap:8px}
+.chev.go{color:var(--ink3);font-size:22px;line-height:1;flex:none;transition:.14s ease}
+.chrow:hover .chev.go{color:var(--ink2);transform:translateX(2px)}
+/* ─── channel detail hero ─────────────────────────────────────────────────── */
+.chhero{display:flex;align-items:center;gap:18px;margin:2px 0 4px}
+.chhero h1{font-size:26px;line-height:1.15}
+.chavatar.big{width:64px;height:64px;font-size:22px}
+.backlink{margin-bottom:2px}
 
 /* ─── status pills ───────────────────────────────────────────────────────── */
 .pill{display:inline-flex;align-items:center;gap:6px;font:600 12px var(--ui);
@@ -836,6 +843,123 @@ function stepBar(st, l) {
   }));
 }
 
+// A project card — the same tile on the channel page and the ungrouped list.
+// `refresh` is called after an inline change (moved channel, toggled uploaded)
+// so the card repaints in whichever view it lives on. Clicking the card opens
+// the project; the small controls inside stop the click from bubbling.
+function projectCardEl(p, refresh) {
+  refresh = refresh || (() => { });
+  const moveProject = async (pid, channel) => {
+    const r = await api('/api/project_channel', { id: pid, channel });
+    if (r.error) return toast(r.error, true);
+    refresh();
+  };
+  const setUploaded = async (pid, uploaded) => {
+    const r = await api('/api/project_upload', { id: pid, uploaded });
+    if (r.error) return toast(r.error, true);
+    refresh();
+  };
+  const uploadToggle = el('label', {
+    class: 'chk', style: 'font-size:12.5px;gap:6px', title: 'Mark once published on YouTube',
+    onclick: e => e.stopPropagation()
+  },
+    el('input', {
+      type: 'checkbox', checked: !!p.uploaded,
+      onclick: e => e.stopPropagation(),
+      onchange: e => setUploaded(p.id, e.target.checked)
+    }),
+    'On YouTube');
+  const channelPicker = el('select', {
+    style: 'width:auto;min-width:130px;font-size:13px;padding:5px 8px',
+    onclick: e => e.stopPropagation(),
+    onchange: async e => {
+      e.stopPropagation();
+      const val = e.target.value;
+      if (val === '__new__') {
+        e.target.value = p.channel || '';
+        const name = await askText({
+          title: 'New channel', label: `Move “${p.id}” into a new channel.`,
+          placeholder: 'e.g. Superfruits', ok: 'Create & move'
+        });
+        if (name) await moveProject(p.id, name);
+        return;
+      }
+      await moveProject(p.id, val);
+    }
+  },
+    el('option', { value: '', selected: !p.channel }, 'No channel'),
+    (S.channels || []).map(c => el('option', { value: c, selected: c === p.channel }, c)),
+    el('option', { value: '__new__' }, '＋ New channel…'));
+
+  const st = p.status || { languages: {}, scenes: 0, assets: 0 };
+  const o = overall(st);
+  return el('div', { class: 'card click' + (p.uploaded ? ' uploaded' : ''), onclick: () => go('/project/' + p.id) },
+    el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start;gap:10px' },
+      el('div', { style: 'min-width:0;flex:1' },
+        el('h3', { style: 'overflow-wrap:anywhere;word-break:break-word' }, p.id),
+        el('div', { class: 'sub', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+          (p.label || '').replace(p.id + ' — ', ''))),
+      el('div', { class: 'row', style: 'flex:none;gap:6px' },
+        (p.format === 'short')
+          ? el('span', { class: 'pill plain short', title: '9:16 vertical short' }, '⚡ Short')
+          : el('span', { class: 'pill plain video', title: '16:9 landscape video' }, '🎬 Video'),
+        p.uploaded ? el('span', { class: 'pill plain up', title: 'Marked as uploaded to YouTube' }, '✦ Uploaded') : null,
+        el('span', { class: 'pill ' + o.cls }, o.text))),
+    el('div', { style: 'margin:12px 0 4px' },
+      Object.entries(st.languages || {}).map(([code, l]) =>
+        el('div', { class: 'langrow' },
+          el('span', { class: 'lang' }, code),
+          stepBar(st, l),
+          el('span', { class: 'sub mono', style: 'width:56px;text-align:right;flex:none' },
+            l.render ? l.size_mb + ' MB' : `${l.voice_n || 0}/${st.scenes}`)))),
+    el('div', { class: 'row', style: 'margin-top:10px;justify-content:space-between;align-items:center;gap:8px' },
+      el('span', { class: 'sub', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+        `${st.scenes} scenes · ${st.assets} visuals sourced`),
+      el('div', { class: 'row', style: 'flex:none;gap:8px' }, uploadToggle, channelPicker)));
+}
+
+// Count a channel's projects by output format + completion, for the row summary.
+function channelCounts(projs) {
+  return {
+    total: projs.length,
+    video: projs.filter(p => (p.format || 'video') !== 'short').length,
+    short: projs.filter(p => p.format === 'short').length,
+    complete: projs.filter(p => overall(p.status || {}).text === 'complete').length,
+  };
+}
+
+// ── Channel avatar + the three management actions, shared by the dashboard row
+//    and the channel detail page. Each action takes a `refresh` so it repaints
+//    the view it was invoked from. ──
+const chInitials = name => (name.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/)
+  .map(w => w[0]).join('').slice(0, 2) || name.slice(0, 2));
+const chAvatar = (name, m, big) => el('div', {
+  class: 'chavatar' + (big ? ' big' : '')
+}, (m && m.image_url) ? el('img', { src: m.image_url, alt: name }) : chInitials(name));
+
+async function renameChannel(name, refresh) {
+  const nm = await askText({ title: 'Rename channel', value: name, ok: 'Rename' });
+  if (!nm || nm === name) return;
+  const r = await api('/api/channels', { action: 'rename', old: name, name: nm });
+  if (r.error) return toast(r.error, true);
+  refresh(nm);
+}
+async function deleteChannel(name, refresh) {
+  const yes = await askConfirm({
+    title: `Delete channel “${name}”?`,
+    message: 'Its projects are kept — they just move to “No channel”.',
+    ok: 'Delete channel', danger: true
+  });
+  if (!yes) return;
+  const r = await api('/api/channels', { action: 'delete', name });
+  if (r.error) return toast(r.error, true);
+  refresh(null);
+}
+async function editChannel(name, refresh) {
+  const saved = await channelEditor(name, (S.channelMeta || {})[name] || {});
+  if (saved) refresh(name);
+}
+
 // ═══ dashboard ════════════════════════════════════════════════════════════
 async function viewDashboard() {
   const d = await api('/api/projects');
@@ -896,158 +1020,56 @@ async function viewDashboard() {
     return;
   }
 
-  const moveProject = async (pid, channel) => {
-    const r = await api('/api/project_channel', { id: pid, channel });
-    if (r.error) return toast(r.error, true);
-    viewDashboard();
-  };
-
-  // Mark a project as uploaded to YouTube (or clear it) straight from its card.
-  const setUploaded = async (pid, uploaded) => {
-    const r = await api('/api/project_upload', { id: pid, uploaded });
-    if (r.error) return toast(r.error, true);
-    viewDashboard();
-  };
-  const uploadToggle = p => el('label', {
-    class: 'chk', style: 'font-size:12.5px;gap:6px', title: 'Mark once published on YouTube',
-    onclick: e => e.stopPropagation()
-  },
-    el('input', {
-      type: 'checkbox', checked: !!p.uploaded,
-      onclick: e => e.stopPropagation(),
-      onchange: e => setUploaded(p.id, e.target.checked)
-    }),
-    'On YouTube');
-
-  // A small "which channel" picker on each card — move without opening the project.
-  const channelPicker = p => {
-    const sel = el('select', {
-      style: 'width:auto;min-width:130px;font-size:13px;padding:5px 8px',
-      onclick: e => e.stopPropagation(),          // don't open the project
-      onchange: async e => {
-        e.stopPropagation();
-        const val = e.target.value;
-        if (val === '__new__') {
-          e.target.value = p.channel || '';        // reset the select
-          const name = await askText({
-            title: 'New channel', label: `Move “${p.id}” into a new channel.`,
-            placeholder: 'e.g. Superfruits', ok: 'Create & move'
-          });
-          if (name) await moveProject(p.id, name);
-          return;
-        }
-        await moveProject(p.id, val);
-      }
-    },
-      el('option', { value: '', selected: !p.channel }, 'No channel'),
-      (S.channels || []).map(c => el('option', { value: c, selected: c === p.channel }, c)),
-      el('option', { value: '__new__' }, '＋ New channel…'));
-    return sel;
-  };
-
-  const projectCard = p => {
-    const st = p.status || { languages: {}, scenes: 0, assets: 0 };
-    const o = overall(st);
-    return el('div', { class: 'card click' + (p.uploaded ? ' uploaded' : ''), onclick: () => go('/project/' + p.id) },
-      el('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start;gap:10px' },
-        el('div', { style: 'min-width:0;flex:1' },
-          // A long, space-less title (German compounds) must wrap inside the card,
-          // not spill out of it.
-          el('h3', { style: 'overflow-wrap:anywhere;word-break:break-word' }, p.id),
-          el('div', { class: 'sub', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-            (p.label || '').replace(p.id + ' — ', ''))),
-        el('div', { class: 'row', style: 'flex:none;gap:6px' },
-          (p.format === 'short')
-            ? el('span', { class: 'pill plain short', title: '9:16 vertical short' }, '⚡ Short')
-            : el('span', { class: 'pill plain video', title: '16:9 landscape video' }, '🎬 Video'),
-          p.uploaded ? el('span', { class: 'pill plain up', title: 'Marked as uploaded to YouTube' }, '✦ Uploaded') : null,
-          el('span', { class: 'pill ' + o.cls }, o.text))),
-      el('div', { style: 'margin:12px 0 4px' },
-        Object.entries(st.languages || {}).map(([code, l]) =>
-          el('div', { class: 'langrow' },
-            el('span', { class: 'lang' }, code),
-            stepBar(st, l),
-            el('span', { class: 'sub mono', style: 'width:56px;text-align:right;flex:none' },
-              l.render ? l.size_mb + ' MB' : `${l.voice_n || 0}/${st.scenes}`)))),
-      el('div', { class: 'row', style: 'margin-top:10px;justify-content:space-between;align-items:center;gap:8px' },
-        el('span', { class: 'sub', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-          `${st.scenes} scenes · ${st.assets} visuals sourced`),
-        el('div', { class: 'row', style: 'flex:none;gap:8px' }, uploadToggle(p), channelPicker(p))));
-  };
-
-  // ── Channels as folders: each channel is a collapsible card (name +
-  //    project count) that opens to reveal its projects; ungrouped projects sit
-  //    in their own section below. Open/closed state survives a refresh. ──
-  if (!(S.openChannels instanceof Set)) S.openChannels = new Set();
-
-  const renameChannel = async name => {
-    const nm = await askText({ title: 'Rename channel', value: name, ok: 'Rename' });
-    if (!nm || nm === name) return;
-    const r = await api('/api/channels', { action: 'rename', old: name, name: nm });
-    if (r.error) return toast(r.error, true);
-    viewDashboard();
-  };
-  const deleteChannel = async name => {
-    const yes = await askConfirm({
-      title: `Delete channel “${name}”?`,
-      message: 'Its projects are kept — they just move to “No channel”.',
-      ok: 'Delete channel', danger: true
-    });
-    if (!yes) return;
-    const r = await api('/api/channels', { action: 'delete', name });
-    if (r.error) return toast(r.error, true);
-    viewDashboard();
-  };
-  const editChannel = async name => {
-    const saved = await channelEditor(name, (S.channelMeta || {})[name] || {});
-    if (saved) viewDashboard();               // repaint with the new avatar/details
-  };
-
-  const secTitle = t => el('div', { class: 'sec' }, el('h2', {}, t));
-
-  const initials = name => (name.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/)
-    .map(w => w[0]).join('').slice(0, 2) || name.slice(0, 2));
-  const avatar = (name, m) => (m && m.image_url)
-    ? el('div', { class: 'chavatar' }, el('img', { src: m.image_url, alt: name }))
-    : el('div', { class: 'chavatar' }, initials(name));
-
-  // Filter the whole dashboard by output format (All / Videos / Shorts), so a
-  // channel's mix of 16:9 videos and 9:16 shorts can be viewed on its own.
+  // Filter the channel list by output format (All / Videos / Shorts). Each row
+  // still shows both counts; the filter just hides channels with none of the
+  // chosen format so you can, say, see only channels that publish Shorts.
   if (!S.formatFilter) S.formatFilter = 'all';
   const fmtOk = p => S.formatFilter === 'all' || (p.format || 'video') === S.formatFilter;
 
-  const channelBlock = name => {
+  // The 🎬 / ⚡ / done counts that sit on the right of every channel row.
+  const countPills = c => el('div', { class: 'chcounts' },
+    el('span', { class: 'pill plain video', title: `${c.video} video${c.video === 1 ? '' : 's'}` }, `🎬 ${c.video}`),
+    el('span', { class: 'pill plain short', title: `${c.short} short${c.short === 1 ? '' : 's'}` }, `⚡ ${c.short}`),
+    c.complete ? el('span', { class: 'pill ok', title: `${c.complete} complete` }, `${c.complete} done`) : null);
+
+  // One channel = one row that opens the channel's own page. The management
+  // buttons stop the click so they don't also navigate; the counts and chevron
+  // fall through to the row, so clicking them opens the channel too.
+  const channelRow = name => {
     const projs = S.projects.filter(p => p.channel === name && fmtOk(p));
-    // While filtering, hide channels that have nothing of the chosen format.
-    if (!projs.length && S.formatFilter !== 'all') return null;
-    const done = projs.filter(p => overall(p.status || {}).text === 'complete').length;
+    if (!projs.length && S.formatFilter !== 'all') return null;   // hidden by the filter
+    const c = channelCounts(projs);
     const m = (S.channelMeta || {})[name] || {};
-    const open = S.openChannels.has(name);
-    const header = el('div', {
-      class: 'chhead' + (open ? ' open' : ''),
-      onclick: () => { open ? S.openChannels.delete(name) : S.openChannels.add(name); render(); }
-    },
+    return el('div', { class: 'chrow', onclick: () => go('/channel/' + encodeURIComponent(name)) },
       el('div', { class: 'chleft' },
-        el('span', { class: 'chev' }, open ? '▾' : '▸'),
-        avatar(name, m),
+        chAvatar(name, m),
         el('div', { style: 'min-width:0' },
           el('div', { class: 'chname' }, name),
           el('div', { class: 'sub' },
-            `${projs.length} project${projs.length === 1 ? '' : 's'}`
-            + (projs.length ? ` · ${done} complete` : '')),
-          m.description ? el('div', { class: 'chmeta' }, m.description) : null,
+            `${c.total} project${c.total === 1 ? '' : 's'}`
+            + (c.total ? ` · ${c.complete} complete` : '')),
           m.email ? el('div', { class: 'chmeta mono' }, m.email) : null)),
-      el('div', { class: 'row', style: 'gap:6px;flex:none', onclick: e => e.stopPropagation() },
-        el('button', { class: 'btn sm', onclick: () => editChannel(name) }, 'Edit'),
-        el('button', { class: 'btn sm', onclick: () => renameChannel(name) }, 'Rename'),
-        el('button', { class: 'btn sm danger', onclick: () => deleteChannel(name) }, 'Delete')));
-    const body = open
-      ? (projs.length
-        ? el('div', { class: 'cards chbody' }, projs.map(projectCard))
-        : el('div', { class: 'sub', style: 'padding:12px 2px 2px' },
-          'No projects yet — move one here from a card’s channel menu.'))
-      : null;
-    return el('div', { class: 'chwrap' }, header, body);
+      el('div', { class: 'chright' },
+        countPills(c),
+        el('div', { class: 'row chbtns', style: 'gap:6px;flex:none', onclick: e => e.stopPropagation() },
+          el('button', { class: 'btn sm', onclick: () => editChannel(name, viewDashboard) }, 'Edit'),
+          el('button', { class: 'btn sm', onclick: () => renameChannel(name, viewDashboard) }, 'Rename'),
+          el('button', { class: 'btn sm danger', onclick: () => deleteChannel(name, viewDashboard) }, 'Delete')),
+        el('span', { class: 'chev go' }, '›')));
+  };
+
+  // Projects with no channel get their own row, opening the ungrouped list.
+  const looseRow = () => {
+    const projs = S.projects.filter(p => !p.channel && fmtOk(p));
+    if (!projs.length) return null;
+    const c = channelCounts(projs);
+    return el('div', { class: 'chrow', onclick: () => go('/uncategorized') },
+      el('div', { class: 'chleft' },
+        el('div', { class: 'chavatar' }, '∅'),
+        el('div', { style: 'min-width:0' },
+          el('div', { class: 'chname' }, 'Not in a channel'),
+          el('div', { class: 'sub' }, `${c.total} project${c.total === 1 ? '' : 's'} · ${c.complete} complete`))),
+      el('div', { class: 'chright' }, countPills(c), el('span', { class: 'chev go' }, '›')));
   };
 
   const wrap = el('div', {});
@@ -1065,29 +1087,80 @@ async function viewDashboard() {
           onclick: () => { S.formatFilter = f; render(); }
         }, `${labels[f]} · ${counts[f]}`))));
     }
+    wrap.append(el('div', { class: 'sec' }, el('h2', {}, 'Channels'),
+      el('span', { class: 'note' }, 'Open a channel to see its videos and shorts')));
     const chNames = [...new Set([...(S.channels || []),
       ...S.projects.map(p => p.channel).filter(Boolean)])];
-    const loose = S.projects.filter(p => !p.channel && fmtOk(p));
-    if (chNames.length) {
-      const blocks = chNames.map(channelBlock).filter(Boolean);
-      if (blocks.length) {
-        wrap.append(el('div', { class: 'sec' }, el('h2', {}, 'Channels'),
-          el('span', { class: 'note' }, 'Manage your channels and their projects')));
-        blocks.forEach(b => wrap.append(b));
-      }
-    }
-    if (loose.length) {
-      wrap.append(secTitle(chNames.length ? 'Not in a channel' : 'All projects'));
-      wrap.append(el('div', { class: 'cards' }, loose.map(projectCard)));
-    }
-    // Nothing matched the filter at all.
-    if (S.formatFilter !== 'all' && !S.projects.some(fmtOk)) {
+    const rows = chNames.map(channelRow).filter(Boolean);
+    rows.forEach(r => wrap.append(r));
+    const lr = looseRow();
+    if (lr) wrap.append(lr);
+    if (!rows.length && !lr) {
       wrap.append(el('div', { class: 'sub', style: 'padding:14px 2px' },
-        `No ${S.formatFilter === 'short' ? 'shorts' : 'videos'} yet.`));
+        S.formatFilter !== 'all'
+          ? `No ${S.formatFilter === 'short' ? 'shorts' : 'videos'} yet.`
+          : 'No channels yet — create one to group your projects.'));
     }
   };
   render();
   v.append(wrap);
+}
+
+// ═══ channel detail ═══════════════════════════════════════════════════════
+// One channel's own page: a hero header, then its Videos and Shorts listed as
+// separate sections. `name` is undefined/null for the ungrouped ("Not in a
+// channel") list. Reached from a channel row on the dashboard.
+async function viewChannel(name) {
+  if (!S.projects.length) {
+    const d = await api('/api/projects');
+    S.projects = d.projects || []; S.music = d.music || [];
+    S.channels = d.channels || []; S.channelMeta = d.channel_meta || {};
+  }
+  const loose = name == null;
+  const m = loose ? {} : ((S.channelMeta || {})[name] || {});
+  const projs = S.projects.filter(p => loose ? !p.channel : p.channel === name);
+  const c = channelCounts(projs);
+  const v = $('#view'); v.innerHTML = '';
+
+  const back = el('button', { class: 'btn sm backlink', onclick: () => go('/') },
+    '‹ All channels');
+
+  // Hero: avatar + name + meta on the left; management actions on the right.
+  const actions = loose ? null : el('div', { class: 'row', style: 'gap:6px;flex:none' },
+    el('button', { class: 'btn sm', onclick: () => editChannel(name, () => viewChannel(name)) }, 'Edit'),
+    el('button', { class: 'btn sm', onclick: () => renameChannel(name, nm => nm ? go('/channel/' + encodeURIComponent(nm)) : go('/')) }, 'Rename'),
+    el('button', { class: 'btn sm danger', onclick: () => deleteChannel(name, () => go('/')) }, 'Delete'));
+
+  const hero = el('div', { class: 'chhero' },
+    loose ? el('div', { class: 'chavatar big' }, '∅') : chAvatar(name, m, true),
+    el('div', { class: 'grow', style: 'min-width:0' },
+      el('h1', { style: 'overflow-wrap:anywhere' }, loose ? 'Not in a channel' : name),
+      el('div', { class: 'sub', style: 'margin-top:4px' },
+        `${c.total} project${c.total === 1 ? '' : 's'} · ${c.video} video${c.video === 1 ? '' : 's'}`
+        + ` · ${c.short} short${c.short === 1 ? '' : 's'} · ${c.complete} complete`),
+      m.description ? el('div', { class: 'chmeta', style: 'max-width:640px;margin-top:6px' }, m.description) : null,
+      m.email ? el('div', { class: 'chmeta mono', style: 'margin-top:2px' }, m.email) : null),
+    actions);
+
+  v.append(el('div', { class: 'head' }, el('div', { class: 'grow' }, back)));
+  v.append(hero);
+
+  // A format section (Videos / Shorts). Empty sections still show a header so
+  // the split is always visible; the body then reads "None yet".
+  const section = (title, items) => {
+    const body = items.length
+      ? el('div', { class: 'cards' }, items.map(p => projectCardEl(p, () => viewChannel(name))))
+      : el('div', { class: 'sub', style: 'padding:6px 2px 2px' }, 'None yet.');
+    return el('div', { style: 'margin-top:26px' },
+      el('div', { class: 'sec' }, el('h2', {}, title),
+        el('span', { class: 'note' }, `${items.length}`)),
+      body);
+  };
+
+  const videos = projs.filter(p => (p.format || 'video') !== 'short');
+  const shorts = projs.filter(p => p.format === 'short');
+  v.append(section('Videos', videos));
+  v.append(section('Shorts', shorts));
 }
 
 // ═══ project detail ═══════════════════════════════════════════════════════
@@ -3218,9 +3291,12 @@ function paintBanner() {
 // Real URLs via the History API — /project/video05, not #/project/video05.
 // The server hands back this page for any non-asset path, so every route can
 // be typed, bookmarked, reloaded and shared, and Back/Forward behave normally.
+function viewUncategorized() { return viewChannel(null); }
 const ROUTES = [
   [/^\/$/, viewDashboard],
   [/^\/dashboard\/?$/, viewDashboard],
+  [/^\/channel\/([^/]+)\/?$/, viewChannel],
+  [/^\/uncategorized\/?$/, viewUncategorized],
   [/^\/project\/([^/]+)\/?$/, viewProject],
   [/^\/review\/([^/]+)\/?$/, viewReview],
   [/^\/activity\/([^/]+)\/?$/, viewRun],
