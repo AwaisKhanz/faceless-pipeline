@@ -302,6 +302,19 @@ def _group_events(g: dict, style: Style) -> list[str]:
     cx = w // 2
     cy = (h - style.margin_v) if style.position == "bottom" else (h // 2)
 
+    # Fit-to-width. The words are placed with \pos, which turns OFF libass'
+    # word-wrap, so a phrase wider than the frame bleeds off BOTH edges — barely
+    # noticeable on a roomy 16:9 frame, glaring on a narrow 9:16 Short (1080px).
+    # Shrink just this phrase's font enough to sit inside a safe horizontal band
+    # (90% of the frame, ~5% clear each side). Everything below — the bar and the
+    # per-word events — uses this effective `size`, so the pill matches the text.
+    size = int(style.size)
+    safe_w = int(w * 0.90)
+    raw_w = _glyph_w(phrase, size, style.bold)
+    if raw_w > safe_w and raw_w > 0:
+        size = max(12, int(size * safe_w / raw_w))
+    fs = "" if size == int(style.size) else f"\\fs{size}"
+
     # Inline \c overrides take 6-digit BGR with a trailing '&' (alpha is separate);
     # the 8-digit form is only for the [V4+ Styles] colour fields.
     prim = _rgb_only(style.text_color)
@@ -313,8 +326,8 @@ def _group_events(g: dict, style: Style) -> list[str]:
     # events. Colour and alpha are set separately (\1c + \1a) so the fill matches
     # bar_color at exactly bar_opacity.
     if style.bar:
-        bw = _glyph_w(phrase, style.size, style.bold) + int(style.size * 1.1)
-        bh = int(style.size * 1.55)
+        bw = _glyph_w(phrase, size, style.bold) + int(size * 1.1)
+        bh = int(size * 1.55)
         x0, y0 = cx - bw // 2, cy - bh // 2
         draw = _round_rect(bw, bh, style.bar_radius)
         ev.append(
@@ -341,7 +354,7 @@ def _group_events(g: dict, style: Style) -> list[str]:
         body = " ".join(parts)
         ev.append(
             f"Dialogue: 1,{_ass_ts(w['start'])},{_ass_ts(end)},Cap,,0,0,0,,"
-            f"{{\\an5\\pos({cx},{cy})}}{body}")
+            f"{{\\an5\\pos({cx},{cy}){fs}}}{body}")
     return ev
 
 

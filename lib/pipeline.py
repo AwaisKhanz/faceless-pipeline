@@ -1583,10 +1583,15 @@ def render_video(scenes, assets: dict[int, dict], voices: list[Path], sheet: Pat
         # Legacy callers passed only a pixel size; honour it when no style chosen.
         if style is None and caption_size:
             st = st.merged(size=caption_size)
-        # Shorts: bigger, punchier captions for a phone screen, lifted clear of the
-        # bottom Shorts UI (progress bar, title, buttons) that covers ~12% of frame.
+        # Shorts: punchy captions for a phone screen, lifted clear of the bottom
+        # Shorts UI (progress bar, title, buttons) that covers ~12% of frame. The
+        # frame is only 1080px wide (vs 1920), so keep lines SHORT — fewer words
+        # per line and a modest size bump, not the wider frame's 5 big words, or a
+        # long line runs off both edges. captions.py shrinks any phrase that would
+        # still overflow (fit-to-width), so nothing ever clips regardless.
         if _orient["format"] == "short":
-            st = st.merged(size=int(round(st.size * 1.35)),
+            st = st.merged(size=int(round(st.size * 1.2)),
+                           max_words=min(st.max_words, 3),
                            margin_v=max(st.margin_v, int(round(_fh * 0.13))))
 
         # Word-by-word timing. Aligned once per scene against its own audio and

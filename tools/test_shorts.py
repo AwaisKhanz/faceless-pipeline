@@ -87,6 +87,41 @@ def main() -> int:
     check("ASS PlayRes matches a 16:9 frame",
           "PlayResX: 1920" in C.ass_header(C.resolve_style(None)))
 
+    print("\n  captions never bleed off a narrow 9:16 Short (fit-to-width):")
+    import re as _re
+    long_words = [{"word": w, "start": i * 0.4, "end": i * 0.4 + 0.38}
+                  for i, w in enumerate("Der Arbeitspreis ist der Betrag".split())]
+    st_short = C.PRESETS["reference"].merged(size=79, max_words=5)  # the pre-fix overflow case
+
+    def widest_center_extent(ass_text, frame_w):
+        """Half-width the widest phrase would need, from the estimated glyph run
+        of each Layer-1 event (text is centred with \\an5\\pos, so it spreads
+        symmetrically about the centre)."""
+        worst = 0
+        for ln in ass_text.splitlines():
+            if not ln.startswith("Dialogue: 1"):
+                continue
+            m = _re.search(r"\\fs(\d+)", ln)
+            size = int(m.group(1)) if m else st_short.size
+            body = ln[ln.index("{"):]                     # from the first override
+            text = _re.sub(r"\{[^}]*\}", "", body).strip()  # drop all ASS tags
+            worst = max(worst, C._glyph_w(text, size, st_short.bold))
+        return worst
+
+    C.set_frame(1080, 1920)
+    ass_s = C.build_ass(C.chunk_words(long_words, st_short), st_short)
+    half = widest_center_extent(ass_s, 1080) / 2
+    check("the long German line fits inside the 1080 frame",
+          (1080 // 2 - half) >= 0 and (1080 // 2 + half) <= 1080, True)
+    check("an overflowing phrase carries a shrink \\fs tag",
+          any(l.startswith("Dialogue: 1") and "\\fs" in l for l in ass_s.splitlines()), True)
+
+    C.set_frame(1920, 1080)
+    ass_v = C.build_ass(C.chunk_words(long_words, st_short), st_short)
+    check("the same line on a roomy 16:9 frame is left untouched (no \\fs)",
+          any(l.startswith("Dialogue: 1") and "\\fs" in l for l in ass_v.splitlines()), False)
+    C.set_frame(1920, 1080)
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 
