@@ -52,10 +52,12 @@ def main() -> int:
     o = pl.orientation(sheet)
     check("video -> 16:9 / 1920x1080", (o["aspect"], o["w"], o["h"]), ("16:9", 1920, 1080))
 
-    print("\n  the project's aspect is forced onto generation cfg:")
+    print("\n  the project's format (not a setting) drives the generation aspect:")
     pf.set_format(pl.project_id(sheet), "short")
+    # Aspect is no longer a config value; the project's format decides it. Passing
+    # a stray incoming aspect proves the format still wins.
     cfg2 = pl._cfg_with_aspect(sheet, {"generate_aspect": "16:9", "vertex_project": "p"})
-    check("a Short overrides the global 16:9 with 9:16", cfg2["generate_aspect"], "9:16")
+    check("a Short forces 9:16 over any incoming aspect", cfg2["generate_aspect"], "9:16")
     check("other cfg keys are preserved", cfg2["vertex_project"], "p")
 
     print("\n  clip fingerprint folds in the frame size (switching format rebuilds):")

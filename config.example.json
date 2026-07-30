@@ -68,8 +68,6 @@
   "generate_min": 0.60,
   "_generate_max": "Hard cap on how many images may be generated in one run — a cost guardrail so a bad run can't spend the whole credit. Raise it for long all-mode videos.",
   "generate_max": 40,
-  "_generate_aspect": "Image shape. \"16:9\" fills the video frame; other values (1:1, 9:16, 4:3, 3:4) also work.",
-  "generate_aspect": "16:9",
   "_generate_style": "Optional. Empty (default) forces a strong PHOTOREAL look — generated scenes come out as real photographs, not AI illustrations/renders — unless the scene itself asks for another style (e.g. 'watercolour illustration of…'), which is respected. Set a phrase here to TAKE OVER the look for every generated image (e.g. 'moody cinematic, teal and orange'); your phrase is then used verbatim and realism is no longer forced.",
   "generate_style": "",
   "_generate_exact": "Only matters when generation is on. The AI that writes the sheet marks scenes whose visual must be EXACT — a specific named fruit, a labelled diagram, a specific product — where an ordinary stock search would return a plausible but WRONG look-alike. true (default) generates those scenes regardless of any search score, so they show the right thing; false treats them like any other scene (search, generate only if the match is weak). Real named-person scenes are never generated either way (they're found from photo archives).",

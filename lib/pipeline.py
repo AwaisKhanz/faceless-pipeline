@@ -250,9 +250,13 @@ def orientation(sheet_or_pid) -> dict:
 
 
 def _cfg_with_aspect(sheet, cfg: dict | None) -> dict:
-    """A copy of `cfg` with generate_aspect forced to THIS project's orientation,
-    so a Short project always generates 9:16 images (and Veo clips) regardless of
-    the global Settings aspect — image gen and render then agree on the shape."""
+    """A copy of `cfg` carrying this project's aspect for the image/Veo engines.
+
+    Aspect is NOT a user setting — it follows the project's format: a Video
+    generates 16:9, a Short 9:16. Every generation path (source_stock,
+    generate_scenes, Veo) runs `cfg` through here first, so image gen and the
+    render always agree on the shape. `generate_aspect` is just the internal key
+    the engines read; the pipeline is its only writer."""
     return {**(cfg or {}), "generate_aspect": orientation(sheet)["aspect"]}
 
 

@@ -36,6 +36,9 @@ from . import llm
 # they run on the "global" location the LLM already uses. Override in config.
 DEFAULT_LOCATION = "global"
 DEFAULT_MODEL = "gemini-2.5-flash-image"       # "Nano Banana", ~$0.039/image
+# The aspect to generate at. It is NOT a user setting: the pipeline injects
+# `generate_aspect` into cfg from the project's format (Video → 16:9, Short →
+# 9:16) before every call. This is the safety fallback if that key is missing.
 DEFAULT_ASPECT = "16:9"
 
 # Which service makes the picture. There is one engine — Google Vertex image
