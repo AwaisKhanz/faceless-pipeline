@@ -462,6 +462,21 @@ def run_sourcing(pid: str, redo: list[int] | None,
             return
         sheet = Path(proj["sheet"])
         cfg = pl.load_config()
+        mlang = pl.main_lang(sheet)
+
+        # "Auto-process the rest" after the visuals were already found by hand:
+        # don't redo the whole source step (that's what "Re-resource all" is
+        # for). If every scene already has a picture, begin the hands-off chain
+        # at voice + render instead of re-sourcing. Only on the auto path
+        # (skip_review) and only for a full run (a targeted redo still re-fetches
+        # just those scenes).
+        if skip_review and not redo and pl.visuals_complete(sheet):
+            begin_job(pid, [mlang], "stock")
+            log(f"Visuals already sourced for {proj['label']} — "
+                f"skipping straight to voice + render.")
+            set_job(stage="done", done=1, total=1, label="visuals already sourced")
+            return
+
         if not cfg.get("pexels_key") and not cfg.get("pixabay_key"):
             raise RuntimeError(
                 "No stock API key yet. Open config.json and paste your free "
@@ -470,7 +485,6 @@ def run_sourcing(pid: str, redo: list[int] | None,
         # query — never a specific language's narration. Read straight from the
         # main script in ITS OWN language, so a German- or Spanish-main project
         # sources without demanding an English narration file it doesn't have.
-        mlang = pl.main_lang(sheet)
         scenes = pl.load_scenes(sheet, mlang, None)
         begin_job(pid, [mlang], "stock")
         set_job(total=len(redo or scenes))

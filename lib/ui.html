@@ -1273,7 +1273,9 @@ async function viewProject(id) {
       // "Auto-process the rest" only while there IS a rest to chain.
       complete ? null : el('button', {
         class: 'btn', disabled: busy,
-        title: busy ? busyTitle : 'Find visuals, then voice and render every language — no stops.',
+        title: busy ? busyTitle
+          : 'Finish everything left — find any missing visuals, then voice and '
+          + 'render every language. Skips steps already done. No stops.',
         onclick: async e => {
           e.target.disabled = true;
           const r = await api('/api/source', { id: p.id, auto: true });

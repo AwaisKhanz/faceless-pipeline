@@ -942,6 +942,25 @@ def _expand_scene_queries(scenes, p, cfg: dict, on_progress=lambda *_: None) -> 
             s.fallbacks = list(getattr(s, "fallbacks", [])) + add
 
 
+def visuals_complete(sheet: Path) -> bool:
+    """True when every scene already has a sourced visual on disk.
+
+    Lets the hands-off 'Auto-process the rest' resume at voice + render instead
+    of re-running the whole source step when the pictures were already found (by
+    hand, or by an earlier run). Placeholders count as sourced — they render — so
+    this asks 'is anything still to fetch?', not 'is every match perfect?'."""
+    p = paths_for(sheet, "en")
+    if not p["assets"].exists():
+        return False
+    try:
+        assets = json.loads(p["assets"].read_text(encoding="utf-8"))
+        have = {int(k) for k in assets}
+        scenes = load_scenes(sheet, main_lang(sheet), None)
+    except Exception:
+        return False
+    return bool(scenes) and all(s.n in have for s in scenes)
+
+
 def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
                  on_progress=noop, log=noop, should_cancel=None) -> dict[int, dict]:
     """Fetch a visual per scene. Visuals are language-independent, so this is
