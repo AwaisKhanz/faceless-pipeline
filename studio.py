@@ -338,7 +338,8 @@ def _worker_wrapper(fn):
 
 # ------------------------------------------------------------------ the work
 
-def run_generate(scripts: dict, pid: str, overwrite: bool, channel: str = "") -> None:
+def run_generate(scripts: dict, pid: str, overwrite: bool, channel: str = "",
+                 fmt: str = "video") -> None:
     """Per-language scripts in → main script + narration files out. No
     translation: the structure language defines the scenes and visuals, and each
     other language's pasted script is segmented onto them. compose.py writes the
@@ -383,6 +384,13 @@ def run_generate(scripts: dict, pid: str, overwrite: bool, channel: str = "") ->
             from lib import channels as _ch
             _ch.assign(pid, channel.strip())
             log(f"Added to channel: {channel.strip()}")
+        # Record the output format up front (video 16:9 / short 9:16). It must be
+        # set BEFORE any visuals are sourced so images are generated at the right
+        # aspect — which matters most when Auto-process chains straight on.
+        from lib import pflags as _pf
+        _fmt = _pf.set_format(pid, fmt)["format"]
+        if _fmt == "short":
+            log("Format: Short (9:16 vertical)")
         log(f"{len(res.scenes)} scenes · "
             f"{sum(1 for s in res.scenes if s.media == 'VIDEO')} video · "
             f"{sum(1 for s in res.scenes if s.hero)} hero")
@@ -1699,7 +1707,8 @@ class Handler(BaseHTTPRequestHandler):
             job = enqueue(pid, "generate",
                           {"scripts": scripts, "pid": pid,
                            "overwrite": bool(b.get("overwrite")),
-                           "channel": (b.get("channel") or "").strip()},
+                           "channel": (b.get("channel") or "").strip(),
+                           "fmt": (b.get("format") or "video")},
                           auto=bool(b.get("auto")))
             return self._json({"started": True, "job": job.id})
 

@@ -1824,6 +1824,16 @@ async function viewNew() {
     channelSel.value = name;
   };
 
+  // Video (16:9) or Short (9:16). Chosen up front so the scenes, every sourced
+  // picture and the final render are built at the right shape from the start —
+  // especially with Auto-process, which sources visuals immediately.
+  const formatSel = el('select', {
+    title: 'Video = 16:9 landscape · Short = 9:16 vertical. Sets the shape of every '
+      + 'image and the final render.'
+  },
+    el('option', { value: 'video' }, 'Video · 16:9 landscape'),
+    el('option', { value: 'short' }, 'Short · 9:16 vertical'));
+
   v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
     el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
     el('h1', { style: 'margin-top:4px' }, 'New video from a script'),
@@ -1866,8 +1876,9 @@ async function viewNew() {
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Languages'),
         picker.root)),
-    el('div', { style: 'margin-top:14px;max-width:320px' },
-      el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Channel'), channelSel),
+    el('div', { class: 'grid2', style: 'margin-top:14px' },
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Channel'), channelSel),
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Format'), formatSel)),
     el('div', { class: 'hr' }),
     scriptsWrap,
     el('label', { class: 'chk', style: 'margin-top:4px' }, autoBox,
@@ -1888,7 +1899,8 @@ async function viewNew() {
           e.target.disabled = true;
           const auto = autoBox.checked;
           const channel = channelSel.value === '__new__' ? '' : channelSel.value;
-          const r = await api('/api/generate', { id: id.value.trim(), scripts, auto, channel });
+          const r = await api('/api/generate',
+            { id: id.value.trim(), scripts, auto, channel, format: formatSel.value });
           if (r.started) go(auto ? '/queue' : '/activity'); else e.target.disabled = false;
         }
       }, 'Generate the sheets'),
