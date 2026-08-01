@@ -382,7 +382,25 @@ def _vertex_token(sa_path: str) -> str:
                 creds, _ = google.auth.default(scopes=[_VERTEX_SCOPE])
             _VERTEX_CREDS[cache_key] = creds
         if not creds.valid:
-            creds.refresh(Request())
+            # The token endpoint (oauth2.googleapis.com) occasionally hangs or
+            # resets — a single slow response must not sink a whole job. Retry a
+            # few times with a short backoff, then surface a clear error. (The
+            # generateContent call has its own retry loop; this covers the mint.)
+            last = None
+            for attempt in range(1, 4):
+                try:
+                    creds.refresh(Request())
+                    break
+                except Exception as e:                 # timeouts, resets, DNS blips
+                    last = e
+                    if attempt < 3:
+                        time.sleep(2 * attempt)
+            else:
+                raise LLMError(
+                    "Could not get a Google Cloud access token — "
+                    f"oauth2.googleapis.com kept failing after 3 tries ({last}). "
+                    "Check your internet connection or proxy, then try again."
+                ) from None
         return creds.token
 
 
