@@ -342,10 +342,23 @@ def find_projects(_root: Path | None = None) -> list[dict]:
                     n = len(sheetlib.parse_main_script(f))
                 except SystemExit:
                     n = 0
+                # When the project was created: the main-script mtime. It's written
+                # once at generation (and only rewritten on a deliberate re-generate),
+                # so it tracks creation without shifting on every source/render — the
+                # right key for a stable "newest first" order.
+                try:
+                    created = int(f.stat().st_mtime)
+                except OSError:
+                    created = 0
                 out.append({"id": pid, "sheet": str(f), "dir": str(sd.parent),
-                            "label": pretty_name(f), "scenes": n, "languages": langs})
+                            "label": pretty_name(f), "scenes": n, "languages": langs,
+                            "created": created})
             except Exception:
                 continue
+    # Newest first, so a freshly added project lands at the top of every list
+    # instead of wherever its name falls alphabetically. Ties break by id for a
+    # stable order.
+    out.sort(key=lambda p: (-p["created"], p["id"]))
     return out
 
 
