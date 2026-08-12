@@ -104,6 +104,10 @@ _FIELDS: list[dict] = [
     {"key": "openrouter_model", "section": "llm", "type": "text", "show_if": {"llm": ["openrouter"]}},
 
     # ── finding visuals ─────────────────────────────────────────────────────
+    {"key": "media_mode", "section": "sourcing", "type": "select",
+     "options": _opt(("mixed", "Video and images — the writer picks per scene"),
+                     ("image", "All images (stills only)"),
+                     ("video", "All videos (clips only)"))},
     {"key": "search_all_sources", "section": "sourcing", "type": "bool"},
     {"key": "disable_sources", "section": "sourcing", "type": "multiselect",
      "options": _opt(*SOURCE_NAMES)},

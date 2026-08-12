@@ -489,6 +489,10 @@ def run_sourcing(pid: str, redo: list[int] | None,
         begin_job(pid, [mlang], "stock")
         set_job(total=len(redo or scenes))
         log(f"Sourcing visuals for {proj['label']}")
+        _mm = pl.media_mode(cfg)
+        if _mm != "mixed":
+            log(f"Media preference: {'all videos' if _mm == 'video' else 'all images'} "
+                f"— overriding the script's per-scene image/video choice (Settings).")
 
         # The bar shows "which scene, how far"; the detailed per-scene feedback
         # (searches, scores, the pick) comes through `log` from fetch_all. Keeping

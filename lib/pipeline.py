@@ -974,6 +974,34 @@ def visuals_complete(sheet: Path) -> bool:
     return bool(scenes) and all(s.n in have for s in scenes)
 
 
+MEDIA_MODES = ("mixed", "image", "video")
+
+
+def media_mode(cfg: dict | None) -> str:
+    """The global Video/Image preference: 'mixed' (default), 'image', or 'video'."""
+    m = str((cfg or {}).get("media_mode") or "mixed").strip().lower()
+    return m if m in MEDIA_MODES else "mixed"
+
+
+def apply_media_mode(scenes, cfg: dict | None):
+    """Force every scene's media to the user's global preference before sourcing.
+
+    'mixed' leaves the writer's per-scene IMAGE/VIDEO choice untouched; 'image'
+    makes every scene a still; 'video' makes every scene a motion clip. Mutating
+    the scenes here — the one place all automatic sourcing funnels through — is
+    what makes the setting flow into routing, generation eligibility, the fetch,
+    and (via the asset's file type) the render, with no other code aware of it.
+    Manual per-scene generation in review is deliberately NOT routed through here,
+    so an explicit 'Generate video' on one scene always wins over the preference.
+    Returns `scenes` for convenience."""
+    mode = media_mode(cfg)
+    forced = {"image": "IMAGE", "video": "VIDEO"}.get(mode)
+    if forced:
+        for s in scenes:
+            s.media = forced
+    return scenes
+
+
 def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
                  on_progress=noop, log=noop, should_cancel=None) -> dict[int, dict]:
     """Fetch a visual per scene. Visuals are language-independent, so this is
@@ -983,6 +1011,7 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
     `on_progress` drives the progress bar. They are separate so the live Output
     can show real detail without the bar's bare labels cluttering it."""
     cfg = _cfg_with_aspect(sheet, cfg)           # generate 9:16 for a Short project
+    apply_media_mode(scenes, cfg)                # honour the global Video/Image preference
     p = paths_for(sheet, "en")
     p["base"].parent.mkdir(parents=True, exist_ok=True)   # work/
     p["approval"].parent.mkdir(parents=True, exist_ok=True)  # out/
