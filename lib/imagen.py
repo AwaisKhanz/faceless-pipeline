@@ -422,6 +422,7 @@ def _engine_floor(engine: str, cfg: dict) -> float:
 # all the buckets, and it all draws on Google Cloud credit.
 _VERTEX_LOCK = threading.Lock()
 _VERTEX_REST: dict[tuple, float] = {}          # (model, region) → monotonic time free again
+_VERTEX_RR = [0]                               # round-robin cursor over the ready combos
 
 
 class _VertexBusy(Exception):
@@ -466,6 +467,22 @@ def _vertex_ready(combos: list[tuple[str, str]]) -> list[tuple[str, str]]:
         return [c for c in combos if _VERTEX_REST.get(c, 0.0) <= now]
 
 
+def _vertex_ready_rotated(combos: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The ready combos, but ROTATED so each call (and each concurrent worker)
+    STARTS on a different (model, region) pair. Without this every call begins at
+    combo #0 and only moves on when it's rate-limited — so under normal load the
+    whole pool collapses onto the first model/region. Rotating spreads the calls
+    evenly across every ready combo (real load-balancing), while failover still
+    walks the remaining combos if the chosen one goes busy."""
+    ready = _vertex_ready(combos)
+    if len(ready) <= 1:
+        return ready
+    with _VERTEX_LOCK:
+        i = _VERTEX_RR[0] % len(ready)
+        _VERTEX_RR[0] = (_VERTEX_RR[0] + 1) % 1_000_000_000
+    return ready[i:] + ready[:i]
+
+
 def _vertex_soonest(combos: list[tuple[str, str]]) -> float:
     """Seconds until the soonest resting combo frees up (0 if one is ready now) —
     so a fully-busy pool can tell image()'s backoff exactly how long to wait."""
@@ -483,6 +500,7 @@ def _vertex_put_to_rest(combo: tuple[str, str], minutes: float) -> None:
 def _vertex_reset() -> None:                   # for tests
     with _VERTEX_LOCK:
         _VERTEX_REST.clear()
+        _VERTEX_RR[0] = 0
 
 
 def _vertex_predict_endpoint(project: str, region: str, model: str) -> str:
@@ -588,7 +606,7 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     combos = _vertex_combos(cfg)
     if not combos:
         raise GenError("no Vertex models/regions configured")
-    usable = _vertex_ready(combos)
+    usable = _vertex_ready_rotated(combos)             # spread load across the pool
     if not usable:                                     # whole pool resting → WAIT, don't fail
         # Raise a rate-limit (not GenError) so image()'s backoff waits for the
         # soonest combo to free up and RETRIES, instead of killing the scene.

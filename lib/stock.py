@@ -712,6 +712,13 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     # scorer via _SCORE_LOCK, and each scene's log lines are buffered and flushed
     # together so a scene's block stays contiguous.
     workers = max(1, int(cfg.get("source_workers") or 1))
+    # When we're GENERATING (all/mixed), the heavy work is AI image generation, not
+    # stock search — and it's paced by its own generate_workers pool + the Vertex
+    # model×region rotation. So let generate_workers drive how many scenes run at
+    # once here too, so raising it actually speeds up 'Find visuals' (not only the
+    # manual Generate button). Search-only runs keep using source_workers.
+    if gen_mode != "off":
+        workers = max(workers, int(cfg.get("generate_workers") or 1))
     _state_lock = threading.Lock()
     _log_lock = threading.Lock()
     _progress = [0]

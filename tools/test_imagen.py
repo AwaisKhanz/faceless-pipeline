@@ -3,6 +3,7 @@ import base64
 import json
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -174,6 +175,24 @@ def main() -> int:
             check("fully-resting pool → _RateLimited (waits, doesn't fail)", True)
         except im.GenError:
             check("resting pool must WAIT, not GenError", False)
+        # LOAD-BALANCING: successive calls START on DIFFERENT combos (round-robin),
+        # not always the first — so a healthy pool spreads work across every combo.
+        im._vertex_one = saved_vone
+        im._vertex_reset()
+        starts = []
+        big = {"vertex_project": "p", "vertex_models": "m",
+               "vertex_regions": "r1\nr2\nr3\nr4"}
+
+        def rec_one(project, region, model, sa, prompt, cfg2, dst):
+            starts.append((model, region))
+            Path(dst).write_bytes(b"VX")          # succeeds immediately (no failover)
+        im._vertex_one = rec_one
+        for k in range(8):
+            im._vertex_raw("x", big, Path(tempfile.mkdtemp()) / f"rr{k}.png")
+        check("8 healthy calls hit all 4 regions, evenly (2 each)",
+              sorted(Counter(r for _, r in starts).values()), [2, 2, 2, 2])
+        check("consecutive calls start on different combos (round-robin)",
+              starts[0] != starts[1] and starts[1] != starts[2], True)
     finally:
         im._vertex_one = saved_vone
         im._vertex_reset()
