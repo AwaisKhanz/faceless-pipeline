@@ -575,7 +575,8 @@ def _emit_rung(log, query, detail, label, picked: bool, scorer_on: bool) -> None
 
 
 def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
-                  log=lambda *_: None, should_cancel=None) -> dict | None:
+                  log=lambda *_: None, should_cancel=None,
+                  prompt: str | None = None, style: str = "") -> dict | None:
     """Generate ONE image for a scene and return an asset dict, or None on any
     failure so the caller falls back to search. The file is named by a hash of
     the prompt, so an identical prompt reuses the picture already made — a
@@ -586,7 +587,9 @@ def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
     (safety, or a named real person) fails both times and is reported, so the
     caller can search instead — the scene is never left empty."""
     subject = s.query or getattr(s, "text", "") or ""
-    prompt = gen.prompt_for(subject, cfg)
+    # A crafted (LLM) prompt wins; otherwise build the plain prompt, folding in the
+    # project's shared visual style so every generated image matches the set.
+    prompt = (prompt or "").strip() or gen.prompt_for(subject, cfg, style)
     if not prompt.strip():
         return None
     slug = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16]
@@ -619,7 +622,9 @@ def _generate_one(gen, s, cache: Path, cfg: dict, used: set,
 def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
               picks: dict[int, int] | None = None, log=print,
               cfg: dict | None = None, already: dict | None = None,
-              on_progress=None, should_cancel=None) -> dict[int, dict]:
+              on_progress=None, should_cancel=None,
+              gen_prompts: dict[int, str] | None = None,
+              gen_style: str = "") -> dict[int, dict]:
     """Fetch a visual for every scene. Failures are reported, not fatal.
 
     Two things happen here beyond a plain search.
@@ -762,7 +767,8 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
             # so a scene is never left empty by it.
             if can_gen and (gen_mode == "all" or want_exact):
                 a = _generate_one(_gen, s, cache, cfg, used, emit,
-                                  should_cancel=should_cancel)
+                                  should_cancel=should_cancel,
+                                  prompt=(gen_prompts or {}).get(s.n), style=gen_style)
                 if a and _claim(a["path"], mine):
                     with _state_lock:
                         out[s.n] = a
@@ -846,7 +852,8 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
                     below = False
                 if below:
                     a = _generate_one(_gen, s, cache, cfg, used, emit,
-                                      should_cancel=should_cancel)
+                                      should_cancel=should_cancel,
+                                      prompt=(gen_prompts or {}).get(s.n), style=gen_style)
                     if a and _claim(a["path"], mine):
                         with _state_lock:
                             out[s.n] = a

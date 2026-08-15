@@ -1002,6 +1002,45 @@ def apply_media_mode(scenes, cfg: dict | None):
     return scenes
 
 
+def _craft_image_prompts(gen_scenes, sheet: Path, cfg: dict,
+                         on_progress=lambda *_: None, log=noop,
+                         force: bool = False) -> tuple[dict, str]:
+    """(crafted_prompts, project_style) for the AI-image generation paths.
+
+    `project_style` is the sheet's shared visual look — always returned and always
+    folded into every generation prompt (cheap, and the biggest consistency lever).
+    `crafted_prompts` are detailed per-scene prompts written by the LLM with a
+    recurring-subject bible, so subjects stay consistent AND each prompt is
+    specific — only when generation is ON, an LLM is configured, and
+    generate_smart_prompt is enabled. Best effort: any failure returns {} for the
+    crafted prompts, so the deterministic prompt (+ style) still applies."""
+    style = sheetlib.visual_style(sheet)
+    crafted: dict[int, str] = {}
+    # `force` is the manual "Generate image" path — generation is happening no
+    # matter what the `generate` mode is, and every requested scene is an image.
+    if force:
+        gen_on, img = True, list(gen_scenes)
+    else:
+        gen_on = str(cfg.get("generate", "off")).strip().lower() != "off"
+        img = [s for s in gen_scenes if getattr(s, "media", "IMAGE") == "IMAGE"]
+    from . import llm as LLM
+    if gen_on and img and _flag(cfg.get("generate_smart_prompt", "auto")) \
+            and LLM.available(cfg):
+        try:
+            from . import gemini as G
+            on_progress(0, len(img), "writing image prompts")
+            crafted = G.image_prompts(
+                [{"n": s.n, "query": s.query,
+                  "narration": getattr(s, "narration", "")} for s in img],
+                LLM.key_for(cfg), LLM.model_for(cfg), style=style)
+            if crafted:
+                log(f"  crafted {len(crafted)} detailed image prompt(s) "
+                    f"(consistent style + recurring subjects)")
+        except Exception as e:
+            log(f"  (couldn't craft image prompts: {e}) — using plain prompts")
+    return crafted, style
+
+
 def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
                  on_progress=noop, log=noop, should_cancel=None) -> dict[int, dict]:
     """Fetch a visual per scene. Visuals are language-independent, so this is
@@ -1071,11 +1110,16 @@ def source_stock(scenes, sheet: Path, cfg: dict, redo: list[int] | None = None,
         rel_log = log_path.relative_to(ROOT)
     except ValueError:
         rel_log = log_path
+    # Detailed, consistent AI-image prompts (project style + recurring-subject
+    # bible) for any scene that will be generated. Falls back to the plain prompt.
+    gen_prompts, gen_style = _craft_image_prompts(todo, sheet, cfg,
+                                                  on_progress=on_progress, log=log)
     try:
         fresh = stock.fetch_all(
             todo, p["stockcache"], cfg.get("pexels_key"), cfg.get("pixabay_key"),
             picks=picks, log=log, cfg=cfg, already=keep,
-            on_progress=on_progress, should_cancel=should_cancel)
+            on_progress=on_progress, should_cancel=should_cancel,
+            gen_prompts=gen_prompts, gen_style=gen_style)
     finally:
         if _logf is not None:
             _logf.write(f"\nSaved {rel_log}\n")
@@ -1188,6 +1232,11 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
     generated: list[int] = []
     failed: list[tuple] = []
 
+    # Detailed, consistent prompts (project style + recurring-subject bible) for
+    # the scenes being generated; falls back to the plain prompt per scene.
+    crafted, gen_style = _craft_image_prompts([by_n[n] for n in want], sheet, cfg,
+                                              log=log, force=True)
+
     # Generate CONCURRENTLY — up to generate_workers images in flight at once,
     # instead of one-at-a-time. Each is an independent imagen.image() call, so the
     # Vertex region pool spreads them over separate regional backends / quota
@@ -1209,7 +1258,8 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
         if _stopped.is_set() or (should_cancel and should_cancel()):
             return ("cancel", n, None, None)
         s = by_n[n]
-        prompt = imagen.prompt_for(s.query or getattr(s, "narration", "") or "", cfg)
+        prompt = crafted.get(n) or imagen.prompt_for(
+            s.query or getattr(s, "narration", "") or "", cfg, gen_style)
         dest = p["stockcache"] / _gen_asset_name(p["id"], n, "gen", "png")
         det: dict = {}                                # filled with the exact model/region used
         try:

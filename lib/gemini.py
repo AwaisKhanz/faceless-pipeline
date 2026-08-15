@@ -513,6 +513,134 @@ def video_prompts(scenes: list[dict], key: str,
     return out
 
 
+# ─────────────────────────────────── AI still-image prompts (quality + consistency)
+
+_IMAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scenes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "scene": {"type": "integer"},
+                    "prompt": {"type": "string"},
+                },
+                "required": ["scene", "prompt"],
+            },
+        }
+    },
+    "required": ["scenes"],
+}
+
+_BIBLE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subjects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["name", "description"],
+            },
+        }
+    },
+    "required": ["subjects"],
+}
+
+_BIBLE_SYSTEM = (
+    "You are preparing a set of PHOTOREALISTIC images for one short video. Read ALL "
+    "the narration lines, then list the people, objects and places that RECUR across "
+    "several scenes and must look the SAME every time (e.g. a specific older woman, "
+    "the narrator's phone, a kitchen, a delivery van). For each, give ONE short, "
+    "concrete visual description to reuse verbatim — fixed details like age, build, "
+    "hair, clothing colour, material, model, colour, era. Skip anything that appears "
+    "only once. Keep each description under 20 words. Never name or depict a real, "
+    "identifiable person — describe a generic stand-in instead.")
+
+_IMAGE_SYSTEM = (
+    "You write prompts for an AI IMAGE model that makes ONE photorealistic still per "
+    "scene for a short video. For each numbered scene write ONE vivid prompt of "
+    "25-45 words describing a single real photograph a camera could take. Weave in "
+    "naturally: the concrete SUBJECT with a couple of specific details; the SETTING; "
+    "the COMPOSITION and shot size (close-up, wide); the LIGHTING; and the MOOD. "
+    "CONSISTENCY: a SHARED STYLE and a CONSISTENCY BIBLE may be given below — apply "
+    "the shared style (palette, lighting, mood) to EVERY prompt, and whenever a "
+    "scene involves something in the bible, describe it with the bible's exact "
+    "wording so it looks identical across scenes. "
+    "REALISM: photoreal documentary photography, natural light, realistic materials "
+    "and skin with natural imperfections — avoid a glossy, over-smoothed 'AI' look. "
+    "NO on-screen text, captions, watermarks, logos or collages; one clear subject; "
+    "present tense; describe only what is visible. Never depict a real, identifiable "
+    "person — use a generic stand-in.")
+
+
+def _image_bible(scenes: list[dict], key: str, model: str) -> str:
+    """A compact recurring-subjects 'bible' the per-scene prompts reuse, so a
+    person/object/place is described the same way in every scene. '' on failure."""
+    lines = "\n".join(
+        normalise(s.get("narration", "") or s.get("query", "") or "")[:200]
+        for s in scenes)
+    if not lines.strip():
+        return ""
+    try:
+        data = call("All narration lines for one video:\n\n" + lines,
+                    _BIBLE_SCHEMA, key, model, system=_BIBLE_SYSTEM, temperature=0.2)
+    except Exception:
+        return ""
+    out = []
+    for it in (data.get("subjects") or []):
+        nm = (it.get("name") or "").strip()
+        de = (it.get("description") or "").strip()
+        if nm and de:
+            out.append(f"- {nm}: {de}")
+    return "\n".join(out[:24])
+
+
+def image_prompts(scenes: list[dict], key: str, model: str = DEFAULT_MODEL,
+                  style: str = "") -> dict[int, str]:
+    """One detailed photoreal image prompt per scene, batched, sharing the project
+    `style` and a recurring-subject bible so the whole set stays consistent.
+
+    `scenes` is [{"n","query","narration"}, ...]; returns {n: prompt}. Best effort
+    — any failure returns {} and the caller falls back to the plain prompt."""
+    if not scenes:
+        return {}
+    bible = _image_bible(scenes, key, model)
+    ctx = ""
+    if (style or "").strip():
+        ctx += f"\n\nSHARED STYLE (apply to every image): {style.strip()}"
+    if bible:
+        ctx += f"\n\nCONSISTENCY BIBLE (reuse these exact descriptions):\n{bible}"
+    out: dict[int, str] = {}
+    CH = 18
+    for i in range(0, len(scenes), CH):
+        chunk = scenes[i:i + CH]
+        lines = "\n".join(
+            f"{s['n']}. line: {normalise(s.get('narration', ''))[:200]}"
+            f"   (subject: {s.get('query', '')})"
+            for s in chunk)
+        prompt = ("Write one photorealistic image prompt for each numbered scene "
+                  "below." + ctx + "\n\nScenes:\n" + lines)
+        try:
+            data = call(prompt, _IMAGE_SCHEMA, key, model,
+                        system=_IMAGE_SYSTEM, temperature=0.5)
+        except Exception:
+            continue
+        for item in data.get("scenes", []):
+            try:
+                n = int(item["scene"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            pr = (item.get("prompt") or "").strip()
+            if pr:
+                out[n] = pr
+    return out
+
+
 # ------------------------------------------------------------- text handling
 
 SMART = {"’": "'", "‘": "'", "“": '"', "”": '"',

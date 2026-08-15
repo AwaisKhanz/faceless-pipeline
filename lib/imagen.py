@@ -191,7 +191,7 @@ def available(cfg: dict | None) -> bool:
     return any(engine_ready(e, cfg) for e in ENGINE_CHAIN)
 
 
-def prompt_for(query: str, cfg: dict | None = None) -> str:
+def prompt_for(query: str, cfg: dict | None = None, style: str = "") -> str:
     """Turn a scene's search phrase into a generation prompt.
 
     Default is a strong PHOTOREAL look (real photograph, not an illustration) so
@@ -200,17 +200,30 @@ def prompt_for(query: str, cfg: dict | None = None) -> str:
         charge of the look);
       • the scene subject itself asking for a non-photo style (e.g. 'watercolour
         illustration of…') — then realism is NOT forced, and the request stands.
+
+    `style` is the project's shared visual style (palette, lighting, mood) parsed
+    from the sheet. Folding the SAME style into every scene's prompt is the
+    cheapest consistency lever there is — it makes a video's generated images
+    read as one set (and less generically "AI") instead of unrelated pictures.
+    Empty `style` reproduces the old prompt exactly.
     """
     cfg = cfg or {}
     subject = (query or "").strip().rstrip(".")
+    style = (style or "").strip()
     override = (cfg.get("generate_style") or "").strip()
+
+    def _join(*parts) -> str:
+        return ". ".join(p.strip().rstrip(". ") for p in parts if p and p.strip())
+
     if override:                                   # user took control of the look
-        return f"{subject}. {override}." if subject else override
+        return (_join(subject, override) + ".") if subject else override
     if _NONPHOTO.search(subject):                  # scene deliberately non-photo
-        return f"{subject}. High quality, detailed." if subject else "A detailed image."
+        return (_join(subject, style, "High quality, detailed") + ".") if subject \
+            else "A detailed image."
+    look = _join(PHOTO_STYLE, PHOTO_NEG)
     if not subject:
-        return f"{PHOTO_STYLE}. {PHOTO_NEG}"
-    return f"A real photograph of {subject}. {PHOTO_STYLE}. {PHOTO_NEG}"
+        return _join(style, look) + "."
+    return _join(f"A real photograph of {subject}", style, look) + "."
 
 
 def _endpoint(project: str, location: str, model: str) -> str:

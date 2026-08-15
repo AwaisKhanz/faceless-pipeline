@@ -56,6 +56,26 @@ HERO_HINTS = ("title card", "Arthur", "piano teacher", "key beat",
               "core line", "sign-off", "disclaimer", "subscribe",
               "share beat", "next-episode", "motif")
 
+# The per-project look, written once in the header: "**Visual style:** warm …".
+VISUAL_STYLE_RE = re.compile(r"^\*\*Visual style:\*\*\s*(.+?)\s*$", re.I)
+
+
+def visual_style(path) -> str:
+    """The project's '**Visual style:** …' line — a short description of the
+    palette, lighting and mood shared by every scene. It sits in the header,
+    above scene S1. Returns '' if the sheet has none (older or hand-written)."""
+    try:
+        for raw in Path(path).read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            m = VISUAL_STYLE_RE.match(line)
+            if m:
+                return m.group(1).strip()
+            if SCENE_RE.match(line):           # reached the scenes — no style line
+                break
+    except Exception:
+        pass
+    return ""
+
 
 def parse_main_script(path: Path) -> list[Scene]:
     """Read the main script -> ordered list of Scenes (structure language)."""
