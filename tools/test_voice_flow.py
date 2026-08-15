@@ -140,7 +140,18 @@ def main() -> int:
     counted2 = sum(1 for m in lines2 if _VOICE_SCENE_LINE.match(m.lstrip()))
     check("a fully-cached re-run still reports N (bar isn't stuck)", counted2, len(scenes))
 
-    print("\n  fallback: bad alignment -> each member voiced separately, same paths:")
+    print("\n  proportional split by text length (used when no aligner):")
+    ps = VF._proportional_boundaries([0, 1, 2, 3], scenes, 30.0)
+    check("one span per member", len(ps or []), 4)
+    check("spans are contiguous and cover the whole take",
+          ps[0][0] == 0.0 and ps[-1][1] == 30.0
+          and all(ps[i][1] == ps[i + 1][0] for i in range(len(ps) - 1)), True)
+    check("a longer fragment gets a longer slice",
+          ps[1][1] - ps[1][0] > ps[3][1] - ps[3][0], True)   # S2 (longer) > S4 (short)
+    check("zero-duration take -> None (caller falls back)",
+          VF._proportional_boundaries([0, 1], scenes, 0.0), None)
+
+    print("\n  alignment mismatch still JOINS — splits the one take proportionally:")
     cache2 = pathlib.Path(tempfile.mkdtemp())
     calls2 = {"raw": 0, "slice": 0}
 
@@ -161,14 +172,14 @@ def main() -> int:
     out2 = VF.synth(scenes, "en", cache2, "voiceA", "chatterbox",
                     raw_synth=raw2, align_words=bad_align,
                     duration_of=duration_of, slice_audio=slice2, log=lambda *_: None)
-    check("still one clip per scene on fallback", len(out2), 5)
-    check("fallback paths match expected", [p.name for p in out2],
+    check("one clip per scene", len(out2), 5)
+    check("paths match expected", [p.name for p in out2],
           [p.name for p in VF.expected_paths(scenes, "en", cache2, "voiceA", "chatterbox")])
-    check("no slicing happened (per-scene fallback)", calls2["slice"], 0)
-    # 1 joined attempt (discarded on mismatch) + 4 members + 1 single scene.
-    check("mismatch: joined attempt then per-member (6 raw calls)", calls2["raw"], 6)
+    check("the 4-scene sentence is still sliced (proportional)", calls2["slice"], 4)
+    # 1 joined take + 1 single scene — NOT a synth per fragment.
+    check("only 2 raw synths (joined take + single scene)", calls2["raw"], 2)
 
-    print("\n  no real alignment (can_join=False): never joins, no wasted synth:")
+    print("\n  no local aligner (can_join=False): still joins via proportional split:")
     cache3 = pathlib.Path(tempfile.mkdtemp())
     calls3 = {"raw": 0, "slice": 0}
 
@@ -188,8 +199,8 @@ def main() -> int:
                     duration_of=duration_of, slice_audio=slice3,
                     can_join=False, log=lambda *_: None)
     check("one clip per scene", len(out3), 5)
-    check("no slicing", calls3["slice"], 0)
-    check("no joined attempt — exactly one synth per scene (5)", calls3["raw"], 5)
+    check("sentence sliced without an aligner (proportional)", calls3["slice"], 4)
+    check("one joined take + one single scene (2 synths)", calls3["raw"], 2)
 
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0

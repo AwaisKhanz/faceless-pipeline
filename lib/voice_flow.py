@@ -19,9 +19,11 @@ Design (deliberately engine-agnostic and cache-consistent):
     group text + the member's position + the voice + the engine. `synth()` and
     `expected_paths()` compute the grouping the same way from the same scenes, so
     the status/render lookups always match what was written.
-  * It is SAFE: if alignment can't run, or the word counts don't line up, that
-    group silently falls back to per-scene synthesis (written to the same fl_
-    paths), so the audio is never worse than today — only, at best, smoother.
+  * It is SAFE: a sentence is always spoken as ONE take. If forced alignment
+    can't run (no local model — the common cloud-voice case), the take is split
+    proportionally by text length instead; only if the take itself fails to
+    synthesise does a group fall back to per-scene clips. Either way the audio is
+    never worse than before — usually much smoother.
 """
 from __future__ import annotations
 
@@ -131,6 +133,29 @@ def _boundaries(group: list[int], scenes, words: list[dict], dur: float):
     return spans
 
 
+def _proportional_boundaries(group, scenes, dur: float):
+    """Cut the joined take by each member's share of the sentence, measured in
+    characters (a decent proxy for how long a fragment takes to say).
+
+    Used when real word alignment isn't available (e.g. a cloud voice with no
+    local aligner installed). A single natural take split a little imprecisely is
+    far smoother than voicing each fragment on its own — the pieces play back to
+    back, so the sentence's prosody carries across the cuts instead of resetting.
+    """
+    if dur <= 0:
+        return None
+    weights = [max(1, len(_clean(scenes[j].narration))) for j in group]
+    total = float(sum(weights)) or 1.0
+    spans, acc = [], 0.0
+    for k, w in enumerate(weights):
+        st = acc
+        acc = dur if k == len(weights) - 1 else acc + dur * (w / total)
+        spans.append((st, acc))
+    if any(en - st < 0.02 for st, en in spans):
+        return None                        # too tiny to cut safely → caller falls back
+    return spans
+
+
 def synth(scenes, lang: str, cache: Path, voice: str, engine: str,
           raw_synth, align_words, duration_of, slice_audio,
           can_join: bool = True, log=print) -> list[Path]:
@@ -142,9 +167,10 @@ def synth(scenes, lang: str, cache: Path, voice: str, engine: str,
       duration_of(wav) -> float
       slice_audio(src, start, end, out) -> Path
 
-    `can_join` is False when REAL forced alignment isn't available (only a
-    proportional estimate would be) — then every group is voiced per scene into
-    its fl_ path, never cut, so a guessed boundary can't clip a word.
+    `can_join` selects the CUT method, not whether to join: True uses real forced
+    alignment to place cuts in the silences between words; False (no local
+    aligner) splits the one take proportionally by text length. Either way the
+    sentence is spoken once, so its intonation never resets mid-sentence.
     """
     cache = Path(cache)
     cache.mkdir(parents=True, exist_ok=True)
@@ -174,19 +200,28 @@ def synth(scenes, lang: str, cache: Path, voice: str, engine: str,
             _done(g[0], True)
             continue
 
-        # Speak the whole sentence once, then try to cut it at the word joins.
-        # Only attempt this when real alignment is available (can_join).
-        spans = grp_wav = None
-        if can_join:
-            try:
-                grp_wav = raw_synth(joined)
-                words = align_words(grp_wav, joined)
-                spans = _boundaries(g, scenes, words, duration_of(grp_wav))
-            except Exception as e:                        # noqa: BLE001
-                log(f"  flow: couldn't join S{scenes[g[0]].n}-S{scenes[g[-1]].n} "
-                    f"({e}); voicing them separately")
+        # Speak the WHOLE sentence in one take (unbroken prosody), then cut it
+        # back into per-scene pieces. Prefer real word alignment for the cut
+        # points; when that isn't available (a cloud voice with no local aligner),
+        # split the SAME take proportionally by text length — still one natural
+        # take, far smoother than voicing each fragment on its own.
+        grp_wav = spans = None
+        try:
+            grp_wav = raw_synth(joined)
+            dur = duration_of(grp_wav)
+            if can_join:
+                try:
+                    spans = _boundaries(g, scenes, align_words(grp_wav, joined), dur)
+                except Exception as e:                    # noqa: BLE001
+                    log(f"  flow: alignment failed for S{scenes[g[0]].n}-"
+                        f"S{scenes[g[-1]].n} ({e}); splitting proportionally")
+            if spans is None:                             # no aligner, or it declined
+                spans = _proportional_boundaries(g, scenes, dur)
+        except Exception as e:                            # noqa: BLE001
+            log(f"  flow: couldn't voice S{scenes[g[0]].n}-S{scenes[g[-1]].n} as "
+                f"one take ({e}); voicing them separately")
 
-        if spans is not None:
+        if grp_wav is not None and spans is not None:
             for (st, en), d in zip(spans, dests):
                 slice_audio(grp_wav, st, en, d)
             joined_groups += 1
@@ -196,7 +231,7 @@ def synth(scenes, lang: str, cache: Path, voice: str, engine: str,
             for j in g:
                 _done(j, True)
         else:
-            # Fallback: voice each member on its own, into the same fl_ paths.
+            # Last resort — the joined take itself failed: voice each member.
             for k, j in enumerate(g):
                 _place(raw_synth(_clean(scenes[j].narration)), dests[k])
                 _done(j, True)

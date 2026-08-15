@@ -269,8 +269,9 @@ def reference_for(lang: str, override: str | None = None) -> Path:
 def _flow_mode(cfg: dict) -> bool:
     """Sentence-flow ON: speak a whole sentence as one take and split it back into
     per-scene clips, so a sentence spread over scenes keeps one intonation.
-    Opt-in via config voice_flow; off by default."""
-    return str(cfg.get("voice_flow", "off")).strip().lower() in (
+    On by default (a sentence split across scenes should sound like one sentence);
+    set voice_flow to "off" for the old one-clip-per-scene behaviour."""
+    return str(cfg.get("voice_flow", "sentence")).strip().lower() in (
         "on", "sentence", "join", "flow", "auto", "true", "1")
 
 

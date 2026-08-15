@@ -199,8 +199,8 @@ _FIELDS: list[dict] = [
     {"key": "google_tts_locale", "section": "voice", "type": "dict",
      "show_if": {"voice_engine": ["chirp"]}},
     {"key": "voice_flow", "section": "voice", "type": "select",
-     "options": _opt(("off", "off — one clip per scene"),
-                     ("sentence", "sentence — join a sentence, split the audio"))},
+     "options": _opt(("sentence", "sentence — speak it whole, then split (smooth)"),
+                     ("off", "off — one clip per scene"))},
 
     # ── captions & audio ────────────────────────────────────────────────────
     {"key": "align", "section": "audio", "type": "select",
