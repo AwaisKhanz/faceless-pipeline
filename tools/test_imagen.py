@@ -163,6 +163,7 @@ def main() -> int:
         except im._RateLimited as rl:
             check("whole vertex pool busy → _RateLimited (waits, doesn't fail)", True)
             check("carries a retry_after so the scene waits", rl.retry_after is not None)
+            check("flagged pool_resting (a cooldown, not a fresh 429)", rl.pool_resting, True)
         except im.GenError:
             check("exhausted pool must WAIT, not GenError", False)
         # a fully-RESTING pool also waits (raises _RateLimited), never fails
@@ -196,6 +197,36 @@ def main() -> int:
     finally:
         im._vertex_one = saved_vone
         im._vertex_reset()
+
+    print("\n  shared pace: a pool cooldown must NOT widen it; a real 429 must:")
+    saved_raw = im._ENGINE_RAW["vertex"]
+    cfg_t = {"vertex_project": "p", "generate_workers": 1,
+             "generate_retries": 1, "generate_min_interval": 0}
+    try:
+        # a) pool on cooldown → waited out, gap stays at the floor (0 here)
+        im._THROTTLE.reset()
+        im._ENGINE_RAW["vertex"] = lambda *a, **k: (_ for _ in ()).throw(
+            im._RateLimited(retry_after=0.01, pool_resting=True))
+        try:
+            im.image("x", cfg_t, Path(tempfile.mkdtemp()) / "t1.png")
+        except im.GenError:
+            pass
+        check("a pool cooldown does NOT widen the shared gap", im._THROTTLE.gap, 0.0)
+        # b) a genuine 429 → the shared gap grows so later scenes ease off
+        im._THROTTLE.reset()
+        im._ENGINE_RAW["vertex"] = lambda *a, **k: (_ for _ in ()).throw(
+            im._RateLimited(retry_after=5, pool_resting=False))
+        try:
+            im.image("x", cfg_t, Path(tempfile.mkdtemp()) / "t2.png")
+        except im.GenError:
+            pass
+        check("a real 429 DOES widen the shared gap", im._THROTTLE.gap >= 5.0, True)
+        # reset_throttle() relaxes it again (called at the start of each batch)
+        im.reset_throttle()
+        check("reset_throttle relaxes the gap back to the floor", im._THROTTLE.gap, 0.0)
+    finally:
+        im._ENGINE_RAW["vertex"] = saved_raw
+        im._THROTTLE.reset()
 
     print("\n  Stop is honoured promptly:")
     im._THROTTLE.reset()

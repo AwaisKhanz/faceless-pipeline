@@ -115,9 +115,14 @@ class _RateLimited(Exception):
     cooldown when it gave one, else None so the caller backs off exponentially.
     Handled by the shared throttle in image(); never leaks to callers."""
 
-    def __init__(self, retry_after: float | None = None):
+    def __init__(self, retry_after: float | None = None, pool_resting: bool = False):
         super().__init__("rate limited")
         self.retry_after = retry_after
+        # True when the whole Vertex pool is momentarily on cooldown (every combo
+        # resting), as opposed to THIS call getting a fresh 429. A cooldown must be
+        # waited out, but it must NOT widen the shared pace — it isn't a new limit,
+        # and every combo self-recovers — otherwise a brief rest balloons the gap.
+        self.pool_resting = pool_resting
 
 
 def _interruptible_sleep(seconds: float, should_cancel=None) -> None:
@@ -610,8 +615,9 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
     if not usable:                                     # whole pool resting → WAIT, don't fail
         # Raise a rate-limit (not GenError) so image()'s backoff waits for the
         # soonest combo to free up and RETRIES, instead of killing the scene.
+        # pool_resting: it's a cooldown, so wait it out but don't widen the pace.
         wait = min(45.0, max(3.0, _vertex_soonest(combos)))
-        raise _RateLimited(retry_after=wait)
+        raise _RateLimited(retry_after=wait, pool_resting=True)
     for model, region in usable:
         try:
             _vertex_one(project, region, model, sa_path, prompt, cfg, dest)
@@ -628,10 +634,18 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
             continue
         # a real GenError (bad prompt / safety) is combo-independent: re-raise
     # tried every ready combo and they all just went busy → wait briefly and retry
-    raise _RateLimited(retry_after=_VERTEX_BUSY_MIN * 60.0)
+    raise _RateLimited(retry_after=_VERTEX_BUSY_MIN * 60.0, pool_resting=True)
 
 
 _ENGINE_RAW = {"vertex": _vertex_raw}
+
+
+def reset_throttle() -> None:
+    """Relax the shared generation pace back to its floor. Called at the START of
+    each generation batch so a fresh run — e.g. regenerating ONE picture — never
+    inherits a widened gap left behind by an earlier, unrelated run. Within a run
+    the gap still adapts to real 429s exactly as before."""
+    _THROTTLE.reset()
 
 
 def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None,
@@ -708,11 +722,21 @@ def image(prompt: str, cfg: dict, dest: Path, log=None, should_cancel=None,
                     if attempt < retries:
                         attempt += 1
                         wait = rl.retry_after or min(_CAP, 2.0 ** attempt)
-                        _THROTTLE.hit_limit(wait)   # widen the gap for later scenes too
-                        _note(f"· {eng} busy — easing to {_THROTTLE.gap:.0f}s "
-                              f"between images; waiting {wait:.0f}s "
-                              f"(retry {attempt}/{retries})")
-                        continue                    # pace() serves the cooldown
+                        if rl.pool_resting:
+                            # Pool is on cooldown — wait it out, but DON'T widen the
+                            # shared pace (it's not a new limit; every combo
+                            # self-recovers). Sleep explicitly since pace() only
+                            # honours the current gap, not this cooldown.
+                            _note(f"· {eng} pool cooling down — waiting {wait:.0f}s "
+                                  f"(retry {attempt}/{retries})")
+                            _interruptible_sleep(
+                                wait, should_cancel if callable(should_cancel) else None)
+                        else:
+                            _THROTTLE.hit_limit(wait)   # widen the gap for later scenes too
+                            _note(f"· {eng} busy — easing to {_THROTTLE.gap:.0f}s "
+                                  f"between images; waiting {wait:.0f}s "
+                                  f"(retry {attempt}/{retries})")
+                        continue                    # pace()/sleep served the cooldown
                     errors.append(f"{eng}: still rate-limited after {retries} tries")
                     _note(f"· {eng} still busy — searching instead")
                     break

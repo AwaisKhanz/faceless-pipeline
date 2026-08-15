@@ -1213,6 +1213,7 @@ def generate_scenes(scenes, sheet: Path, cfg: dict, which: list[int],
         raise SystemExit(
             "Image generation needs \"vertex_project\" in config.json — the same "
             "Vertex setup the LLM uses. Add it, then try again.")
+    imagen.reset_throttle()                      # fresh pace — don't inherit a stale gap
     cfg = _cfg_with_aspect(sheet, cfg)           # 9:16 for a Short project
 
     p = paths_for(sheet, "en")

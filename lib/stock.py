@@ -719,6 +719,8 @@ def fetch_all(scenes, cache: Path, pexels_key, pixabay_key,
     # manual Generate button). Search-only runs keep using source_workers.
     if gen_mode != "off":
         workers = max(workers, int(cfg.get("generate_workers") or 1))
+        if _gen is not None:                # fresh pace for this batch (no stale gap)
+            _gen.reset_throttle()
     _state_lock = threading.Lock()
     _log_lock = threading.Lock()
     _progress = [0]
