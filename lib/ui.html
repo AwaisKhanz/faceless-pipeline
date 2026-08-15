@@ -1233,26 +1233,15 @@ async function viewProject(id) {
   const busyTitle = 'This project has a job running — watch it in Activity.';
   const complete = o.text === 'complete';
 
-  // Channel picker — move this project to a channel (or a new one) in place.
-  const channelSel = el('select', { style: 'width:auto;min-width:150px' },
-    el('option', { value: '', selected: !p.channel }, 'No channel'),
-    (S.channels || []).map(c => el('option', { value: c, selected: c === p.channel }, c)),
-    el('option', { value: '__new__' }, '＋ New channel…'));
-  channelSel.onchange = async () => {
-    let val = channelSel.value;
-    if (val === '__new__') {
-      channelSel.value = p.channel || '';
-      val = await askText({
-        title: 'New channel', label: `Move “${p.id}” into a new channel.`,
-        placeholder: 'e.g. Superfruits', ok: 'Create & move'
-      });
-      if (!val) return;
-    }
-    const r = await api('/api/project_channel', { id: p.id, channel: val });
-    if (r.error) { channelSel.value = p.channel || ''; return toast(r.error, true); }
-    p.channel = r.channel; S.channels = r.channels;
-    toast(r.channel ? `Moved to “${r.channel}”.` : 'Removed from its channel.');
-  };
+  // A project belongs to ONE channel (and its language) — decided when it was
+  // created — so the settings panel SHOWS the channel, read-only, rather than
+  // offering to move it. Clicking it opens the channel.
+  const channelField = p.channel
+    ? el('span', {
+        style: 'cursor:pointer;color:var(--accent)',
+        onclick: () => go('/channel/' + encodeURIComponent(p.channel))
+      }, p.channel)
+    : el('span', { class: 'sub' }, 'No channel');
 
   // Controls that live in the "Project settings" section below (defined up here
   // so the clean header carries only the icon + title).
@@ -1449,40 +1438,16 @@ async function viewProject(id) {
   v.append(el('div', { class: 'card', style: 'margin-bottom:22px' },
     el('div', { class: 'row', style: 'align-items:flex-end;gap:20px;flex-wrap:wrap' },
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Format'), formatSel),
-      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Channel'), channelSel),
+      el('div', { style: 'padding-bottom:8px' },
+        el('div', { class: 'sub', style: 'margin-bottom:6px' }, 'Channel'), channelField),
       el('div', { style: 'padding-bottom:8px' }, onYouTube),
       el('div', { style: 'flex:1' }),
       el('span', { class: 'pill ' + o.cls, style: 'align-self:center' }, o.text),
       el('button', { class: 'btn danger', onclick: () => askDelete(p.id) }, 'Delete…'))));
 
-  // add a language --------------------------------------------------------
-  // Paste a script for a language this project does not have yet. It is
-  // segmented onto the existing scenes and reuses the visuals already sourced —
-  // no re-sourcing, no translation.
-  const missing = LANG_ORDER.filter(c => !codes.includes(c));
-  if (missing.length) {
-    v.append(el('div', { class: 'sec mt' }, el('h2', {}, 'Add a language'),
-      el('span', { class: 'note' }, 'paste its script — reuses these same pictures')));
-    const pick = el('select', { style: 'width:auto;min-width:130px' },
-      missing.map(c => el('option', { value: c }, LANG_NAMES[c] || c)));
-    const addScript = el('textarea', {
-      rows: 6, placeholder: 'Paste the script for this language…',
-      style: MONO + ';margin-top:10px' });
-    v.append(el('div', { class: 'card' },
-      el('div', { class: 'row' },
-        el('span', { class: 'sub' }, 'Language'), pick,
-        el('div', { style: 'flex:1' }),
-        el('button', {
-          class: 'btn primary', onclick: async e => {
-            if (!addScript.value.trim()) return toast('Paste the script first.', true);
-            e.target.disabled = true;
-            const r = await api('/api/add_language',
-              { id: p.id, lang: pick.value, script: addScript.value });
-            if (r.started) go('/activity'); else e.target.disabled = false;
-          }
-        }, 'Generate this language')),
-      addScript));
-  }
+  // A project is single-language now — it inherits its channel's one language,
+  // chosen when the video was added. The old "add another language" panel is
+  // gone on purpose so a project never becomes a multi-language bundle.
 
   // publish ---------------------------------------------------------------
   // Title, description and tags for a finished video, per language. Generated
