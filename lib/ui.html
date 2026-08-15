@@ -451,9 +451,9 @@ td{padding:12px;border-top:1px solid var(--line);vertical-align:middle}
     <div class="brand">
       <b>Faceless Studio</b>
     </div>
-    <button class="newbtn" data-r="/new" type="button">
+    <button class="newbtn" id="newChannelBtn" type="button">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      New video
+      New channel
     </button>
     <div class="seclabel">Workspace</div>
     <a class="nav" data-r="/">
@@ -639,6 +639,52 @@ function askConfirm({ title, message, ok = 'OK', danger = false } = {}) {
   });
 }
 
+// Create a channel: its name and its ONE content language. Every video added to
+// the channel is written in that language, so the add-video form never asks
+// again. Resolves {name, lang} or null on cancel.
+function askNewChannel() {
+  return new Promise(resolve => {
+    let settled = false;
+    const done = v => { if (settled) return; settled = true; modal.remove(); resolve(v); };
+    const input = el('input', { type: 'text', placeholder: 'e.g. Superfruits', style: 'width:100%;margin-top:6px' });
+    const langSel = el('select', { style: 'width:100%;margin-top:6px' },
+      LANG_ORDER.map(c => el('option', { value: c }, LANG_NAMES[c])));
+    const submit = () => {
+      const name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      done({ name, lang: langSel.value });
+    };
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') done(null);
+    });
+    const modal = el('div', { class: 'modal', onclick: e => { if (e.target === modal) done(null); } },
+      el('div', { class: 'box', style: 'max-width:430px' },
+        el('h3', {}, 'New channel'),
+        el('div', { class: 'sub', style: 'margin-top:6px' },
+          'Every video in this channel is written in one language — choose it once here.'),
+        el('div', { class: 'sub', style: 'margin-top:14px' }, 'Channel name'),
+        input,
+        el('div', { class: 'sub', style: 'margin-top:14px' }, 'Language'),
+        langSel,
+        el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end;gap:8px' },
+          el('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'),
+          el('button', { class: 'btn primary', onclick: submit }, 'Create channel'))));
+    document.body.append(modal);
+    setTimeout(() => input.focus(), 30);
+  });
+}
+
+// Create a channel, then drop straight into it so the next step (Add video) is
+// right there. Shared by the dashboard button and the sidebar button.
+async function newChannelFlow() {
+  const r0 = await askNewChannel();
+  if (!r0) return;
+  const r = await api('/api/channels', { action: 'create', name: r0.name, lang: r0.lang });
+  if (r.error) return toast(r.error, true);
+  go('/channel/' + encodeURIComponent(r0.name));
+}
+
 // Edit a channel's profile: avatar image, connected email, and description.
 // Resolves true if anything was saved (so the caller repaints), false on cancel.
 // Nothing here deletes a channel or a project — it only writes profile fields.
@@ -677,6 +723,11 @@ function channelEditor(name, meta = {}) {
       style: 'width:100%;margin-top:6px;min-height:88px;font-family:var(--ui)'
     });
     desc.value = meta.description || '';
+    // The channel's single content language — every video added here uses it.
+    const curLang = (meta.lang || '').toLowerCase();
+    const langSel = el('select', { style: 'width:100%;margin-top:6px' },
+      el('option', { value: '', selected: !curLang }, '— not set —'),
+      LANG_ORDER.map(c => el('option', { value: c, selected: c === curLang }, LANG_NAMES[c])));
 
     // ── per-language channel voice ──────────────────────────────────────────
     // Every project in this channel narrates with the voice picked here (it
@@ -748,7 +799,8 @@ function channelEditor(name, meta = {}) {
           if (r.error) { save.disabled = false; return toast(r.error, true); }
         }
         const r2 = await api('/api/channels', {
-          action: 'meta', name, email: email.value.trim(), description: desc.value.trim()
+          action: 'meta', name, email: email.value.trim(),
+          description: desc.value.trim(), lang: langSel.value
         });
         if (r2.error) { save.disabled = false; return toast(r2.error, true); }
         // Persist the per-language channel voice ("" clears it → default).
@@ -772,6 +824,8 @@ function channelEditor(name, meta = {}) {
         email,
         el('label', { class: 'sub', style: 'display:block;margin-top:14px' }, 'Description'),
         desc,
+        el('label', { class: 'sub', style: 'display:block;margin-top:16px' }, 'Language'),
+        langSel,
         el('label', { class: 'sub', style: 'display:block;margin-top:16px' }, 'Channel voice'),
         voiceBox,
         el('div', { class: 'row', style: 'margin-top:18px;justify-content:flex-end;gap:8px' },
@@ -991,33 +1045,22 @@ async function viewDashboard() {
   S.channels = d.channels || [];
   S.channelMeta = d.channel_meta || {};
 
-  const newChannel = async () => {
-    const name = await askText({
-      title: 'New channel', label: 'Group projects under this channel.',
-      placeholder: 'e.g. Superfruits', ok: 'Create channel'
-    });
-    if (!name) return;
-    const r = await api('/api/channels', { action: 'create', name });
-    if (r.error) return toast(r.error, true);
-    viewDashboard();
-  };
-
   v.append(el('div', { class: 'head' },
     el('div', { class: 'grow' }, el('h1', {}, 'Dashboard'),
       el('p', {}, `${S.projects.length} project${S.projects.length === 1 ? '' : 's'} · `
         + `${scenes} scenes · ${built} video${built === 1 ? '' : 's'} rendered`)),
-    el('button', { class: 'btn', onclick: newChannel }, '+ New channel'),
-    el('button', { class: 'btn', onclick: () => go('/new') }, '+ New from script')));
+    el('button', { class: 'btn primary', onclick: newChannelFlow }, '+ New channel')));
 
   if (!d.has_keys) v.append(el('div', { class: 'card', style: 'border-color:var(--warn);margin-bottom:14px' },
     el('b', {}, 'No stock API keys yet. '), 'Sourcing visuals will not work — add them in Settings.'));
 
-  if (!S.projects.length) {
-    v.append(el('div', { class: 'empty card' }, el('b', {}, 'No projects yet'),
-      'Put a main script in sheets/, or paste a script and let Gemini split it.',
+  // First run: no channels at all. Guide the channel-first flow — make a channel,
+  // then add videos to it.
+  if (!S.channels.length && !S.projects.length) {
+    v.append(el('div', { class: 'empty card' }, el('b', {}, 'No channels yet'),
+      'Create a channel — pick its language once — then add videos to it.',
       el('div', { style: 'margin-top:14px' },
-        el('button', { class: 'btn primary', onclick: () => go('/new') },
-          'Start from a script'))));
+        el('button', { class: 'btn primary', onclick: newChannelFlow }, 'Create a channel'))));
     return;
   }
 
@@ -1047,7 +1090,8 @@ async function viewDashboard() {
         el('div', { style: 'min-width:0' },
           el('div', { class: 'chname' }, name),
           el('div', { class: 'sub' },
-            `${c.total} project${c.total === 1 ? '' : 's'}`
+            (m.lang ? (LANG_NAMES[m.lang] || m.lang.toUpperCase()) + ' · ' : '')
+            + `${c.total} project${c.total === 1 ? '' : 's'}`
             + (c.total ? ` · ${c.complete} complete` : '')),
           m.email ? el('div', { class: 'chmeta mono' }, m.email) : null)),
       el('div', { class: 'chright' },
@@ -1126,18 +1170,23 @@ async function viewChannel(name) {
   const back = el('button', { class: 'btn sm backlink', onclick: () => go('/') },
     '‹ All channels');
 
-  // Hero: avatar + name + meta on the left; management actions on the right.
+  // Hero: avatar + name + meta on the left; Add video + management on the right.
+  // "Add video" lives HERE and nowhere else — a video is always added to the
+  // channel you're looking at, so its channel and language are already decided.
   const actions = loose ? null : el('div', { class: 'row', style: 'gap:6px;flex:none' },
+    el('button', { class: 'btn sm primary', onclick: () => go('/channel/' + encodeURIComponent(name) + '/new') }, '＋ Add video'),
     el('button', { class: 'btn sm', onclick: () => editChannel(name, () => viewChannel(name)) }, 'Edit'),
     el('button', { class: 'btn sm', onclick: () => renameChannel(name, nm => nm ? go('/channel/' + encodeURIComponent(nm)) : go('/')) }, 'Rename'),
     el('button', { class: 'btn sm danger', onclick: () => deleteChannel(name, () => go('/')) }, 'Delete'));
 
+  const langName = m.lang ? (LANG_NAMES[m.lang] || m.lang.toUpperCase()) : '';
   const hero = el('div', { class: 'chhero' },
     loose ? el('div', { class: 'chavatar big' }, '∅') : chAvatar(name, m, true),
     el('div', { class: 'grow', style: 'min-width:0' },
       el('h1', { style: 'overflow-wrap:anywhere' }, loose ? 'Not in a channel' : name),
       el('div', { class: 'sub', style: 'margin-top:4px' },
-        `${c.total} project${c.total === 1 ? '' : 's'} · ${c.video} video${c.video === 1 ? '' : 's'}`
+        (langName ? langName + ' · ' : '')
+        + `${c.total} project${c.total === 1 ? '' : 's'} · ${c.video} video${c.video === 1 ? '' : 's'}`
         + ` · ${c.short} short${c.short === 1 ? '' : 's'} · ${c.complete} complete`),
       m.description ? el('div', { class: 'chmeta', style: 'max-width:640px;margin-top:6px' }, m.description) : null,
       m.email ? el('div', { class: 'chmeta mono', style: 'margin-top:2px' }, m.email) : null),
@@ -1803,112 +1852,91 @@ const LANG_NAMES = {
 const LANG_ORDER = ['en', 'de', 'es', 'fr', 'it', 'pt'];
 const MONO = 'font-family:ui-mono,Menlo,Consolas,monospace;font-size:14.5px';
 
-async function viewNew() {
-  const v = $('#view'); v.innerHTML = '';
-  // Channels this project can be filed under (fetched fresh so a channel made
-  // moments ago is included).
-  const chanList = ((await api('/api/channels')) || {}).channels || [];
-  S.channels = chanList;
-  const channelSel = el('select', {},
-    el('option', { value: '' }, 'No channel'),
-    chanList.map(c => el('option', { value: c }, c)),
-    el('option', { value: '__new__' }, '＋ New channel…'));
-  channelSel.onchange = async () => {
-    if (channelSel.value !== '__new__') return;
-    channelSel.value = '';
-    const name = await askText({
-      title: 'New channel', label: 'File this project under a new channel.',
-      placeholder: 'e.g. Superfruits', ok: 'Create'
-    });
-    if (!name) return;
-    if (![...channelSel.options].some(o => o.value === name))
-      channelSel.insertBefore(el('option', { value: name }, name), channelSel.lastElementChild);
-    channelSel.value = name;
-  };
+// New video, scoped to ONE channel. The channel (and its single language) are
+// already chosen — this form only asks for a title, the script, and the output
+// shape. Reached from the channel page's "Add video" button (/channel/<n>/new).
+async function viewNew(channel) {
+  // No channel in the URL (an old /new bookmark)? Videos are channel-scoped now,
+  // so send them to the dashboard to pick or create a channel first.
+  if (!channel) return go('/');
 
-  // Video (16:9) or Short (9:16). Chosen up front so the scenes, every sourced
-  // picture and the final render are built at the right shape from the start —
-  // especially with Auto-process, which sources visuals immediately.
+  if (!S.channelMeta || !S.channels) {
+    const d = await api('/api/projects');
+    S.projects = d.projects || []; S.music = d.music || [];
+    S.channels = d.channels || []; S.channelMeta = d.channel_meta || {};
+  }
+  const meta = (S.channelMeta || {})[channel] || {};
+  const lockedLang = (meta.lang || '').toLowerCase();
+
+  const v = $('#view'); v.innerHTML = '';
+  v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
+    el('div', { class: 'back', onclick: () => go('/channel/' + encodeURIComponent(channel)) },
+      '‹ ' + channel),
+    el('h1', { style: 'margin-top:4px' }, 'Add a video'),
+    el('p', {}, `New video in “${channel}”. Give it a title and paste the script — `
+      + `the channel’s language and settings are already applied.`))));
+
+  const id = el('input', { type: 'text', placeholder: 'e.g. video06' });
   const formatSel = el('select', {
-    title: 'Video = 16:9 landscape · Short = 9:16 vertical. Sets the shape of every '
-      + 'image and the final render.'
+    title: 'Video = 16:9 landscape · Short = 9:16 vertical.'
   },
     el('option', { value: 'video' }, 'Video · 16:9 landscape'),
     el('option', { value: 'short' }, 'Short · 9:16 vertical'));
 
-  v.append(el('div', { class: 'head' }, el('div', { class: 'grow' },
-    el('div', { class: 'back', onclick: () => go('/dashboard') }, '← Dashboard'),
-    el('h1', { style: 'margin-top:4px' }, 'New video from a script'),
-    el('p', {}, 'Paste your own script for each language — nothing is translated. '
-      + 'The first language defines the scenes and the pictures; the rest reuse them.'))));
+  // Language is the channel's. Locked (read-only chip) when the channel has one;
+  // a picker (default English) for older channels made before languages existed.
+  let langField, langOf;
+  if (lockedLang) {
+    langField = el('div', {
+      style: 'display:inline-block;padding:8px 12px;border:1px solid var(--line);'
+        + 'border-radius:var(--r);background:var(--surface2);font-size:14px'
+    }, LANG_NAMES[lockedLang] || lockedLang.toUpperCase());
+    langOf = () => lockedLang;
+  } else {
+    const sel = el('select', {}, LANG_ORDER.map(c => el('option', { value: c }, LANG_NAMES[c])));
+    langField = sel;
+    langOf = () => sel.value;
+  }
 
-  const id = el('input', { type: 'text', placeholder: 'video06' });
-  const sel = new Set();                   // nothing pre-selected — pick your own
-  const boxes = {};                        // lang -> textarea (kept across toggles)
-  const scriptsWrap = el('div', {});
-
-  const paint = () => {
-    scriptsWrap.innerHTML = '';
-    const chosen = LANG_ORDER.filter(c => sel.has(c));
-    if (!chosen.length) {
-      scriptsWrap.append(el('div', { class: 'sub', style: 'padding:6px 2px' },
-        'Choose a language above, then paste its script.'));
-      return;
-    }
-    chosen.forEach((c, i) => {
-      if (!boxes[c]) boxes[c] = el('textarea', {
-        rows: 9, placeholder: `Paste the ${LANG_NAMES[c]} script here…`, style: MONO });
-      scriptsWrap.append(el('div', { style: 'margin-bottom:16px' },
-        el('div', { class: 'sub', style: 'margin-bottom:5px' },
-          `${LANG_NAMES[c]} script`
-          + (i === 0 ? '  ·  defines the scenes & visuals' : '  ·  segmented onto the same scenes')),
-        boxes[c]));
-    });
-  };
-
-  const picker = multiSelect({
-    options: LANG_ORDER.map(c => ({ value: c, label: LANG_NAMES[c] })),
-    placeholder: 'Select languages…',
-    onChange: chosen => { sel.clear(); chosen.forEach(c => sel.add(c)); paint(); }
-  });
-
+  const box = el('textarea', { rows: 12, placeholder: 'Paste the script here…', style: MONO });
   const autoBox = el('input', { type: 'checkbox' });
+
   v.append(el('div', { class: 'card' },
     el('div', { class: 'grid2' },
-      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Project name'), id),
-      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Languages'),
-        picker.root)),
-    el('div', { class: 'grid2', style: 'margin-top:14px' },
-      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Channel'), channelSel),
+      el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Title'), id),
       el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Format'), formatSel)),
+    el('div', { style: 'margin-top:14px' },
+      el('div', { class: 'sub', style: 'margin-bottom:5px' },
+        'Language' + (lockedLang ? ' · set by the channel' : '')),
+      langField),
     el('div', { class: 'hr' }),
-    scriptsWrap,
-    el('label', { class: 'chk', style: 'margin-top:4px' }, autoBox,
+    el('div', { class: 'sub', style: 'margin-bottom:5px' }, 'Script'),
+    box,
+    el('label', { class: 'chk', style: 'margin-top:12px' }, autoBox,
       el('span', {}, el('b', {}, 'Auto-process'),
         ' — after the script, automatically find visuals and build the video, '
         + 'no stops. Leave off to review the pictures before rendering.')),
-    el('div', { class: 'row', style: 'margin-top:12px' },
+    el('div', { class: 'row', style: 'margin-top:14px;gap:12px;align-items:center' },
       el('button', {
         class: 'btn primary', onclick: async e => {
-          if (!id.value.trim()) return toast('Give it a name first.', true);
-          const scripts = {};
-          LANG_ORDER.filter(c => sel.has(c)).forEach(c => {
-            const t = (boxes[c] && boxes[c].value || '').trim();
-            if (t) scripts[c] = t;
-          });
-          if (!Object.keys(scripts).length)
-            return toast('Pick a language and paste its script first.', true);
+          const title = id.value.trim();
+          if (!title) return toast('Give it a title first.', true);
+          const text = box.value.trim();
+          if (!text) return toast('Paste the script first.', true);
+          const lang = langOf();
           e.target.disabled = true;
           const auto = autoBox.checked;
-          const channel = channelSel.value === '__new__' ? '' : channelSel.value;
+          // Pin the language onto the channel if it didn't have one yet, so the
+          // next video here skips the picker.
+          if (!lockedLang) {
+            try { await api('/api/channels', { action: 'meta', name: channel, lang }); } catch (_) { }
+          }
           const r = await api('/api/generate',
-            { id: id.value.trim(), scripts, auto, channel, format: formatSel.value });
+            { id: title, scripts: { [lang]: text }, auto, channel, format: formatSel.value });
           if (r.started) go(auto ? '/queue' : '/activity'); else e.target.disabled = false;
         }
       }, 'Generate the sheets'),
-      el('span', { class: 'sub' },
-        'Every language shares one set of pictures. ~15–25 Gemini requests.'))));
-  paint();
+      el('span', { class: 'sub' }, '~15–25 Gemini requests.'))));
 }
 
 // ═══ voices ═══════════════════════════════════════════════════════════════
@@ -3310,6 +3338,7 @@ function viewUncategorized() { return viewChannel(null); }
 const ROUTES = [
   [/^\/$/, viewDashboard],
   [/^\/dashboard\/?$/, viewDashboard],
+  [/^\/channel\/([^/]+)\/new\/?$/, viewNew],
   [/^\/channel\/([^/]+)\/?$/, viewChannel],
   [/^\/uncategorized\/?$/, viewUncategorized],
   [/^\/project\/([^/]+)\/?$/, viewProject],
@@ -3377,6 +3406,8 @@ document.addEventListener('click', e => {
 });
 // Real hrefs so anchors still hover, middle-click and copy-link like links.
 document.querySelectorAll('a[data-r]').forEach(a => a.setAttribute('href', a.dataset.r));
+// The sidebar "New channel" button opens the create dialog (not a route).
+{ const _nc = $('#newChannelBtn'); if (_nc) _nc.onclick = newChannelFlow; }
 
 // ═══ polling ══════════════════════════════════════════════════════════════
 let lastStatus = null;

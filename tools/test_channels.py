@@ -127,6 +127,19 @@ def main() -> int:
     check("legacy assignment loads", CH.of("v9"), "Legacy")
     check("legacy meta is empty, no crash", CH.meta_of("Legacy")["email"], "")
 
+    print("\n  a channel carries a single content language:")
+    CH.FILE.write_text('{"channels":[],"assign":{},"meta":{}}', encoding="utf-8")
+    CH.create("Klare Zahlen", "DE")
+    check("lang stored, lower-cased", CH.channel_lang("Klare Zahlen"), "de")
+    check("unset channel lang is ''", CH.channel_lang("Nope"), "")
+    CH.set_channel_voice("Klare Zahlen", "de", "Charon")   # must not drop lang
+    check("lang survives a voice change", CH.channel_lang("Klare Zahlen"), "de")
+    CH.set_meta("Klare Zahlen", email="x@y.com")           # must not drop lang
+    check("lang survives an email edit", CH.channel_lang("Klare Zahlen"), "de")
+    CH.set_meta("Klare Zahlen", lang="es")                 # editable later
+    check("lang can be changed", CH.channel_lang("Klare Zahlen"), "es")
+    check("voice still there after lang edit", CH.voice_for("Klare Zahlen", "de"), "Charon")
+
     print("\n  tolerates a corrupt file:")
     CH.FILE.write_text("{ this is not json", encoding="utf-8")
     check("corrupt file -> empty, no crash", CH.names(), [])

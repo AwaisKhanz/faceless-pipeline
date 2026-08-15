@@ -23,7 +23,7 @@ IMG_DIR = ROOT / "cache" / "channel_images"     # uploaded channel avatars live 
 # The optional per-channel profile fields. Everything here is additive: an older
 # channels.json without a "meta" block loads exactly as before, so upgrading can
 # never drop a channel, an assignment, or a project.
-META_FIELDS = ("image", "email", "description")
+META_FIELDS = ("image", "email", "description", "lang")
 
 
 def _clean_voices(raw) -> dict:
@@ -108,15 +108,33 @@ def of(pid: str) -> str:
     return _load()["assign"].get(pid, "")
 
 
-def create(name: str) -> dict:
+def create(name: str, lang: str = "") -> dict:
+    """Create a channel. `lang` is the channel's single content language (a code
+    like 'de' / 'en' / 'es'); every video added to the channel is written in it,
+    so the new-video flow never asks for a language again. Empty means unset (the
+    add-video form then falls back to a language picker)."""
     name = (name or "").strip()
     if not name:
         raise ValueError("channel name is empty")
+    code = (lang or "").strip().lower()
     d = _load()
     if name not in d["channels"]:
         d["channels"].append(name)
-        _save(d)
+    if code:
+        cur = {k: d["meta"].get(name, {}).get(k, "") for k in META_FIELDS}
+        voices = _clean_voices(d["meta"].get(name, {}).get("voices"))
+        if voices:
+            cur["voices"] = voices
+        cur["lang"] = code
+        d["meta"][name] = cur
+    _save(d)
     return d
+
+
+def channel_lang(name: str) -> str:
+    """A channel's content language code, or '' if unset."""
+    return str(_load().get("meta", {}).get((name or "").strip(), {})
+               .get("lang", "")).strip().lower()
 
 
 def assign(pid: str, channel: str) -> dict:
@@ -232,10 +250,10 @@ def set_channel_voice(name: str, lang: str, voice: str) -> dict:
     return d
 
 
-def set_meta(name: str, *, email=None, description=None) -> dict:
-    """Update a channel's email/description (only the fields passed). Ensures the
-    channel exists so editing a freshly made channel always sticks. The image is
-    set separately via set_image()."""
+def set_meta(name: str, *, email=None, description=None, lang=None) -> dict:
+    """Update a channel's email/description/language (only the fields passed).
+    Ensures the channel exists so editing a freshly made channel always sticks.
+    The image is set separately via set_image()."""
     name = (name or "").strip()
     if not name:
         raise ValueError("channel name is empty")
@@ -251,6 +269,8 @@ def set_meta(name: str, *, email=None, description=None) -> dict:
         cur["email"] = str(email).strip()
     if description is not None:
         cur["description"] = str(description).strip()
+    if lang is not None:
+        cur["lang"] = str(lang).strip().lower()
     d["meta"][name] = cur
     _save(d)
     return d

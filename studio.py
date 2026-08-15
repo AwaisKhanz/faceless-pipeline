@@ -1217,6 +1217,7 @@ class Handler(BaseHTTPRequestHandler):
                               "description": m.get("description", ""),
                               "image_url": f"/channelimg/{img}" if img else "",
                               "voices": voices,
+                              "lang": m.get("lang", ""),
                               "langs": ch_langs.get(name, [])}
             return self._json({
                 "projects": projects, "music": music,
@@ -1650,7 +1651,9 @@ class Handler(BaseHTTPRequestHandler):
             action = (b.get("action") or "").strip().lower()
             try:
                 if action == "create":
-                    d = _ch.create(b.get("name") or "")
+                    # A channel carries a single content language, chosen here, so
+                    # the new-video flow never has to ask again.
+                    d = _ch.create(b.get("name") or "", b.get("lang") or "")
                 elif action == "rename":
                     d = _ch.rename(b.get("old") or "", b.get("name") or "")
                 elif action == "delete":
@@ -1658,7 +1661,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif action == "meta":
                     d = _ch.set_meta(b.get("name") or "",
                                      email=b.get("email"),
-                                     description=b.get("description"))
+                                     description=b.get("description"),
+                                     lang=b.get("lang"))
                 elif action == "voice":
                     # Set (or clear with "") the voice a channel uses for a
                     # language. Every project in the channel then narrates with it.

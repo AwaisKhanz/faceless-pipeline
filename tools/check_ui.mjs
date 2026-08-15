@@ -173,6 +173,7 @@ console.log('\n  routes');
 const ROUTE_CASES = [
   ['/', 'viewDashboard', undefined],
   ['/dashboard', 'viewDashboard', undefined],
+  ['/channel/News/new', 'viewNew', 'News'],
   ['/channel/News', 'viewChannel', 'News'],
   ['/uncategorized', 'viewUncategorized', undefined],
   ['/project/video05', 'viewProject', 'video05'],
@@ -227,11 +228,11 @@ console.log('');
 await run('dashboard', V.viewDashboard);
 const firstChannel = projects.channels?.[0];
 if (firstChannel) await run('channel', V.viewChannel, firstChannel);
+if (firstChannel) await run('add-video', V.viewNew, firstChannel);
 await run('uncategorized', V.viewChannel, null);
 if (firstId) await run('project', V.viewProject, firstId);
 if (firstId) await run('review', V.viewReview, firstId);
 await run('run/activity', V.viewRun);
-await run('new', V.viewNew);
 await run('voices', V.viewVoices);
 await run('voices/de', V.viewVoices, 'de');
 await run('settings', V.viewConfig);
