@@ -28,8 +28,8 @@ from lib import compose, gemini as G, pipeline as pl  # noqa: E402
 
 
 def _install_fakes():
-    G.plan = lambda s, k, m: {"title_en": "T", "spine_phrase": "",
-                              "visual_style": "", "acts": []}
+    G.plan = lambda s, k, m, audience="": {"title_en": "T", "spine_phrase": "",
+                                            "visual_style": "", "acts": []}
     G.scenes_for_section = lambda sec, p, k, m, fb="": [
         {"narration": x.strip() + ".", "media": "IMAGE", "query": f"q{i}"}
         for i, x in enumerate([y for y in sec.split(".") if y.strip()], 1)]

@@ -117,6 +117,7 @@ _FIELDS: list[dict] = [
      "auto_or_int": True,
      "options": _opt("auto", 1, 2, 3, 4, 5, 6)},
     {"key": "name_real_people", "section": "sourcing", "type": "bool"},
+    {"key": "audience", "section": "sourcing", "type": "text"},
     {"key": "image_licenses", "section": "sourcing", "type": "select",
      "options": _opt(("strict", "strict — CC0 / public domain only"),
                      ("all", "all — accept every open license"))},

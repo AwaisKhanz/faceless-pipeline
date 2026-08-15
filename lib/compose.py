@@ -413,7 +413,7 @@ def _language_sheet(scenes: list[Scene], pid: str, lang: str,
 def generate(scripts: dict[str, str], pid: str, key: str,
              model: str = G.DEFAULT_MODEL, on_progress=lambda *_: None,
              on_warn=lambda *_: None, name_people: bool = False,
-             auto_split: bool = True) -> Result:
+             auto_split: bool = True, audience: str = "") -> Result:
     """Per-language scripts in → main script + narration files out. No translation.
 
     `scripts` maps language code -> that language's pasted script. The first
@@ -446,7 +446,7 @@ def generate(scripts: dict[str, str], pid: str, key: str,
         on_progress(step[0], total, msg)
 
     tick("reading the script")
-    plan = G.plan(struct_script, key, model)
+    plan = G.plan(struct_script, key, model, audience=audience)
     plan["name_people"] = bool(name_people)      # rides into scenes_for_section
     res.plan = plan
 

@@ -373,7 +373,8 @@ def run_generate(scripts: dict, pid: str, overwrite: bool, channel: str = "",
             on_progress=onp,
             on_warn=lambda m: log(f"  ⚠ {m}"),
             name_people=pl._flag(cfg.get("name_real_people")),
-            auto_split=pl._flag(cfg.get("auto_split", "auto")))
+            auto_split=pl._flag(cfg.get("auto_split", "auto")),
+            audience=(cfg.get("audience") or ""))
 
         sdir = pl.sheets_dir(pid)
         written = compose.write_files(res, sdir, overwrite=overwrite)

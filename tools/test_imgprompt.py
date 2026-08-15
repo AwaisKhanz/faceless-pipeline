@@ -116,6 +116,28 @@ def main() -> int:
     finally:
         G.call = orig
 
+    print("\n  plan() casts to the audience, not a hardcoded senior default:")
+    cap = {}
+
+    def cap_call(prompt, schema, key, model=None, system="", **kw):
+        cap["p"] = prompt
+        return {"title_en": "x"}
+
+    save = G.call
+    G.call = cap_call
+    try:
+        G.plan("a general script about kitchen gadgets", "k", "m")
+        check("default -> a general adult audience", "a general adult audience" in cap["p"], True)
+        check("default -> the old '60+' bias is gone", "60+" not in cap["p"], True)
+        flat = re.sub(r"\s+", " ", cap["p"]).lower()
+        check("a 'do not default to elderly' directive is present",
+              "not default to elderly or senior" in flat, True)
+        G.plan("s", "k", "m", audience="young tech enthusiasts, energetic")
+        check("a custom audience is threaded into the plan prompt",
+              "young tech enthusiasts, energetic" in cap["p"], True)
+    finally:
+        G.call = save
+
     print(f"\n  {'ALL PASS' if not bad else f'{bad} FAILURE(S)'}\n")
     return 1 if bad else 0
 

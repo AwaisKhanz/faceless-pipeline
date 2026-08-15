@@ -1020,6 +1020,10 @@ RULES FOR ALL THREE QUERIES
     light if it matters.
   - No abstractions, no "concept of", no feelings, no metaphors, no brand
     names, no requests for text or logos in the image.
+  - When a person appears, cast them to fit THIS script and audience and vary
+    them across the video. Do NOT prefix people with "senior"/"elderly"/"older"
+    unless the script is specifically about older people — a plain "a person",
+    "a woman at a desk", "hands typing" is the default.
   - (Naming real people is governed by the PEOPLE rule injected below.)
   - safety_query must be something free stock certainly has. When in doubt make
     it a plain landscape, texture, sky, room or hands.
@@ -1027,7 +1031,7 @@ RULES FOR ALL THREE QUERIES
   BAD   `the passage of time`          -> clip-art junk
   BAD   `feeling of loneliness`        -> nothing usable
   BAD   `neurons forming connections`  -> stylised nonsense
-  GOOD  `elderly hands holding a warm mug by a window`
+  GOOD  `hands holding a warm mug by a window`
   GOOD  `waves breaking slowly on a dark rocky shore at dusk`
 
 ════════════════════════════════════════════════════════════════════════
@@ -1100,10 +1104,16 @@ subject. exact is independent of hero.
 """
 
 
-def plan(script: str, key: str, model: str = DEFAULT_MODEL) -> dict:
+def plan(script: str, key: str, model: str = DEFAULT_MODEL,
+         audience: str = "") -> dict:
+    who = (audience or "").strip() or "a general adult audience"
     p = f"""Read this complete video script and produce a production plan for it.
 
-The channel: faceless YouTube, audience 60+, warm calm documentary tone.
+The channel: faceless YouTube for {who}; a warm, grounded documentary tone.
+CASTING: choose the age, gender and background of people to fit THIS script's
+actual subject and audience, and vary them naturally across the video. Do NOT
+default to elderly or senior people — only cast older adults when the script is
+specifically about them (retirement, ageing, a named older person, etc.).
 
 Give me:
 - title_en: the working title, taken from the script's own subject
@@ -1205,7 +1215,7 @@ ACTIVITY, not `people`:
   a busy market street                -> culture   (the street is the shot)
   a surgeon mid-operation             -> medicine  (the operation is the shot)
   workers on a factory floor          -> tech      (the factory is the shot)
-  an older couple close at home       -> people    (the couple IS the shot)
+  a couple close together at home     -> people    (the couple IS the shot)
 This matters: `people` routes to libraries of individual people and, in
 biography mode, is treated as the video's NAMED subject — so a wide landscape
 tagged `people` gets handled as if it were one specific person, which it is not.
