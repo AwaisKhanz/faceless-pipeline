@@ -502,18 +502,6 @@ def _vertex_put_to_rest(combo: tuple[str, str], minutes: float) -> None:
         _VERTEX_REST[combo] = time.monotonic() + max(0.0, minutes) * 60.0
 
 
-def _vertex_rest_model(model: str, minutes: float, combos) -> None:
-    """Rest EVERY region of a model at once. A 404 'Publisher model … was not
-    found' is MODEL-WIDE — the model isn't enabled/available on this project — so
-    trying its other 13 regions just wastes ~1-2s each on the same 404. One 404
-    parks the whole model for the long cooldown, so the pool moves on immediately."""
-    free = time.monotonic() + max(0.0, minutes) * 60.0
-    with _VERTEX_LOCK:
-        for m, r in combos:
-            if m == model:
-                _VERTEX_REST[(m, r)] = free
-
-
 def _vertex_reset() -> None:                   # for tests
     with _VERTEX_LOCK:
         _VERTEX_REST.clear()
@@ -630,31 +618,24 @@ def _vertex_raw(prompt: str, cfg: dict, dest: Path, log=None) -> None:
         # pool_resting: it's a cooldown, so wait it out but don't widen the pace.
         wait = min(45.0, max(3.0, _vertex_soonest(combos)))
         raise _RateLimited(retry_after=wait, pool_resting=True)
-    dead_models: set = set()                           # 404'd this call → skip its regions
     for model, region in usable:
-        if model in dead_models:
-            continue                                   # already parked model-wide
         try:
             _vertex_one(project, region, model, sa_path, prompt, cfg, dest)
             return f"{model}@{region}"                 # what made it
         except _VertexBusy as vb:
             rest = vb.rest_minutes if vb.rest_minutes else _VERTEX_BUSY_MIN
-            # A long rest is a 404 "model not found / no access" — that's MODEL-wide
-            # (the model isn't available on this project), so park every region of it
-            # at once and skip the rest this call instead of 404-ing 13 more times.
-            model_wide = rest >= 60.0
-            if model_wide:
-                _vertex_rest_model(model, rest, combos)
-                dead_models.add(model)
-            else:
-                _vertex_put_to_rest((model, region), rest)
+            # Rest ONLY this (model, region). A 404 can be region-specific — a
+            # global-only model (e.g. gemini-3-pro-image) 404s in regional endpoints
+            # but works at 'global' — so parking the whole model on one 404 would
+            # wrongly kill a model that's fine elsewhere. Each dead combo rests 12h,
+            # so after the first pass the pool skips them anyway.
+            _vertex_put_to_rest((model, region), rest)
             if callable(log):
                 why = f" [{vb.reason}]" if vb.reason else ""
                 secs = rest * 60.0
                 unit = f"{secs:.0f}s" if secs < 90 else f"{rest / 60.0:.0f}h" if secs >= 3600 else f"{rest:.0f}m"
-                where = f"{model} (all regions)" if model_wide else f"{model}@{region}"
-                nxt = "trying the next model" if model_wide else "trying the next model/region"
-                log(f"  · Vertex {where} unavailable{why} — resting {unit}, {nxt}")
+                log(f"  · Vertex {model}@{region} unavailable{why} — resting "
+                    f"{unit}, trying the next model/region")
             continue
         # a real GenError (bad prompt / safety) is combo-independent: re-raise
     # tried every ready combo and they all just went busy → wait briefly and retry

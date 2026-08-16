@@ -195,26 +195,25 @@ def main() -> int:
         check("consecutive calls start on different combos (round-robin)",
               starts[0] != starts[1] and starts[1] != starts[2], True)
 
-        # A 404 (model not available on the project) is MODEL-wide: one 404 parks
-        # every region of that model, so the pool doesn't 404 through all of them.
+        # A global-only model (e.g. gemini-3-pro-image) 404s in a regional endpoint
+        # but works at 'global' — a 404 must rest ONLY that combo, never the whole
+        # model, or the pool would kill a model that's fine at 'global'.
         im._vertex_reset()
-        seen404 = []
+        seen = []
 
-        def one_404_model(project, region, model, sa, prompt, cfg2, dst):
-            seen404.append((model, region))
-            if model == "dead":                       # 404 everywhere (like Imagen 4)
+        def region_404(project, region, model, sa, prompt, cfg2, dst):
+            seen.append((model, region))
+            if region != "global":                    # 404 everywhere except global
                 raise im._VertexBusy(rest_minutes=720, reason="HTTP 404 not found")
-            Path(dst).write_bytes(b"VX")              # the good model succeeds
-        im._vertex_one = one_404_model
-        pool404 = {"vertex_project": "p", "vertex_models": "dead\ngood",
-                   "vertex_regions": "r1\nr2\nr3"}
-        im._vertex_raw("x", pool404, Path(tempfile.mkdtemp()) / "d.png")
-        check("a 404 model is tried ONCE, not in every region",
-              sum(1 for m, _ in seen404 if m == "dead"), 1)
-        check("then it jumps straight to the working model",
-              seen404[-1][0], "good")
-        check("all 3 regions of the 404 model are parked at once",
-              all(("dead", r) in im._VERTEX_REST for r in ("r1", "r2", "r3")), True)
+            Path(dst).write_bytes(b"VX")              # global succeeds
+        im._vertex_one = region_404
+        gpool = {"vertex_project": "p", "vertex_models": "m",
+                 "vertex_regions": "us-central1\nus-east1\nglobal"}
+        im._vertex_raw("x", gpool, Path(tempfile.mkdtemp()) / "g.png")
+        check("a regional 404 does NOT park the model at 'global'",
+              ("m", "global") not in im._VERTEX_REST, True)
+        check("the run still succeeds via the global endpoint",
+              seen[-1], ("m", "global"))
     finally:
         im._vertex_one = saved_vone
         im._vertex_reset()
